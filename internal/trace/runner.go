@@ -1,0 +1,196 @@
+package trace
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"time"
+)
+
+const (
+	maxTraceEvents    = 10000
+	maxTraceFileBytes = 50 * 1024 * 1024 // 50 MB
+)
+
+// Runner executes strace with scoped filters and parses output into Events.
+type Runner struct {
+	Timeout   time.Duration
+	MaxEvents int
+}
+
+// Run starts strace for the given command, reads the trace file, and parses Events.
+func (r *Runner) Run(ctx context.Context, scopes []Scope, command string, args ...string) (*Result, error) {
+	if command == "" {
+		return nil, fmt.Errorf("trace command is empty")
+	}
+	if r.Timeout == 0 {
+		r.Timeout = 30 * time.Second
+	}
+	if r.MaxEvents == 0 {
+		r.MaxEvents = maxTraceEvents
+	}
+
+	// Create temp trace file
+	traceFile, err := os.CreateTemp("", "devdiag-trace-*.log")
+	if err != nil {
+		return nil, fmt.Errorf("create temp trace file: %w", err)
+	}
+	tracePath := traceFile.Name()
+	traceFile.Close()
+	defer os.Remove(tracePath)
+
+	// Build strace args (use -tt for HH:MM:SS.us to match parser)
+	straceArgs := []string{"-f", "-tt", "-T", "-yy", "-o", tracePath}
+	straceArgs = append(straceArgs, buildStraceFilters(scopes)...)
+	straceArgs = append(straceArgs, "--", command)
+	straceArgs = append(straceArgs, args...)
+
+	res := &Result{
+		Command: command,
+		Args:    args,
+		Scopes:  scopes,
+		Events:  make([]Event, 0, r.MaxEvents),
+	}
+
+	start := time.Now()
+	cmdCtx, cancel := context.WithTimeout(ctx, r.Timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "strace", straceArgs...)
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
+
+	err = cmd.Run()
+	res.Duration = time.Since(start)
+
+	if cmdCtx.Err() != nil {
+		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
+			res.TimedOut = true
+			res.Partial = true
+			res.Notes = append(res.Notes, "trace timed out; child processes were signaled by command context")
+		} else if errors.Is(cmdCtx.Err(), context.Canceled) {
+			res.Canceled = true
+			res.Partial = true
+			res.Notes = append(res.Notes, "trace canceled by parent context")
+		}
+	}
+
+	if cmd.ProcessState != nil {
+		res.ExitCode = cmd.ProcessState.ExitCode()
+		if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok {
+			if ws.Signaled() {
+				res.ProcessFailed = true
+				res.Notes = append(res.Notes, fmt.Sprintf("traced process killed by signal %d (%s)", ws.Signal(), ws.Signal()))
+			}
+		}
+	} else if err != nil {
+		res.ExitCode = -1
+	}
+
+	if err != nil && !res.TimedOut && !res.Canceled {
+		stderr := stderrBuf.String()
+		if stderr != "" {
+			res.Notes = append(res.Notes, fmt.Sprintf("strace stderr: %s", strings.TrimSpace(stderr)))
+		}
+		// Detect ptrace/permission failures that make tracing unavailable
+		if isTraceUnavailable(stderr) {
+			res.TraceUnavailable = true
+			res.Notes = append(res.Notes, "trace unavailable: ptrace/permission denied")
+		} else if _, ok := err.(*exec.ExitError); ok {
+			res.Notes = append(res.Notes, "strace or traced command exited non-zero")
+		} else {
+			res.Notes = append(res.Notes, fmt.Sprintf("strace could not start: %v", err))
+		}
+	}
+
+	// Read and parse trace file
+	if err := r.readTraceFile(tracePath, res); err != nil {
+		res.Notes = append(res.Notes, fmt.Sprintf("trace file read error: %v", err))
+	}
+
+	return res, nil
+}
+
+var traceUnavailablePatterns = []string{
+	"operation not permitted",
+	"ptrace_traceme",
+	"permission denied",
+	"strace: attach",
+	"ptrace",
+}
+
+func isTraceUnavailable(stderr string) bool {
+	lower := strings.ToLower(stderr)
+	for _, p := range traceUnavailablePatterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildStraceFilters(scopes []Scope) []string {
+	groups := []string{}
+	for _, s := range scopes {
+		switch s {
+		case ScopeFile:
+			groups = append(groups, "%file")
+		case ScopeProcess:
+			groups = append(groups, "%process")
+		case ScopeNetwork:
+			groups = append(groups, "%network")
+		}
+	}
+	if len(groups) == 0 {
+		return nil
+	}
+	return []string{"-e", fmt.Sprintf("trace=%s", strings.Join(groups, ","))}
+}
+
+func (r *Runner) readTraceFile(path string, res *Result) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if fi.Size() > maxTraceFileBytes {
+		res.Partial = true
+		res.Notes = append(res.Notes, fmt.Sprintf("trace file exceeds %d bytes; parsing partial data", maxTraceFileBytes))
+	}
+
+	// Use LimitReader to cap input
+	reader := io.LimitReader(f, maxTraceFileBytes)
+	scanner := bufio.NewScanner(reader)
+	// Increase max token size to 1MB
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		if len(res.Events) >= r.MaxEvents {
+			res.Partial = true
+			res.Notes = append(res.Notes, fmt.Sprintf("reached max trace events (%d); stopping parse", r.MaxEvents))
+			break
+		}
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		ev, err := ParseLine(line)
+		if err != nil {
+			// Skip non-event lines
+			continue
+		}
+		res.Events = append(res.Events, *ev)
+	}
+	return scanner.Err()
+}
