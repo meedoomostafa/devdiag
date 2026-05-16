@@ -97,6 +97,7 @@ func (e *M1Engine) envRules(result schema.CollectorResult) []schema.Finding {
 				Symptom:      "Keys defined in .env.example are not present in .env",
 				Evidence:     []schema.Evidence{ev},
 				LikelyCauses: []string{".env file not created from .env.example"},
+				FixHints:     []string{"add-env-placeholder"},
 			})
 		}
 	}
@@ -111,6 +112,7 @@ func (e *M1Engine) envRules(result schema.CollectorResult) []schema.Finding {
 			Symptom:      ".env.example exists but .env is missing",
 			Evidence:     result.Evidence,
 			LikelyCauses: []string{"Project may require local env vars but .env is not present"},
+			FixHints:     []string{"add-env-placeholder"},
 		})
 	}
 
@@ -160,6 +162,7 @@ func (e *M1Engine) gitRules(result schema.CollectorResult) []schema.Finding {
 			Symptom:      "Environment files containing secrets are tracked in version control",
 			Evidence:     result.Evidence,
 			LikelyCauses: []string{".env file was committed to Git before being added to .gitignore"},
+			FixHints:     []string{"gitignore-env"},
 		})
 	}
 
@@ -173,6 +176,7 @@ func (e *M1Engine) gitRules(result schema.CollectorResult) []schema.Finding {
 			Symptom:      ".env file is not ignored by Git and may be committed accidentally",
 			Evidence:     result.Evidence,
 			LikelyCauses: []string{"Missing .env entry in .gitignore or ignore pattern does not match"},
+			FixHints:     []string{"gitignore-env"},
 		})
 	}
 
@@ -382,6 +386,11 @@ func normalizeVersion(v string) string {
 	v = strings.TrimSpace(v)
 	v = strings.TrimPrefix(v, "v")
 	v = strings.TrimPrefix(v, "go")
+	// Strip common semver prefixes that appear in .nvmrc / package.json
+	for _, prefix := range []string{">=", "<=", "~>", "^", ">", "<", "=", "node", "lts/"} {
+		v = strings.TrimPrefix(v, prefix)
+	}
+	v = strings.TrimSpace(v)
 	return v
 }
 
@@ -421,6 +430,7 @@ func (e *M1Engine) diskRules(result schema.CollectorResult) []schema.Finding {
 				"Build artifacts or caches consuming space",
 				"Large dependency trees",
 			},
+			FixHints: []string{"warn-disk-cleanup"},
 		})
 	} else if freeBytes < 5*giB || freePct < 10.0 || freeInodesPct < 10.0 {
 		findings = append(findings, schema.Finding{
@@ -434,6 +444,7 @@ func (e *M1Engine) diskRules(result schema.CollectorResult) []schema.Finding {
 				"Build artifacts or caches consuming space",
 				"Large dependency trees",
 			},
+			FixHints: []string{"warn-disk-cleanup"},
 		})
 	}
 
@@ -473,6 +484,7 @@ func (e *M1Engine) portRules(result schema.CollectorResult, collectors map[strin
 					"Another service is already bound to this port",
 					"Previous instance of the service did not shut down cleanly",
 				},
+				FixHints: []string{"change-compose-port", "stop-service"},
 			})
 		}
 	}
@@ -576,6 +588,7 @@ func (e *M1Engine) permissionRules(result schema.CollectorResult) []schema.Findi
 					"File was created without execute permissions",
 					"Permissions were reset during file copy or extraction",
 				},
+				FixHints: []string{"chmod-script"},
 			})
 		}
 		if ev.Source == "host_file_root_owned" {
@@ -626,6 +639,7 @@ func (e *M1Engine) dockerRules(result schema.CollectorResult, collectors map[str
 					"Docker daemon may be running with restricted socket permissions",
 					"Rootless Docker may require different socket path",
 				},
+				FixHints: []string{"suggest-docker-group"},
 			})
 		} else {
 			findings = append(findings, schema.Finding{
@@ -639,6 +653,7 @@ func (e *M1Engine) dockerRules(result schema.CollectorResult, collectors map[str
 					"Docker service is not started",
 					"Docker daemon is misconfigured",
 				},
+				FixHints: []string{"suggest-docker-group"},
 			})
 		}
 	}
@@ -721,6 +736,7 @@ func (e *M1Engine) composeStatusRules(result schema.CollectorResult, collectors 
 							"Service may have crashed or failed to start",
 							"Dependent services may be unavailable",
 						},
+						FixHints: []string{"compose-up", "inspect-service"},
 					})
 				}
 			}
@@ -745,6 +761,7 @@ func (e *M1Engine) composeStatusRules(result schema.CollectorResult, collectors 
 							"Service dependencies may be unavailable",
 							"Healthcheck configuration may be too strict",
 						},
+						FixHints: []string{"inspect-service"},
 					})
 				}
 			}

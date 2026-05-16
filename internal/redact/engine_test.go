@@ -104,3 +104,31 @@ func TestRedactReport_DoesNotMutateOriginal(t *testing.T) {
 		t.Error("RedactReport returned the same pointer, expected a copy")
 	}
 }
+
+func TestRedactString_CLISecrets(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"--password=secret", "cmd --password=secret", "cmd --password=<redacted>"},
+		{"--password secret", "cmd --password secret", "cmd --password <redacted>"},
+		{"--token=secret", "cmd --token=abc123", "cmd --token=<redacted>"},
+		{"--api-key=secret", "cmd --api-key=xyz789", "cmd --api-key=<redacted>"},
+		{"--client-secret secret", "cmd --client-secret shh", "cmd --client-secret <redacted>"},
+		{"--Password=SECRET (upper)", "cmd --Password=SECRET", "cmd --Password=<redacted>"},
+		{"--API-KEY=secret (upper)", "cmd --API-KEY=topsecret", "cmd --API-KEY=<redacted>"},
+		{"--auth-token=secret", "cmd --auth-token=BearerXYZ", "cmd --auth-token=<redacted>"},
+		{"multiple secrets", "cmd --password=p --token=t", "cmd --password=<redacted> --token=<redacted>"},
+		{"no false positive on --port", "cmd --port=8080", "cmd --port=8080"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := e.RedactString(tt.input, "repro_args")
+			if got != tt.want {
+				t.Errorf("RedactString() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

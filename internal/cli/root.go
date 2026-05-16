@@ -19,6 +19,7 @@ var (
 	flagDebug   bool
 	flagNoColor bool
 	flagColor   string
+	flagProfile string
 )
 
 var rootCmd = &cobra.Command{
@@ -47,6 +48,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&flagDebug, "debug", false, "Enable debug/trace logs")
 	rootCmd.PersistentFlags().BoolVar(&flagNoColor, "no-color", false, "Disable ANSI color")
 	rootCmd.PersistentFlags().StringVar(&flagColor, "color", "auto", "Color mode: always, auto, never")
+	rootCmd.PersistentFlags().StringVar(&flagProfile, "profile", "", "Profile mode: ai-ml")
 
 }
 

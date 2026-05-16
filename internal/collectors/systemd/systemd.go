@@ -2,7 +2,6 @@ package systemd
 
 import (
 	"context"
-	"fmt"
 	"os/exec"
 	"strings"
 	"time"
@@ -54,20 +53,19 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	}
 
 	// Docker service check only if repo expects Docker
+	// Only check docker.service (not docker.socket) because socket activation
+	// means the socket can be active while the daemon is not running.
 	if c.RepoExpectsDocker {
 		dockerActive := false
-		for _, unit := range []string{"docker", "docker.socket"} {
-			cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			out, err := exec.CommandContext(cmdCtx, "systemctl", "is-active", unit).Output()
-			cancel()
-			if err == nil && strings.TrimSpace(string(out)) == "active" {
-				dockerActive = true
-				evidence = append(evidence, schema.Evidence{
-					Source: "host_docker_service",
-					Value:  fmt.Sprintf("%s=active", unit),
-				})
-				break
-			}
+		cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		out, err := exec.CommandContext(cmdCtx, "systemctl", "is-active", "docker").Output()
+		cancel()
+		if err == nil && strings.TrimSpace(string(out)) == "active" {
+			dockerActive = true
+			evidence = append(evidence, schema.Evidence{
+				Source: "host_docker_service",
+				Value:  "docker=active",
+			})
 		}
 		if !dockerActive {
 			evidence = append(evidence, schema.Evidence{

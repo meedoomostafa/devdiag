@@ -11,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/meedoomostafa/devdiag/internal/redact"
 )
 
 // ReproResult, Classification, and ReproEvent are defined in schema.go.
@@ -20,6 +22,7 @@ type Runner struct {
 	StdoutCap int64 // max bytes per stream; 0 = default 10MB
 	StderrCap int64
 	Timeout   time.Duration // 0 = default 60s
+	Redactor  *redact.Engine
 }
 
 // NewRunner creates a Runner with sensible defaults.
@@ -28,6 +31,7 @@ func NewRunner() *Runner {
 		StdoutCap: 10 << 20, // 10 MB
 		StderrCap: 10 << 20,
 		Timeout:   60 * time.Second,
+		Redactor:  redact.NewEngine(redact.LevelDefault),
 	}
 }
 
@@ -96,9 +100,9 @@ func (r *Runner) Run(ctx context.Context, command string, args []string) (*Repro
 	result.StoredBytes = int64(stdoutBuf.Len() + stderrBuf.Len())
 	result.Truncated = stdoutBuf.truncated || stderrBuf.truncated
 
-	// Redact before storing previews
-	result.StdoutPreview = redactString(stdoutBuf.String())
-	result.StderrPreview = redactString(stderrBuf.String())
+	// Redact before storing previews via shared engine
+	result.StdoutPreview = r.Redactor.RedactString(stdoutBuf.String(), "repro_stdout")
+	result.StderrPreview = r.Redactor.RedactString(stderrBuf.String(), "repro_stderr")
 
 	if runErr != nil {
 		if cmdCtx.Err() == context.DeadlineExceeded {
@@ -213,67 +217,4 @@ func isSensitiveEnvKey(key string) bool {
 		return true
 	}
 	return false
-}
-
-func redactString(s string) string {
-	// Redact URL credentials: http://user:pass@host → http://<redacted>@host
-	result := s
-	for _, scheme := range []string{"http", "https", "ftp", "sftp", "postgres", "mysql", "redis", "mongodb"} {
-		prefix := scheme + "://"
-		for strings.Contains(result, prefix) {
-			idx := strings.Index(result, prefix)
-			end := strings.IndexAny(result[idx+len(prefix):], " /?#")
-			if end == -1 {
-				end = len(result) - idx - len(prefix)
-			}
-			segment := result[idx+len(prefix) : idx+len(prefix)+end]
-			if at := strings.Index(segment, "@"); at > 0 {
-				// Has credentials before @
-				if colon := strings.Index(segment[:at], ":"); colon > 0 {
-					// user:password@host
-					result = result[:idx+len(prefix)] + "<redacted>" + result[idx+len(prefix)+at:]
-				}
-			}
-			break
-		}
-	}
-
-	// Redact JWT-like tokens (three base64url segments separated by dots)
-	result = redactJWT(result)
-
-	// Redact home directory paths
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		result = strings.ReplaceAll(result, home, "~")
-	}
-
-	return result
-}
-
-func redactJWT(s string) string {
-	// Simple heuristic: look for eyJ... base64url JWT header pattern
-	result := s
-	for {
-		idx := strings.Index(result, "eyJ")
-		if idx == -1 {
-			break
-		}
-		end := idx + 1
-		for end < len(result) {
-			c := result[end]
-			if c == '.' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
-				end++
-			} else {
-				break
-			}
-		}
-		token := result[idx:end]
-		if strings.Count(token, ".") >= 2 && len(token) > 30 {
-			result = result[:idx] + "<redacted-jwt>" + result[end:]
-		} else {
-			// Not a JWT, skip past eyJ
-			result = result[:idx] + "xx" + result[idx+2:]
-		}
-	}
-	return result
 }

@@ -6,9 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/meedoomostafa/devdiag/internal/schema"
+	"golang.org/x/sys/unix"
 )
 
 // Collector checks repo-relevant file permissions.
@@ -28,10 +28,8 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	evidence := []schema.Evidence{}
 
-	// Check repo root write access
-	if tmpFile, err := os.CreateTemp(root, ".devdiag-write-test-"); err == nil {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
+	// Check repo root write access without creating files (no mutation)
+	if err := unix.Access(root, unix.W_OK); err == nil {
 		evidence = append(evidence, schema.Evidence{
 			Source: "host_repo_writable",
 			Value:  "true",
@@ -56,7 +54,7 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 				})
 			}
 			// Check root ownership
-			if stat, ok := fi.Sys().(*syscall.Stat_t); ok && stat.Uid == 0 {
+			if stat, ok := fi.Sys().(*unix.Stat_t); ok && stat.Uid == 0 {
 				evidence = append(evidence, schema.Evidence{
 					Source: "host_file_root_owned",
 					Value:  script,
