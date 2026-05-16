@@ -62,7 +62,9 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// docker compose config with strict timeout (only extracted facts, no raw dump)
 	cmdCtx, cancel := context.WithTimeout(ctx, 2000*time.Millisecond)
-	out, err := exec.CommandContext(cmdCtx, "docker", "compose", "config", "--format", "json").Output()
+	cmd := exec.CommandContext(cmdCtx, "docker", "compose", "config", "--format", "json")
+	cmd.Dir = root
+	out, err := cmd.Output()
 	cancel()
 	if err != nil {
 		notes = append(notes, fmt.Sprintf("docker compose config failed: %v", err))
@@ -111,12 +113,15 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 				Value:  "present",
 			})
 		}
-		// Port mappings
+		// Port mappings (handle both string and object formats)
 		for _, port := range svc.Ports {
-			evidence = append(evidence, schema.Evidence{
-				Source: fmt.Sprintf("compose_service_%s_host_port", svcName),
-				Value:  extractHostPort(port),
-			})
+			hostPort := extractHostPortRaw(port)
+			if hostPort != "" {
+				evidence = append(evidence, schema.Evidence{
+					Source: fmt.Sprintf("compose_service_%s_host_port", svcName),
+					Value:  hostPort,
+				})
+			}
 		}
 		// Bind mounts
 		for _, vol := range svc.Volumes {
@@ -137,7 +142,9 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// docker compose ps --format json for service status
 	cmdCtx, cancel = context.WithTimeout(ctx, 2000*time.Millisecond)
-	out, err = exec.CommandContext(cmdCtx, "docker", "compose", "ps", "--format", "json").Output()
+	cmd = exec.CommandContext(cmdCtx, "docker", "compose", "ps", "--format", "json")
+	cmd.Dir = root
+	out, err = cmd.Output()
 	cancel()
 	if err == nil {
 		services := parseComposePS(out)
@@ -220,6 +227,27 @@ func readComposeName(path string) string {
 	return ""
 }
 
+func extractHostPortRaw(raw json.RawMessage) string {
+	// Try string format first: "5432:5432" or "127.0.0.1:8000:8000"
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return extractHostPort(s)
+	}
+	// Object format: {"published": "5432", "target": 5432}
+	var p struct {
+		Published string      `json:"published"`
+		Target    interface{} `json:"target"`
+	}
+	if err := json.Unmarshal(raw, &p); err == nil {
+		if p.Published != "" {
+			return extractHostPort(p.Published)
+		}
+		// If only target is specified, no host port mapping
+		return ""
+	}
+	return ""
+}
+
 func extractHostPort(port string) string {
 	// "5432:5432" -> "5432"
 	// "127.0.0.1:8000:8000" -> "8000"
@@ -244,12 +272,12 @@ type composeConfig struct {
 }
 
 type composeService struct {
-	Image         string              `json:"image"`
-	ContainerName string              `json:"container_name"`
-	EnvFile       []string            `json:"env_file,omitempty"`
-	HealthCheck   *healthCheck        `json:"healthcheck,omitempty"`
-	Ports         []string            `json:"ports,omitempty"`
-	Volumes       []composeVolume     `json:"volumes,omitempty"`
+	Image         string            `json:"image"`
+	ContainerName string            `json:"container_name"`
+	EnvFile       []string          `json:"env_file,omitempty"`
+	HealthCheck   *healthCheck      `json:"healthcheck,omitempty"`
+	Ports         []json.RawMessage `json:"ports,omitempty"`
+	Volumes       []composeVolume   `json:"volumes,omitempty"`
 }
 
 type healthCheck struct {

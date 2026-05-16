@@ -558,6 +558,13 @@ func TestM1Engine_DockerRules_ComposePluginMissing(t *testing.T) {
 					{Source: "docker_compose_plugin", Value: "missing"},
 				},
 			},
+			{
+				Name:   "compose",
+				Status: schema.CollectorOK,
+				Evidence: []schema.Evidence{
+					{Source: "compose", Value: "Compose config detected"},
+				},
+			},
 		},
 	}
 	findings, err := engine.Evaluate(snapshot)
@@ -572,6 +579,31 @@ func TestM1Engine_DockerRules_ComposePluginMissing(t *testing.T) {
 	}
 	if !hasDocker003 {
 		t.Errorf("expected F-DOCKER-003 finding, got: %v", findings)
+	}
+}
+
+func TestM1Engine_DockerRules_NoComposeSignal_NoFinding(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "docker",
+				Status: schema.CollectorOK,
+				Evidence: []schema.Evidence{
+					{Source: "docker_binary", Value: "/usr/bin/docker"},
+					{Source: "docker_compose_plugin", Value: "missing"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	for _, f := range findings {
+		if f.ID == "F-DOCKER-003" {
+			t.Errorf("expected no F-DOCKER-003 when repo has no compose signals, got: %v", findings)
+		}
 	}
 }
 

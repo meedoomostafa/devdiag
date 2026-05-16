@@ -99,14 +99,18 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	if err == nil {
 		containers := parsePodmanPS(out)
 		for _, ctr := range containers {
+			name := "unknown"
+			if len(ctr.Names) > 0 {
+				name = ctr.Names[0]
+			}
 			evidence = append(evidence, schema.Evidence{
-				Source: fmt.Sprintf("podman_container_%s_status", ctr.Names[0]),
+				Source: fmt.Sprintf("podman_container_%s_status", name),
 				Value:  ctr.State,
 			})
 			if len(ctr.Labels) > 0 {
 				labelStr := joinLabels(ctr.Labels)
 				evidence = append(evidence, schema.Evidence{
-					Source: fmt.Sprintf("podman_container_%s_labels", ctr.Names[0]),
+					Source: fmt.Sprintf("podman_container_%s_labels", name),
 					Value:  labelStr,
 				})
 			}
