@@ -485,3 +485,204 @@ func TestM1Engine_PortRules_Conflict(t *testing.T) {
 		t.Errorf("expected F-PORT-001 finding, got: %v", findings)
 	}
 }
+
+func TestM1Engine_DockerRules_Unavailable(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "docker",
+				Status: schema.CollectorUnavailable,
+				Evidence: []schema.Evidence{
+					{Source: "docker_binary", Value: "/usr/bin/docker"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	var hasDocker001 bool
+	for _, f := range findings {
+		if f.ID == "F-DOCKER-001" {
+			hasDocker001 = true
+		}
+	}
+	if !hasDocker001 {
+		t.Errorf("expected F-DOCKER-001 finding, got: %v", findings)
+	}
+}
+
+func TestM1Engine_DockerRules_SocketPermissionDenied(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "docker",
+				Status: schema.CollectorUnavailable,
+				Evidence: []schema.Evidence{
+					{Source: "docker_binary", Value: "/usr/bin/docker"},
+					{Source: "docker_socket_permission_denied", Value: "true"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	var hasDocker002 bool
+	for _, f := range findings {
+		if f.ID == "F-DOCKER-002" {
+			hasDocker002 = true
+		}
+		if f.ID == "F-DOCKER-001" {
+			t.Errorf("expected F-DOCKER-002, not F-DOCKER-001 when permission denied")
+		}
+	}
+	if !hasDocker002 {
+		t.Errorf("expected F-DOCKER-002 finding, got: %v", findings)
+	}
+}
+
+func TestM1Engine_DockerRules_ComposePluginMissing(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "docker",
+				Status: schema.CollectorOK,
+				Evidence: []schema.Evidence{
+					{Source: "docker_binary", Value: "/usr/bin/docker"},
+					{Source: "docker_compose_plugin", Value: "missing"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	var hasDocker003 bool
+	for _, f := range findings {
+		if f.ID == "F-DOCKER-003" {
+			hasDocker003 = true
+		}
+	}
+	if !hasDocker003 {
+		t.Errorf("expected F-DOCKER-003 finding, got: %v", findings)
+	}
+}
+
+func TestM1Engine_PodmanRules_Unavailable(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "podman",
+				Status: schema.CollectorUnavailable,
+				Evidence: []schema.Evidence{
+					{Source: "podman_binary", Value: "not_found"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	var hasPodman001 bool
+	for _, f := range findings {
+		if f.ID == "F-PODMAN-001" {
+			hasPodman001 = true
+		}
+	}
+	if !hasPodman001 {
+		t.Errorf("expected F-PODMAN-001 finding, got: %v", findings)
+	}
+}
+
+func TestM1Engine_ComposeStatusRules_ServiceNotRunning(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "compose_status",
+				Status: schema.CollectorOK,
+				Evidence: []schema.Evidence{
+					{Source: "compose_service_api_status", Value: "exited"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	var hasContainer001 bool
+	for _, f := range findings {
+		if f.ID == "F-CONTAINER-001" {
+			hasContainer001 = true
+		}
+	}
+	if !hasContainer001 {
+		t.Errorf("expected F-CONTAINER-001 finding, got: %v", findings)
+	}
+}
+
+func TestM1Engine_ComposeStatusRules_ServiceUnhealthy(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "compose_status",
+				Status: schema.CollectorOK,
+				Evidence: []schema.Evidence{
+					{Source: "compose_service_db_health", Value: "unhealthy"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	var hasContainer001 bool
+	for _, f := range findings {
+		if f.ID == "F-CONTAINER-001" {
+			hasContainer001 = true
+		}
+	}
+	if !hasContainer001 {
+		t.Errorf("expected F-CONTAINER-001 finding, got: %v", findings)
+	}
+}
+
+func TestM1Engine_ComposeStatusRules_BindMountMissing(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "compose_status",
+				Status: schema.CollectorOK,
+				Evidence: []schema.Evidence{
+					{Source: "compose_service_api_bind_mount_source", Value: "/host/data=false"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	var hasContainer003 bool
+	for _, f := range findings {
+		if f.ID == "F-CONTAINER-003" {
+			hasContainer003 = true
+		}
+	}
+	if !hasContainer003 {
+		t.Errorf("expected F-CONTAINER-003 finding, got: %v", findings)
+	}
+}

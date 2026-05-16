@@ -106,6 +106,18 @@ func HasDockerSignal(root string) bool {
 		fileExists(filepath.Join(root, ".devcontainer/devcontainer.json"))
 }
 
+// HasPodmanSignal returns true if the repo contains Podman signals.
+func HasPodmanSignal(root string) bool {
+	if root == "" {
+		root = "."
+	}
+	return fileExists(filepath.Join(root, "Containerfile")) ||
+		fileExists(filepath.Join(root, "containerfile")) ||
+		fileExists(filepath.Join(root, ".podman/containers.conf")) ||
+		fileExists(filepath.Join(root, "podman-compose.yml")) ||
+		fileExists(filepath.Join(root, "podman-compose.yaml"))
+}
+
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
