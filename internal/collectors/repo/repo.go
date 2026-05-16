@@ -2,8 +2,10 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
@@ -85,6 +87,15 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		evidence = append(evidence, schema.Evidence{Source: "workspace", Value: "Workspace/monorepo detected"})
 	}
 
+	// Devcontainer image extraction
+	devcontainerPath := filepath.Join(root, ".devcontainer", "devcontainer.json")
+	if fileExists(devcontainerPath) {
+		img := parseDevcontainerImage(devcontainerPath)
+		if img != "" {
+			evidence = append(evidence, schema.Evidence{Source: "devcontainer_image", Value: img})
+		}
+	}
+
 	return schema.CollectorResult{
 		Name:     c.Name(),
 		Status:   schema.CollectorOK,
@@ -128,6 +139,42 @@ func HasPythonSignal(root string) bool {
 		fileExists(filepath.Join(root, "setup.py")) ||
 		fileExists(filepath.Join(root, "setup.cfg")) ||
 		fileExists(filepath.Join(root, "Pipfile"))
+}
+
+// HasCISignal returns true if the repo contains at least one GitHub Actions workflow file.
+func HasCISignal(root string) bool {
+	if root == "" {
+		root = "."
+	}
+	workflowDir := filepath.Join(root, ".github", "workflows")
+	entries, err := os.ReadDir(workflowDir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml") {
+			return true
+		}
+	}
+	return false
+}
+
+func parseDevcontainerImage(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Image string `json:"image"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return ""
+	}
+	return cfg.Image
 }
 
 func fileExists(path string) bool {
