@@ -8,13 +8,16 @@ import (
 
 	"github.com/meedoomostafa/devdiag/internal/collectors"
 	composecollector "github.com/meedoomostafa/devdiag/internal/collectors/compose"
+	composestatuscollector "github.com/meedoomostafa/devdiag/internal/collectors/composestatus"
 	diskcollector "github.com/meedoomostafa/devdiag/internal/collectors/disk"
+	dockercollector "github.com/meedoomostafa/devdiag/internal/collectors/docker"
 	envcollector "github.com/meedoomostafa/devdiag/internal/collectors/env"
 	gitcollector "github.com/meedoomostafa/devdiag/internal/collectors/git"
 	hostcollector "github.com/meedoomostafa/devdiag/internal/collectors/host"
 	hostruncollector "github.com/meedoomostafa/devdiag/internal/collectors/hostruntime"
 	networkcollector "github.com/meedoomostafa/devdiag/internal/collectors/network"
 	permissioncollector "github.com/meedoomostafa/devdiag/internal/collectors/permission"
+	podmancollector "github.com/meedoomostafa/devdiag/internal/collectors/podman"
 	portcollector "github.com/meedoomostafa/devdiag/internal/collectors/port"
 	repocollector "github.com/meedoomostafa/devdiag/internal/collectors/repo"
 	runtimecollector "github.com/meedoomostafa/devdiag/internal/collectors/runtime"
@@ -55,10 +58,12 @@ var scanCmd = &cobra.Command{
 		runner := collectors.NewRunner()
 		ctx := cmd.Context()
 
-		// Pre-detect Docker signals for conditional systemd check
+		// Pre-detect container signals for conditional M3 inclusion
 		repoHasDocker := repocollector.HasDockerSignal(absPath)
+		repoHasPodman := repocollector.HasPodmanSignal(absPath)
+		repoHasContainers := repoHasDocker || repoHasPodman
 
-		collectorResults := runner.Run(ctx, []collectors.Collector{
+		allCollectors := []collectors.Collector{
 			&repocollector.Collector{Root: absPath},
 			&envcollector.Collector{Root: absPath},
 			&composecollector.Collector{Root: absPath},
@@ -72,7 +77,18 @@ var scanCmd = &cobra.Command{
 			&systemdcollector.Collector{RepoExpectsDocker: repoHasDocker},
 			&permissioncollector.Collector{Root: absPath},
 			&collectors.SelfCollector{},
-		})
+		}
+
+		// Conditionally include M3 container collectors
+		if repoHasContainers {
+			allCollectors = append(allCollectors,
+				&dockercollector.Collector{},
+				&podmancollector.Collector{},
+				&composestatuscollector.Collector{Root: absPath},
+			)
+		}
+
+		collectorResults := runner.Run(ctx, allCollectors)
 
 		// Build snapshot
 		snapshotBuilder := graph.NewSnapshotBuilder()

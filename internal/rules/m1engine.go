@@ -55,6 +55,12 @@ func (e *M1Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 			findings = append(findings, e.systemdRules(c)...)
 		case "permission":
 			findings = append(findings, e.permissionRules(c)...)
+		case "docker":
+			findings = append(findings, e.dockerRules(c)...)
+		case "podman":
+			findings = append(findings, e.podmanRules(c)...)
+		case "compose_status":
+			findings = append(findings, e.composeStatusRules(c, collectorMap)...)
 		case "self":
 			// self collector produces no findings
 		}
@@ -583,6 +589,178 @@ func (e *M1Engine) permissionRules(result schema.CollectorResult) []schema.Findi
 					"File was created as root and ownership was not transferred",
 				},
 			})
+		}
+	}
+
+	return findings
+}
+
+// dockerRules creates findings from docker collector evidence.
+func (e *M1Engine) dockerRules(result schema.CollectorResult) []schema.Finding {
+	var findings []schema.Finding
+
+	hasPermissionDenied := false
+	hasComposePlugin := false
+	for _, ev := range result.Evidence {
+		if ev.Source == "docker_socket_permission_denied" {
+			hasPermissionDenied = true
+		}
+		if ev.Source == "docker_compose_plugin" && ev.Value == "available" {
+			hasComposePlugin = true
+		}
+	}
+
+	if result.Status == schema.CollectorUnavailable {
+		if hasPermissionDenied {
+			findings = append(findings, schema.Finding{
+				ID:         "F-DOCKER-002",
+				Title:      "Docker socket permission denied",
+				Severity:   schema.SeverityMedium,
+				Confidence: 0.7,
+				Symptom:    "Cannot access Docker daemon socket due to permission restrictions",
+				Evidence:   result.Evidence,
+				LikelyCauses: []string{
+					"Current user may not be in the docker group",
+					"Docker daemon may be running with restricted socket permissions",
+					"Rootless Docker may require different socket path",
+				},
+			})
+		} else {
+			findings = append(findings, schema.Finding{
+				ID:         "F-DOCKER-001",
+				Title:      "Docker daemon inactive or inaccessible",
+				Severity:   schema.SeverityHigh,
+				Confidence: 0.8,
+				Symptom:    "Docker daemon is not running or is unreachable",
+				Evidence:   result.Evidence,
+				LikelyCauses: []string{
+					"Docker service is not started",
+					"Docker daemon is misconfigured",
+				},
+			})
+		}
+	}
+
+	if !hasComposePlugin {
+		for _, ev := range result.Evidence {
+			if ev.Source == "docker_compose_plugin" && (ev.Value == "missing" || ev.Value == "legacy_docker-compose") {
+				findings = append(findings, schema.Finding{
+					ID:         "F-DOCKER-003",
+					Title:      "Docker Compose plugin missing",
+					Severity:   schema.SeverityMedium,
+					Confidence: 0.6,
+					Symptom:    "Repo has Compose files but Docker Compose plugin is not available",
+					Evidence:   result.Evidence,
+					LikelyCauses: []string{
+						"Docker Compose plugin is not installed",
+						"Legacy docker-compose binary may be available as fallback",
+					},
+				})
+				break
+			}
+		}
+	}
+
+	return findings
+}
+
+// podmanRules creates findings from podman collector evidence.
+func (e *M1Engine) podmanRules(result schema.CollectorResult) []schema.Finding {
+	var findings []schema.Finding
+
+	if result.Status == schema.CollectorUnavailable {
+		findings = append(findings, schema.Finding{
+			ID:         "F-PODMAN-001",
+			Title:      "Podman unavailable (repo expects containers)",
+			Severity:   schema.SeverityMedium,
+			Confidence: 0.7,
+			Symptom:    "Repo has container signals but Podman is not accessible",
+			Evidence:   result.Evidence,
+			LikelyCauses: []string{
+				"Podman is not installed",
+				"Podman service is not running",
+			},
+		})
+	}
+
+	return findings
+}
+
+// composeStatusRules creates findings from compose_status collector evidence.
+func (e *M1Engine) composeStatusRules(result schema.CollectorResult, collectors map[string]schema.CollectorResult) []schema.Finding {
+	var findings []schema.Finding
+
+	// Service not running
+	for _, ev := range result.Evidence {
+		if strings.HasSuffix(ev.Source, "_status") {
+			parts := strings.Split(ev.Source, "_")
+			if len(parts) >= 3 {
+				serviceName := parts[2]
+				status := ev.Value
+				if status == "exited" || status == "dead" || status == "restarting" {
+					findings = append(findings, schema.Finding{
+						ID:         "F-CONTAINER-001",
+						Title:      fmt.Sprintf("Compose service '%s' is not running", serviceName),
+						Severity:   schema.SeverityHigh,
+						Confidence: 0.8,
+						Symptom:    fmt.Sprintf("Service '%s' is in state '%s'", serviceName, status),
+						Evidence:   []schema.Evidence{ev},
+						LikelyCauses: []string{
+							"Service may have crashed or failed to start",
+							"Dependent services may be unavailable",
+						},
+					})
+				}
+			}
+		}
+	}
+
+	// Unhealthy services
+	for _, ev := range result.Evidence {
+		if strings.HasSuffix(ev.Source, "_health") {
+			parts := strings.Split(ev.Source, "_")
+			if len(parts) >= 3 {
+				serviceName := parts[2]
+				if ev.Value == "unhealthy" {
+					findings = append(findings, schema.Finding{
+						ID:         "F-CONTAINER-001",
+						Title:      fmt.Sprintf("Compose service '%s' is unhealthy", serviceName),
+						Severity:   schema.SeverityHigh,
+						Confidence: 0.8,
+						Symptom:    fmt.Sprintf("Service '%s' healthcheck is failing", serviceName),
+						Evidence:   []schema.Evidence{ev},
+						LikelyCauses: []string{
+							"Service dependencies may be unavailable",
+							"Healthcheck configuration may be too strict",
+						},
+					})
+				}
+			}
+		}
+	}
+
+	// Bind mount source missing
+	for _, ev := range result.Evidence {
+		if strings.HasSuffix(ev.Source, "_bind_mount_source") {
+			parts := strings.Split(ev.Source, "_")
+			if len(parts) >= 3 {
+				serviceName := parts[2]
+				if strings.HasSuffix(ev.Value, "=false") {
+					sourcePath := strings.TrimSuffix(ev.Value, "=false")
+					findings = append(findings, schema.Finding{
+						ID:         "F-CONTAINER-003",
+						Title:      fmt.Sprintf("Bind mount source missing or unreadable for service '%s'", serviceName),
+						Severity:   schema.SeverityMedium,
+						Confidence: 0.7,
+						Symptom:    fmt.Sprintf("Host path '%s' does not exist or is not readable", sourcePath),
+						Evidence:   []schema.Evidence{ev},
+						LikelyCauses: []string{
+							"Path was removed after compose file was written",
+							"Path requires different permissions",
+						},
+					})
+				}
+			}
 		}
 	}
 

@@ -8,13 +8,16 @@ import (
 
 	"github.com/meedoomostafa/devdiag/internal/collectors"
 	composecollector "github.com/meedoomostafa/devdiag/internal/collectors/compose"
+	composestatuscollector "github.com/meedoomostafa/devdiag/internal/collectors/composestatus"
 	diskcollector "github.com/meedoomostafa/devdiag/internal/collectors/disk"
+	dockercollector "github.com/meedoomostafa/devdiag/internal/collectors/docker"
 	envcollector "github.com/meedoomostafa/devdiag/internal/collectors/env"
 	gitcollector "github.com/meedoomostafa/devdiag/internal/collectors/git"
 	hostcollector "github.com/meedoomostafa/devdiag/internal/collectors/host"
 	hostruncollector "github.com/meedoomostafa/devdiag/internal/collectors/hostruntime"
 	networkcollector "github.com/meedoomostafa/devdiag/internal/collectors/network"
 	permissioncollector "github.com/meedoomostafa/devdiag/internal/collectors/permission"
+	podmancollector "github.com/meedoomostafa/devdiag/internal/collectors/podman"
 	portcollector "github.com/meedoomostafa/devdiag/internal/collectors/port"
 	repocollector "github.com/meedoomostafa/devdiag/internal/collectors/repo"
 	runtimecollector "github.com/meedoomostafa/devdiag/internal/collectors/runtime"
@@ -183,6 +186,19 @@ var checkFilesystemCmd = &cobra.Command{
 	}),
 }
 
+var checkContainersCmd = &cobra.Command{
+	Use:   "containers [path]",
+	Short: "Check Docker, Podman, and Compose container status",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: makeCheckRun(func(path string) []collectors.Collector {
+		return []collectors.Collector{
+			&dockercollector.Collector{},
+			&podmancollector.Collector{},
+			&composestatuscollector.Collector{Root: path},
+		}
+	}),
+}
+
 func init() {
 	checkCmd.AddCommand(checkEnvCmd)
 	checkCmd.AddCommand(checkRuntimesCmd)
@@ -191,5 +207,6 @@ func init() {
 	checkCmd.AddCommand(checkServicesCmd)
 	checkCmd.AddCommand(checkNetworkCmd)
 	checkCmd.AddCommand(checkFilesystemCmd)
+	checkCmd.AddCommand(checkContainersCmd)
 	rootCmd.AddCommand(checkCmd)
 }
