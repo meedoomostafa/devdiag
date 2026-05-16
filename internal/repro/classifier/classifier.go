@@ -105,9 +105,18 @@ func (c *Classifier) Classify(stdout, stderr string) []repro.Classification {
 
 		if matched {
 			excerpt := extractExcerpt(text, rule.Patterns, 120)
+			sourceStream := rule.SourceStream
+			if sourceStream == "any" {
+				// Determine which stream actually matched
+				if containsAnyPattern(stdout, rule.Patterns, rule.CaseSensitive) {
+					sourceStream = "stdout"
+				} else {
+					sourceStream = "stderr"
+				}
+			}
 			results = append(results, repro.Classification{
 				Kind:         rule.Kind,
-				SourceStream: rule.SourceStream,
+				SourceStream: sourceStream,
 				Confidence:   rule.Confidence,
 				PatternID:    rule.ID,
 				Excerpt:      excerpt,
@@ -116,6 +125,21 @@ func (c *Classifier) Classify(stdout, stderr string) []repro.Classification {
 	}
 
 	return results
+}
+
+func containsAnyPattern(text string, patterns []string, caseSensitive bool) bool {
+	for _, pat := range patterns {
+		if caseSensitive {
+			if strings.Contains(text, pat) {
+				return true
+			}
+		} else {
+			if strings.Contains(strings.ToLower(text), strings.ToLower(pat)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func extractExcerpt(text string, patterns []string, maxLen int) string {

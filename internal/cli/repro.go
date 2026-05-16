@@ -143,8 +143,14 @@ func writeReproArtifacts(runID string, report *schema.Report, result *repro.Repr
 		return err
 	}
 
-	// Repro result
-	reproData, err := json.MarshalIndent(result, "", "  ")
+	// Repro result — redact previews and excerpts before persistence
+	redactedResult := *result
+	redactedResult.StdoutPreview = engine.RedactString(result.StdoutPreview, "repro_stdout")
+	redactedResult.StderrPreview = engine.RedactString(result.StderrPreview, "repro_stderr")
+	for i := range redactedResult.Classifications {
+		redactedResult.Classifications[i].Excerpt = engine.RedactString(redactedResult.Classifications[i].Excerpt, "repro_classification")
+	}
+	reproData, err := json.MarshalIndent(&redactedResult, "", "  ")
 	if err != nil {
 		return err
 	}

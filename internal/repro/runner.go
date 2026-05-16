@@ -191,18 +191,89 @@ func (b *boundedBuffer) Len() int {
 }
 
 func isSensitiveEnvKey(key string) bool {
-	sensitive := []string{"PASSWORD", "SECRET", "TOKEN", "KEY", "API_KEY", "AUTH", "CREDENTIAL", "DATABASE_URL"}
 	upper := strings.ToUpper(key)
+	// Exact or suffix matches for truly sensitive keys
+	sensitive := []string{
+		"PASSWORD", "SECRET", "TOKEN", "API_KEY", "AUTH_TOKEN", "CREDENTIAL",
+		"DATABASE_URL", "PRIVATE_KEY", "ACCESS_KEY", "AWS_SECRET",
+	}
 	for _, s := range sensitive {
 		if strings.Contains(upper, s) {
 			return true
 		}
 	}
+	// KEY alone is too broad (matches PATH, HOME); require it to be a standalone word or suffix
+	if strings.Contains(upper, "_KEY") || strings.HasSuffix(upper, "KEY") {
+		// Exclude common non-sensitive keys containing "KEY"
+		if strings.Contains(upper, "PATH") || strings.Contains(upper, "HOME") ||
+			strings.Contains(upper, "OLDPWD") || strings.Contains(upper, "XDG") ||
+			strings.Contains(upper, "DESKTOP") || strings.Contains(upper, "SESSION") {
+			return false
+		}
+		return true
+	}
 	return false
 }
 
 func redactString(s string) string {
-	// Simple inline redaction for previews; full redaction happens via redact.Engine
-	// Replace URL passwords, JWT-like tokens, and home paths
-	return s
+	// Redact URL credentials: http://user:pass@host → http://<redacted>@host
+	result := s
+	for _, scheme := range []string{"http", "https", "ftp", "sftp", "postgres", "mysql", "redis", "mongodb"} {
+		prefix := scheme + "://"
+		for strings.Contains(result, prefix) {
+			idx := strings.Index(result, prefix)
+			end := strings.IndexAny(result[idx+len(prefix):], " /?#")
+			if end == -1 {
+				end = len(result) - idx - len(prefix)
+			}
+			segment := result[idx+len(prefix) : idx+len(prefix)+end]
+			if at := strings.Index(segment, "@"); at > 0 {
+				// Has credentials before @
+				if colon := strings.Index(segment[:at], ":"); colon > 0 {
+					// user:password@host
+					result = result[:idx+len(prefix)] + "<redacted>" + result[idx+len(prefix)+at:]
+				}
+			}
+			break
+		}
+	}
+
+	// Redact JWT-like tokens (three base64url segments separated by dots)
+	result = redactJWT(result)
+
+	// Redact home directory paths
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		result = strings.ReplaceAll(result, home, "~")
+	}
+
+	return result
+}
+
+func redactJWT(s string) string {
+	// Simple heuristic: look for eyJ... base64url JWT header pattern
+	result := s
+	for {
+		idx := strings.Index(result, "eyJ")
+		if idx == -1 {
+			break
+		}
+		end := idx + 1
+		for end < len(result) {
+			c := result[end]
+			if c == '.' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
+				end++
+			} else {
+				break
+			}
+		}
+		token := result[idx:end]
+		if strings.Count(token, ".") >= 2 && len(token) > 30 {
+			result = result[:idx] + "<redacted-jwt>" + result[end:]
+		} else {
+			// Not a JWT, skip past eyJ
+			result = result[:idx] + "xx" + result[idx+2:]
+		}
+	}
+	return result
 }
