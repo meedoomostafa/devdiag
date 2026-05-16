@@ -55,10 +55,12 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 			continue
 		}
 
-		// Resolve absolute path
-		absPath, _ := filepath.Abs(path)
-		if absPath == "" {
-			absPath = path
+		// Resolve absolute path; LookPath may return relative paths
+		absPath := path
+		if !filepath.IsAbs(path) {
+			if p, err := filepath.Abs(path); err == nil {
+				absPath = p
+			}
 		}
 
 		evidence = append(evidence, schema.Evidence{
@@ -74,8 +76,8 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 			})
 		}
 
-		// Run version command with timeout
-		cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		// Run version command with timeout (plan budget: 300–1000ms)
+		cmdCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
 		out, err := exec.CommandContext(cmdCtx, rt.binary, rt.args...).Output()
 		cancel()
 		if err != nil {

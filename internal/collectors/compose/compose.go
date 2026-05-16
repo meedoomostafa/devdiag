@@ -105,7 +105,9 @@ func extractPortMappings(path string) ([]string, error) {
 		start = root.Content[0]
 	}
 	walkYAML(start, "", func(path string, node *yaml.Node) {
-		if node.Kind == yaml.ScalarNode && strings.Contains(path, "ports") {
+		// Only match actual "ports" keys, not substrings like "sports" or "reporting_ports"
+		isPortsField := strings.HasSuffix(path, ".ports") || strings.Contains(path, ".ports[")
+		if node.Kind == yaml.ScalarNode && isPortsField {
 			// Port syntax: "5432:5432", "127.0.0.1:8000:8000", "5432"
 			val := strings.TrimSpace(node.Value)
 			if val == "" {
@@ -114,12 +116,19 @@ func extractPortMappings(path string) ([]string, error) {
 			// Only capture explicit host:container mappings
 			if strings.Contains(val, ":") {
 				parts := strings.Split(val, ":")
-				if len(parts) >= 2 {
+				if len(parts) == 2 {
+					// "5432:5432" or "127.0.0.1:8000"
 					hostPart := strings.TrimSpace(parts[0])
-					// Handle IP prefix: "127.0.0.1:8000:8000"
-					if strings.Count(val, ":") == 2 {
+					if strings.Contains(hostPart, ".") {
+						// IP:port syntax → host port is the second part
 						hostPart = strings.TrimSpace(parts[1])
 					}
+					if hostPart != "" {
+						ports = append(ports, hostPart)
+					}
+				} else if len(parts) == 3 {
+					// "127.0.0.1:8000:8000" → host port is middle part
+					hostPart := strings.TrimSpace(parts[1])
 					if hostPart != "" {
 						ports = append(ports, hostPart)
 					}

@@ -165,6 +165,34 @@ func TestCollector_EscapedDollarIgnored(t *testing.T) {
 	}
 }
 
+func TestCollector_PortMappings(t *testing.T) {
+	dir := t.TempDir()
+	yaml := `services:
+  api:
+    ports:
+      - "5432:5432"
+      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:9000"
+      - "5432"
+`
+	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(yaml), 0644)
+
+	ports, err := extractPortMappings(filepath.Join(dir, "compose.yaml"))
+	if err != nil {
+		t.Fatalf("extractPortMappings error: %v", err)
+	}
+
+	want := []string{"5432", "8000", "9000"}
+	if len(ports) != len(want) {
+		t.Fatalf("expected %v, got %v", want, ports)
+	}
+	for i, w := range want {
+		if ports[i] != w {
+			t.Errorf("port[%d] = %q, want %q", i, ports[i], w)
+		}
+	}
+}
+
 func TestCollector_LineNumbersPreserved(t *testing.T) {
 	dir := t.TempDir()
 	yaml := "services:\n  api:\n    environment:\n      API_KEY: ${API_KEY}\n"

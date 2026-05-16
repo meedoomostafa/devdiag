@@ -415,6 +415,42 @@ func TestM1Engine_PermissionRules_NotExecutable(t *testing.T) {
 	}
 }
 
+func TestM1Engine_HostRuntimeRules_RustRustc(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name: "runtime",
+				Evidence: []schema.Evidence{
+					{Source: "Cargo.toml", Value: "rust 1.75.0"},
+				},
+			},
+			{
+				Name: "host_runtime",
+				Evidence: []schema.Evidence{
+					{Source: "host_rustc_version", Value: "1.70.0"},
+					{Source: "host_rustc_path", Value: "/usr/bin/rustc"},
+				},
+			},
+		},
+	}
+
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+
+	var hasRuntime006 bool
+	for _, f := range findings {
+		if f.ID == "F-RUNTIME-006" {
+			hasRuntime006 = true
+		}
+	}
+	if !hasRuntime006 {
+		t.Errorf("expected F-RUNTIME-006 finding for rust/rustc mismatch, got: %v", findings)
+	}
+}
+
 func TestM1Engine_PortRules_Conflict(t *testing.T) {
 	engine := NewM1Engine()
 	snapshot := graph.NormalizedSnapshot{
