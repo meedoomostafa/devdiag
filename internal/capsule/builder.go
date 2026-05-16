@@ -19,6 +19,7 @@ import (
 type Builder struct {
 	RedactionStatus string
 	DevDiagVersion  string
+	TraceArtifact   []byte // optional redacted trace result JSON
 }
 
 // NewBuilder creates a capsule builder.
@@ -27,6 +28,11 @@ func NewBuilder(redactionStatus, version string) *Builder {
 		RedactionStatus: redactionStatus,
 		DevDiagVersion:  version,
 	}
+}
+
+// SetTraceArtifact attaches a redacted trace result to the capsule.
+func (b *Builder) SetTraceArtifact(data []byte) {
+	b.TraceArtifact = data
 }
 
 // Build creates a .tgz capsule from report and repro artifacts.
@@ -76,7 +82,7 @@ func (b *Builder) Build(w io.Writer, report *schema.Report, reproResult *repro.R
 	}
 
 	// Ensure snapshot directory exists in tar before files
-	if len(report.Collectors) > 0 {
+	if len(report.Collectors) > 0 || b.TraceArtifact != nil {
 		if err := b.addDir(tw, "snapshot/", now); err != nil {
 			return err
 		}
@@ -85,11 +91,20 @@ func (b *Builder) Build(w io.Writer, report *schema.Report, reproResult *repro.R
 	for _, c := range report.Collectors {
 		cData, err := json.MarshalIndent(c, "", "  ")
 		if err != nil {
+			manifest.Notes = append(manifest.Notes, fmt.Sprintf("marshal failed for collector %s: %v", c.Name, err))
 			continue
 		}
 		name := fmt.Sprintf("snapshot/%s.json", c.Name)
 		if err := b.addFile(tw, manifest, name, cData, now); err != nil {
 			return err
+		}
+	}
+
+	// Write trace artifact if present (overrides or supplements snapshot/trace.json)
+	if b.TraceArtifact != nil {
+		if err := b.addFile(tw, manifest, "snapshot/trace.json", b.TraceArtifact, now); err != nil {
+			manifest.Notes = append(manifest.Notes, fmt.Sprintf("trace artifact add failed: %v", err))
+			// non-fatal: continue building capsule
 		}
 	}
 
@@ -172,6 +187,7 @@ type Manifest struct {
 	CreatedAt            string         `json:"created_at"`
 	RedactionStatus      string         `json:"redaction_status"`
 	Files                []ManifestFile `json:"files"`
+	Notes                []string       `json:"notes,omitempty"`
 }
 
 // ManifestFile is a single entry in the capsule manifest.

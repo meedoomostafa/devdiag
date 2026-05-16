@@ -7,6 +7,9 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/meedoomostafa/devdiag/internal/exitcode"
+	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
 // Helper to build the binary once for integration tests.
@@ -183,5 +186,169 @@ func TestSeverityHigher_ExitCodeMapping(t *testing.T) {
 	}
 	if severityHigher("low", "medium") {
 		t.Error("low should NOT be higher than medium")
+	}
+}
+
+func TestExitCodeFromResults_MapsCorrectly(t *testing.T) {
+	tests := []struct {
+		name        string
+		findings    []schema.Finding
+		collectors  []schema.CollectorResult
+		reproFailed bool
+		want        exitcode.Code
+	}{
+		{
+			name: "success",
+			findings: []schema.Finding{
+				{Severity: schema.SeverityInfo},
+			},
+			want: exitcode.Success,
+		},
+		{
+			name: "high severity finding",
+			findings: []schema.Finding{
+				{Severity: schema.SeverityHigh},
+			},
+			want: exitcode.FindingsExist,
+		},
+		{
+			name: "critical severity finding",
+			findings: []schema.Finding{
+				{Severity: schema.SeverityCritical},
+			},
+			want: exitcode.FindingsExist,
+		},
+		{
+			name: "repro failed",
+			findings: []schema.Finding{
+				{Severity: schema.SeverityInfo},
+			},
+			reproFailed: true,
+			want:        exitcode.ReproFailed,
+		},
+		{
+			name:       "collector timeout",
+			collectors: []schema.CollectorResult{{Status: schema.CollectorTimeout}},
+			want:       exitcode.CollectorPartial,
+		},
+		{
+			name:       "collector permission denied",
+			collectors: []schema.CollectorResult{{Status: schema.CollectorPermissionDenied}},
+			want:       exitcode.PermissionDenied,
+		},
+		{
+			name:       "collector unavailable",
+			collectors: []schema.CollectorResult{{Status: schema.CollectorUnavailable}},
+			want:       exitcode.CollectorPartial,
+		},
+		{
+			name:       "collector failed",
+			collectors: []schema.CollectorResult{{Status: schema.CollectorFailed}},
+			want:       exitcode.CollectorPartial,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := exitCodeFromResults(tt.findings, tt.collectors, tt.reproFailed)
+			if got != tt.want {
+				t.Errorf("exitCodeFromResults() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPopulateHostInfo_ExtractsFromCollector(t *testing.T) {
+	collectors := []schema.CollectorResult{
+		{
+			Name: "host",
+			Evidence: []schema.Evidence{
+				{Source: "host_os_id", Value: "ubuntu"},
+				{Source: "host_os_version", Value: "22.04"},
+				{Source: "host_kernel", Value: "5.15.0"},
+				{Source: "host_arch", Value: "x86_64"},
+			},
+		},
+	}
+	host := populateHostInfo(collectors)
+	if host.OS != "ubuntu" {
+		t.Errorf("OS = %q, want ubuntu", host.OS)
+	}
+	if host.Version != "22.04" {
+		t.Errorf("Version = %q, want 22.04", host.Version)
+	}
+	if host.Kernel != "5.15.0" {
+		t.Errorf("Kernel = %q, want 5.15.0", host.Kernel)
+	}
+	if host.Arch != "x86_64" {
+		t.Errorf("Arch = %q, want x86_64", host.Arch)
+	}
+}
+
+func TestValidateRunID(t *testing.T) {
+	valid := []string{"abc", "ABC", "123", "a-b_c", "2024-01-01T12:00:00Z_abc123"}
+	for _, id := range valid {
+		if err := validateRunID(id); err != nil {
+			t.Errorf("validateRunID(%q) unexpected error: %v", id, err)
+		}
+	}
+	invalid := []string{"", "a/b", "..", "a..b", "a b", "a@b"}
+	for _, id := range invalid {
+		if err := validateRunID(id); err == nil {
+			t.Errorf("validateRunID(%q) expected error, got nil", id)
+		}
+	}
+}
+
+func TestCheckGPU_NewFlagsDoNotCrash(t *testing.T) {
+	// Verify the new GPU verification flags are accepted and do not panic.
+	_, _, code := runBinary("check", "gpu", "--gpu-verify")
+	if code != 0 {
+		t.Errorf("check gpu --gpu-verify exit code = %d, want 0", code)
+	}
+
+	_, _, code = runBinary("check", "gpu", "--allow-pull")
+	if code != 0 {
+		t.Errorf("check gpu --allow-pull exit code = %d, want 0", code)
+	}
+
+	_, _, code = runBinary("check", "gpu", "--gpu-verify-image", "nvidia/cuda:11.8.0-base-ubuntu22.04")
+	if code != 0 {
+		t.Errorf("check gpu --gpu-verify-image exit code = %d, want 0", code)
+	}
+}
+
+func TestCheckGPU_CombinedFlags(t *testing.T) {
+	_, _, code := runBinary("check", "gpu", "--python", "--gpu-verify", "--allow-pull")
+	if code != 0 {
+		t.Errorf("check gpu combined flags exit code = %d, want 0", code)
+	}
+}
+
+func TestTraceCommand_ExecutesTrue(t *testing.T) {
+	if _, err := exec.LookPath("strace"); err != nil {
+		t.Skip("strace not installed")
+	}
+	_, stderr, code := runBinary("trace", "--scope", "file", "--", "true")
+	if code == int(exitcode.TraceUnavailable) {
+		t.Skip("ptrace unavailable in this environment")
+	}
+	if code != 0 {
+		t.Errorf("trace true exit code = %d, want 0, stderr=%s", code, stderr)
+	}
+}
+
+func TestTraceCommand_InvalidScope(t *testing.T) {
+	if _, err := exec.LookPath("strace"); err != nil {
+		t.Skip("strace not installed")
+	}
+	_, stderr, code := runBinary("trace", "--scope", "gpu", "--", "true")
+	if code == int(exitcode.TraceUnavailable) {
+		t.Skip("ptrace unavailable in this environment")
+	}
+	if code != 2 {
+		t.Errorf("expected exit code 2 for invalid scope, got %d", code)
+	}
+	if !strings.Contains(stderr, "invalid") && !strings.Contains(stderr, "scope") {
+		t.Errorf("expected invalid scope error in stderr, got: %s", stderr)
 	}
 }
