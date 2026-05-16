@@ -20,11 +20,13 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/version"
 )
 
-var scanCmd = &cobra.Command{
-	Use:   "scan [path]",
-	Short: "Run a diagnostic scan on the given path",
-	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+var checkCmd = &cobra.Command{
+	Use:   "check",
+	Short: "Run specific diagnostic checks",
+}
+
+func makeCheckRun(collectorsList func(string) []collectors.Collector) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 		colorMode := buildColorMode()
 		redactEngine := buildRedactEngine()
@@ -42,25 +44,15 @@ var scanCmd = &cobra.Command{
 			absPath = scanPath
 		}
 
-		logger.Info("scan", fmt.Sprintf("scanning path=%s", absPath))
+		logger.Info("check", fmt.Sprintf("checking path=%s", absPath))
 
-		// Run all M1 repo collectors + self collector
 		runner := collectors.NewRunner()
 		ctx := cmd.Context()
-		collectorResults := runner.Run(ctx, []collectors.Collector{
-			&repocollector.Collector{Root: absPath},
-			&envcollector.Collector{Root: absPath},
-			&composecollector.Collector{Root: absPath},
-			&gitcollector.Collector{Root: absPath},
-			&runtimecollector.Collector{Root: absPath},
-			&collectors.SelfCollector{},
-		})
+		collectorResults := runner.Run(ctx, collectorsList(absPath))
 
-		// Build snapshot
 		snapshotBuilder := graph.NewSnapshotBuilder()
 		snapshot := snapshotBuilder.Build(collectorResults)
 
-		// Evaluate policies
 		engine := rules.NewM1Engine()
 		rawFindings, err := engine.Evaluate(snapshot)
 		if err != nil {
@@ -68,7 +60,6 @@ var scanCmd = &cobra.Command{
 			return fmt.Errorf("policy evaluation failed: %w", err)
 		}
 
-		// Aggregate findings for stable ordering
 		aggregator := findings.NewAggregator()
 		sortedFindings := aggregator.Add(rawFindings)
 
@@ -89,7 +80,6 @@ var scanCmd = &cobra.Command{
 			return err
 		}
 
-		// Determine exit code based on findings severity
 		maxSeverity := schema.SeverityInfo
 		for _, f := range sortedFindings {
 			if severityHigher(f.Severity, maxSeverity) {
@@ -100,20 +90,47 @@ var scanCmd = &cobra.Command{
 			return exitCodeError{code: exitcode.FindingsExist}
 		}
 		return nil
-	},
+	}
 }
 
-func severityHigher(a, b schema.Severity) bool {
-	order := map[schema.Severity]int{
-		schema.SeverityCritical: 4,
-		schema.SeverityHigh:     3,
-		schema.SeverityMedium:   2,
-		schema.SeverityLow:      1,
-		schema.SeverityInfo:     0,
-	}
-	return order[a] > order[b]
+var checkEnvCmd = &cobra.Command{
+	Use:   "env [path]",
+	Short: "Check environment configuration",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: makeCheckRun(func(path string) []collectors.Collector {
+		return []collectors.Collector{
+			&envcollector.Collector{Root: path},
+			&composecollector.Collector{Root: path},
+		}
+	}),
+}
+
+var checkRuntimesCmd = &cobra.Command{
+	Use:   "runtimes [path]",
+	Short: "Check runtime declarations",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: makeCheckRun(func(path string) []collectors.Collector {
+		return []collectors.Collector{
+			&runtimecollector.Collector{Root: path},
+			&repocollector.Collector{Root: path},
+		}
+	}),
+}
+
+var checkGitCmd = &cobra.Command{
+	Use:   "git [path]",
+	Short: "Check Git state",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: makeCheckRun(func(path string) []collectors.Collector {
+		return []collectors.Collector{
+			&gitcollector.Collector{Root: path},
+		}
+	}),
 }
 
 func init() {
-	rootCmd.AddCommand(scanCmd)
+	checkCmd.AddCommand(checkEnvCmd)
+	checkCmd.AddCommand(checkRuntimesCmd)
+	checkCmd.AddCommand(checkGitCmd)
+	rootCmd.AddCommand(checkCmd)
 }
