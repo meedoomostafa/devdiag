@@ -61,14 +61,13 @@ func (e *M1Engine) envRules(result schema.CollectorResult) []schema.Finding {
 			// keys present in .env.example but not in .env
 			missing := strings.Split(ev.Value, ", ")
 			findings = append(findings, schema.Finding{
-				ID:              "F-ENV-001",
-				Title:           fmt.Sprintf("Missing env keys from .env: %s", strings.Join(missing, ", ")),
-				Severity:        schema.SeverityMedium,
-				Confidence:      0.7,
-				Symptom:         "Keys defined in .env.example are not present in .env",
-				Evidence:        []schema.Evidence{ev},
-				LikelyCauses:    []string{".env file not created from .env.example"},
-				RedactionStatus: string(result.Status),
+				ID:           "F-ENV-001",
+				Title:        fmt.Sprintf("Missing env keys from .env: %s", strings.Join(missing, ", ")),
+				Severity:     schema.SeverityMedium,
+				Confidence:   0.7,
+				Symptom:      "Keys defined in .env.example are not present in .env",
+				Evidence:     []schema.Evidence{ev},
+				LikelyCauses: []string{".env file not created from .env.example"},
 			})
 		}
 	}
@@ -76,14 +75,13 @@ func (e *M1Engine) envRules(result schema.CollectorResult) []schema.Finding {
 	// Missing .env file entirely
 	if len(envMissing) > 0 && len(envExampleKeys) > 0 {
 		findings = append(findings, schema.Finding{
-			ID:              "F-ENV-001",
-			Title:           ".env.example exists but no local .env was found",
-			Severity:        schema.SeverityMedium,
-			Confidence:      0.5,
-			Symptom:         ".env.example exists but .env is missing",
-			Evidence:        result.Evidence,
-			LikelyCauses:    []string{"Project may require local env vars but .env is not present"},
-			RedactionStatus: string(result.Status),
+			ID:           "F-ENV-001",
+			Title:        ".env.example exists but no local .env was found",
+			Severity:     schema.SeverityMedium,
+			Confidence:   0.5,
+			Symptom:      ".env.example exists but .env is missing",
+			Evidence:     result.Evidence,
+			LikelyCauses: []string{"Project may require local env vars but .env is not present"},
 		})
 	}
 
@@ -95,14 +93,13 @@ func (e *M1Engine) composeRules(result schema.CollectorResult) []schema.Finding 
 	var findings []schema.Finding
 	for _, ev := range result.Evidence {
 		findings = append(findings, schema.Finding{
-			ID:              "F-ENV-002",
-			Title:           "Compose references env variable that may be undefined",
-			Severity:        schema.SeverityMedium,
-			Confidence:      0.6,
-			Symptom:         "Compose file references an environment variable that may not be defined",
-			Evidence:        []schema.Evidence{ev},
-			LikelyCauses:    []string{"Variable may be missing from .env or host environment"},
-			RedactionStatus: string(result.Status),
+			ID:           "F-ENV-002",
+			Title:        "Compose references env variable that may be undefined",
+			Severity:     schema.SeverityMedium,
+			Confidence:   0.6,
+			Symptom:      "Compose file references an environment variable that may not be defined",
+			Evidence:     []schema.Evidence{ev},
+			LikelyCauses: []string{"Variable may be missing from .env or host environment"},
 		})
 	}
 	return findings
@@ -112,7 +109,7 @@ func (e *M1Engine) composeRules(result schema.CollectorResult) []schema.Finding 
 func (e *M1Engine) gitRules(result schema.CollectorResult) []schema.Finding {
 	var findings []schema.Finding
 	var trackedEnv []string
-	var envIgnored bool
+	var envIgnored, envExists bool
 
 	for _, ev := range result.Evidence {
 		switch ev.Source {
@@ -120,32 +117,33 @@ func (e *M1Engine) gitRules(result schema.CollectorResult) []schema.Finding {
 			trackedEnv = strings.Split(ev.Value, ", ")
 		case "git_env_ignored":
 			envIgnored = ev.Value == "true"
+		case "git_env_exists":
+			envExists = ev.Value == "true"
 		}
 	}
 
 	if len(trackedEnv) > 0 {
 		findings = append(findings, schema.Finding{
-			ID:              "F-GIT-001",
-			Title:           fmt.Sprintf("Env file tracked by Git: %s", strings.Join(trackedEnv, ", ")),
-			Severity:        schema.SeverityMedium,
-			Confidence:      0.9,
-			Symptom:         "Environment files containing secrets are tracked in version control",
-			Evidence:        result.Evidence,
-			LikelyCauses:    []string{".env file was committed to Git before being added to .gitignore"},
-			RedactionStatus: string(result.Status),
+			ID:           "F-GIT-001",
+			Title:        fmt.Sprintf("Env file tracked by Git: %s", strings.Join(trackedEnv, ", ")),
+			Severity:     schema.SeverityMedium,
+			Confidence:   0.9,
+			Symptom:      "Environment files containing secrets are tracked in version control",
+			Evidence:     result.Evidence,
+			LikelyCauses: []string{".env file was committed to Git before being added to .gitignore"},
 		})
 	}
 
-	if !envIgnored {
+	// Only emit F-GIT-002 if .env exists on disk AND is not ignored
+	if envExists && !envIgnored {
 		findings = append(findings, schema.Finding{
-			ID:              "F-GIT-002",
-			Title:           ".env exists but is not ignored by Git",
-			Severity:        schema.SeverityMedium,
-			Confidence:      0.7,
-			Symptom:         ".env file is not ignored by Git and may be committed accidentally",
-			Evidence:        result.Evidence,
-			LikelyCauses:    []string{"Missing .env entry in .gitignore or ignore pattern does not match"},
-			RedactionStatus: string(result.Status),
+			ID:           "F-GIT-002",
+			Title:        ".env exists but is not ignored by Git",
+			Severity:     schema.SeverityMedium,
+			Confidence:   0.7,
+			Symptom:      ".env file is not ignored by Git and may be committed accidentally",
+			Evidence:     result.Evidence,
+			LikelyCauses: []string{"Missing .env entry in .gitignore or ignore pattern does not match"},
 		})
 	}
 
@@ -162,14 +160,16 @@ func (e *M1Engine) repoRules(result schema.CollectorResult) []schema.Finding {
 			lockfiles := strings.Split(ev.Value, ", ")
 			if len(lockfiles) > 1 {
 				findings = append(findings, schema.Finding{
-					ID:              "F-PM-001",
-					Title:           fmt.Sprintf("Multiple package manager lockfiles: %s", ev.Value),
-					Severity:        schema.SeverityMedium,
-					Confidence:      0.6,
-					Symptom:         "Multiple lockfiles may indicate package manager conflict or migration",
-					Evidence:        []schema.Evidence{ev},
-					LikelyCauses:    []string{"Migration between package managers", "Monorepo with different package managers"},
-					RedactionStatus: string(result.Status),
+					ID:         "F-PM-001",
+					Title:      fmt.Sprintf("Multiple package manager lockfiles: %s", ev.Value),
+					Severity:   schema.SeverityMedium,
+					Confidence: 0.6,
+					Symptom:    "Multiple lockfiles may indicate package manager conflict or migration",
+					Evidence:   []schema.Evidence{ev},
+					LikelyCauses: []string{
+						"Migration between package managers",
+						"Monorepo with different package managers",
+					},
 				})
 			}
 		}
@@ -189,14 +189,13 @@ func (e *M1Engine) runtimeRules(result schema.CollectorResult) []schema.Finding 
 
 	if len(declarations) > 0 {
 		findings = append(findings, schema.Finding{
-			ID:              "F-RUNTIME-DECL-001",
-			Title:           "Runtime version declaration discovered",
-			Severity:        schema.SeverityInfo,
-			Confidence:      0.9,
-			Symptom:         "Project declares expected runtime versions",
-			Evidence:        result.Evidence,
-			LikelyCauses:    []string{"Version pinning helps reproducibility"},
-			RedactionStatus: string(result.Status),
+			ID:           "F-RUNTIME-DECL-001",
+			Title:        "Runtime version declaration discovered",
+			Severity:     schema.SeverityInfo,
+			Confidence:   0.9,
+			Symptom:      "Project declares expected runtime versions",
+			Evidence:     result.Evidence,
+			LikelyCauses: []string{"Version pinning helps reproducibility"},
 		})
 	}
 

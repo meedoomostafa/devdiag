@@ -47,7 +47,7 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// Package manager lockfiles
 	lockfiles := []string{}
-	for _, f := range []string{"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "bun.lockb", "go.sum", "Cargo.lock", "poetry.lock", " Pipfile.lock"} {
+	for _, f := range []string{"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "bun.lockb", "go.sum", "Cargo.lock", "poetry.lock", "Pipfile.lock"} {
 		if fileExists(filepath.Join(root, f)) {
 			lockfiles = append(lockfiles, f)
 		}
@@ -68,8 +68,8 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// Runtime version pins
 	pins := map[string]string{
-		".nvmrc":        "node",
-		".ruby-version": "ruby",
+		".nvmrc":          "node",
+		".ruby-version":   "ruby",
 		".python-version": "python",
 	}
 	for file, runtime := range pins {

@@ -2,7 +2,9 @@ package git
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -64,17 +66,18 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		evidence = append(evidence, schema.Evidence{Source: "git_tracked_env", Value: strings.Join(trackedFiles, ", ")})
 	}
 
+	// Check if .env exists on disk
+	envExists := false
+	if _, err := os.Stat(filepath.Join(root, ".env")); err == nil {
+		envExists = true
+	}
+	evidence = append(evidence, schema.Evidence{Source: "git_env_exists", Value: boolStr(envExists)})
+
 	// Check if .env is ignored (using git check-ignore)
 	ignored := false
-	if out, err := gitExec(ctx, root, "check-ignore", "-q", ".env"); err == nil && out == "" {
+	if _, err := gitExec(ctx, root, "check-ignore", "-q", ".env"); err == nil {
 		// exit 0 means ignored
 		ignored = true
-	}
-	// Also check with --no-index for untracked files
-	if !ignored {
-		if out, err := gitExec(ctx, root, "check-ignore", "-q", "-n", ".env"); err == nil && out == "" {
-			ignored = true
-		}
 	}
 	evidence = append(evidence, schema.Evidence{Source: "git_env_ignored", Value: boolStr(ignored)})
 

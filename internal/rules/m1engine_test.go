@@ -74,6 +74,7 @@ func TestM1Engine_GitRules_TrackedEnv(t *testing.T) {
 				Name: "git",
 				Evidence: []schema.Evidence{
 					{Source: "git_tracked_env", Value: ".env"},
+					{Source: "git_env_exists", Value: "true"},
 					{Source: "git_env_ignored", Value: "false"},
 				},
 			},

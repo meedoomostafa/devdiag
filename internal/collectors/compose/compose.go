@@ -99,8 +99,12 @@ func extractEnvRefs(path string) ([]envRef, error) {
 			matches := composeVarRe.FindAllStringSubmatchIndex(node.Value, -1)
 			for _, m := range matches {
 				raw := node.Value[m[0]:m[1]]
-				// Skip escaped $$VAR: check if match is preceded by another $
+				// Skip escaped $$VAR: match is preceded by another $
 				if m[0] > 0 && node.Value[m[0]-1] == '$' {
+					continue
+				}
+				// Skip $${VAR}: match itself starts with $$
+				if strings.HasPrefix(raw, "$$") {
 					continue
 				}
 				varName := extractVarName(raw)
