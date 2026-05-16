@@ -81,14 +81,15 @@ func TestBuilder_IncludesRepro(t *testing.T) {
 
 func TestIsSafePath(t *testing.T) {
 	tests := []struct {
-		path  string
-		safe  bool
+		path string
+		safe bool
 	}{
 		{"report.json", true},
 		{"snapshot/repo.json", true},
 		{"../escape", false},
 		{"/absolute", false},
 		{"safe.txt", true},
+		{"foo..bar/file.json", true},
 	}
 	for _, tc := range tests {
 		if got := isSafePath(tc.path); got != tc.safe {

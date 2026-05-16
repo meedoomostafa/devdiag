@@ -119,6 +119,32 @@ func TestRunner_DurationRecorded(t *testing.T) {
 	}
 }
 
+func TestRunner_SensitiveEnvKeyExcludesPath(t *testing.T) {
+	if isSensitiveEnvKey("PATH") {
+		t.Error("PATH should not be flagged as sensitive")
+	}
+	if isSensitiveEnvKey("HOME") {
+		t.Error("HOME should not be flagged as sensitive")
+	}
+	if !isSensitiveEnvKey("API_KEY") {
+		t.Error("API_KEY should be flagged as sensitive")
+	}
+	if !isSensitiveEnvKey("DATABASE_URL") {
+		t.Error("DATABASE_URL should be flagged as sensitive")
+	}
+}
+
+func TestRunner_RedactString_URL(t *testing.T) {
+	input := "connecting to postgres://admin:secret123@localhost:5432/db"
+	redacted := redactString(input)
+	if strings.Contains(redacted, "secret123") {
+		t.Errorf("password should be redacted, got: %s", redacted)
+	}
+	if !strings.Contains(redacted, "<redacted>") {
+		t.Errorf("expected <redacted> in output, got: %s", redacted)
+	}
+}
+
 func TestRunner_TimelineStartExit(t *testing.T) {
 	r := NewRunner()
 	res, err := r.Run(context.Background(), "echo", []string{"x"})

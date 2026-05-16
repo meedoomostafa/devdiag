@@ -75,6 +75,12 @@ func (b *Builder) Build(w io.Writer, report *schema.Report, reproResult *repro.R
 		}
 	}
 
+	// Ensure snapshot directory exists in tar before files
+	if len(report.Collectors) > 0 {
+		if err := b.addDir(tw, "snapshot/", now); err != nil {
+			return err
+		}
+	}
 	// Write collector snapshots (only available ones)
 	for _, c := range report.Collectors {
 		cData, err := json.MarshalIndent(c, "", "  ")
@@ -128,13 +134,29 @@ func (b *Builder) addFile(tw *tar.Writer, manifest *Manifest, name string, data 
 	return nil
 }
 
+func (b *Builder) addDir(tw *tar.Writer, name string, modTime time.Time) error {
+	if !isSafePath(name) {
+		return fmt.Errorf("unsafe capsule path: %s", name)
+	}
+	header := &tar.Header{
+		Name:     name,
+		Mode:     0755,
+		Typeflag: tar.TypeDir,
+		ModTime:  modTime,
+	}
+	return tw.WriteHeader(header)
+}
+
 func isSafePath(p string) bool {
 	p = filepath.Clean(p)
 	if filepath.IsAbs(p) {
 		return false
 	}
-	if strings.Contains(p, "..") {
-		return false
+	// Check each path component for traversal, not substring match
+	for _, part := range strings.Split(p, string(filepath.Separator)) {
+		if part == ".." {
+			return false
+		}
 	}
 	if strings.HasPrefix(p, "/") {
 		return false

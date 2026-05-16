@@ -800,10 +800,13 @@ func (e *M1Engine) reproRules(result schema.CollectorResult) []schema.Finding {
 	}
 
 	var exitCode int
+	var exitCodeSet bool
 	var hasClassification bool
 	for _, ev := range result.Evidence {
 		if ev.Source == "repro_exit_code" {
-			fmt.Sscanf(ev.Value, "%d", &exitCode)
+			if n, err := fmt.Sscanf(ev.Value, "%d", &exitCode); err == nil && n == 1 {
+				exitCodeSet = true
+			}
 		}
 		if ev.Source == "repro_classification" {
 			hasClassification = true
@@ -856,7 +859,7 @@ func (e *M1Engine) reproRules(result schema.CollectorResult) []schema.Finding {
 		}
 	}
 
-	if exitCode != 0 && !hasClassification {
+	if exitCodeSet && exitCode != 0 && !hasClassification {
 		findings = append(findings, schema.Finding{
 			ID:         "F-REPRO-001",
 			Title:      "Command exited with non-zero code",

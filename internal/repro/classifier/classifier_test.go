@@ -103,6 +103,20 @@ func TestClassifier_ExcerptPresent(t *testing.T) {
 	}
 }
 
+func TestClassifier_SourceStreamNotAny(t *testing.T) {
+	c := New()
+	results := c.Classify("permission denied when reading file", "")
+	if len(results) != 1 {
+		t.Fatalf("expected 1 classification, got %d", len(results))
+	}
+	if results[0].SourceStream == "any" {
+		t.Error("source_stream should be 'stdout' or 'stderr', not 'any'")
+	}
+	if results[0].SourceStream != "stdout" {
+		t.Errorf("expected source_stream='stdout', got %s", results[0].SourceStream)
+	}
+}
+
 func TestClassifier_MultipleMatches(t *testing.T) {
 	c := New()
 	results := c.Classify("permission denied", "address already in use")
