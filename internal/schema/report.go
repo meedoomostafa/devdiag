@@ -18,12 +18,13 @@ type HostInfo struct {
 // Report is the top-level output container.
 // All required fields must be present even in an empty/stub scan.
 type Report struct {
-	SchemaVersion   string            `json:"schema_version"`
-	DevDiagVersion  string            `json:"devdiag_version"`
-	RunID           string            `json:"run_id"`
-	RedactionStatus string            `json:"redaction_status"`
-	Repo            RepoInfo          `json:"repo"`
-	Host            HostInfo          `json:"host"`
-	Collectors      []CollectorResult `json:"collectors"`
-	Findings        []Finding         `json:"findings"`
+	SchemaVersion   string                 `json:"schema_version"`
+	DevDiagVersion  string                 `json:"devdiag_version"`
+	RunID           string                 `json:"run_id"`
+	RedactionStatus string                 `json:"redaction_status"`
+	Repo            RepoInfo               `json:"repo"`
+	Host            HostInfo               `json:"host"`
+	Collectors      []CollectorResult      `json:"collectors"`
+	Findings        []Finding              `json:"findings"`
+	Repro           map[string]interface{} `json:"repro,omitempty"`
 }

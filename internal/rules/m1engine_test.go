@@ -718,3 +718,123 @@ func TestM1Engine_ComposeStatusRules_BindMountMissing(t *testing.T) {
 		t.Errorf("expected F-CONTAINER-003 finding, got: %v", findings)
 	}
 }
+
+func TestM1Engine_ReproRules_NonZeroExit(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "repro",
+				Status: schema.CollectorOK,
+				Evidence: []schema.Evidence{
+					{Source: "repro_exit_code", Value: "1"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	var hasRepro001 bool
+	for _, f := range findings {
+		if f.ID == "F-REPRO-001" {
+			hasRepro001 = true
+		}
+	}
+	if !hasRepro001 {
+		t.Errorf("expected F-REPRO-001 finding, got: %v", findings)
+	}
+}
+
+func TestM1Engine_ReproRules_SpecificClassificationSuppressesGeneric(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "repro",
+				Status: schema.CollectorOK,
+				Evidence: []schema.Evidence{
+					{Source: "repro_exit_code", Value: "1"},
+					{Source: "repro_classification", Value: "permission_denied"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	var hasRepro001, hasRepro002 bool
+	for _, f := range findings {
+		if f.ID == "F-REPRO-001" {
+			hasRepro001 = true
+		}
+		if f.ID == "F-REPRO-002" {
+			hasRepro002 = true
+		}
+	}
+	if hasRepro001 {
+		t.Errorf("expected F-REPRO-001 suppressed when specific classification exists")
+	}
+	if !hasRepro002 {
+		t.Errorf("expected F-REPRO-002 finding, got: %v", findings)
+	}
+}
+
+func TestM1Engine_ReproRules_Timeout(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "repro",
+				Status: schema.CollectorTimeout,
+				Evidence: []schema.Evidence{
+					{Source: "repro_timed_out", Value: "true"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	var hasRepro009 bool
+	for _, f := range findings {
+		if f.ID == "F-REPRO-009" {
+			hasRepro009 = true
+		}
+	}
+	if !hasRepro009 {
+		t.Errorf("expected F-REPRO-009 finding for timeout, got: %v", findings)
+	}
+}
+
+func TestM1Engine_ReproRules_AddressInUse(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "repro",
+				Status: schema.CollectorOK,
+				Evidence: []schema.Evidence{
+					{Source: "repro_exit_code", Value: "1"},
+					{Source: "repro_classification", Value: "address_in_use"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	var hasRepro004 bool
+	for _, f := range findings {
+		if f.ID == "F-REPRO-004" {
+			hasRepro004 = true
+		}
+	}
+	if !hasRepro004 {
+		t.Errorf("expected F-REPRO-004 finding, got: %v", findings)
+	}
+}
