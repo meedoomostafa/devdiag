@@ -1,0 +1,17 @@
+# Local IDE and planning files
+.windsurf/
+.codeium/
+*.md plans/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor backups
+*~
+*.swp
+*.swo
+
+# Build artifacts
+/devdiag
+*.exe
