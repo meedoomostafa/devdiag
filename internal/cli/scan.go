@@ -8,10 +8,17 @@ import (
 
 	"github.com/meedoomostafa/devdiag/internal/collectors"
 	composecollector "github.com/meedoomostafa/devdiag/internal/collectors/compose"
+	diskcollector "github.com/meedoomostafa/devdiag/internal/collectors/disk"
 	envcollector "github.com/meedoomostafa/devdiag/internal/collectors/env"
 	gitcollector "github.com/meedoomostafa/devdiag/internal/collectors/git"
+	hostcollector "github.com/meedoomostafa/devdiag/internal/collectors/host"
+	hostruncollector "github.com/meedoomostafa/devdiag/internal/collectors/hostruntime"
+	networkcollector "github.com/meedoomostafa/devdiag/internal/collectors/network"
+	permissioncollector "github.com/meedoomostafa/devdiag/internal/collectors/permission"
+	portcollector "github.com/meedoomostafa/devdiag/internal/collectors/port"
 	repocollector "github.com/meedoomostafa/devdiag/internal/collectors/repo"
 	runtimecollector "github.com/meedoomostafa/devdiag/internal/collectors/runtime"
+	systemdcollector "github.com/meedoomostafa/devdiag/internal/collectors/systemd"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/findings"
 	"github.com/meedoomostafa/devdiag/internal/graph"
@@ -44,15 +51,26 @@ var scanCmd = &cobra.Command{
 
 		logger.Info("scan", fmt.Sprintf("scanning path=%s", absPath))
 
-		// Run all M1 repo collectors + self collector
+		// Run all M1 repo collectors + M2 host collectors + self collector
 		runner := collectors.NewRunner()
 		ctx := cmd.Context()
+
+		// Pre-detect Docker signals for conditional systemd check
+		repoHasDocker := repocollector.HasDockerSignal(absPath)
+
 		collectorResults := runner.Run(ctx, []collectors.Collector{
 			&repocollector.Collector{Root: absPath},
 			&envcollector.Collector{Root: absPath},
 			&composecollector.Collector{Root: absPath},
 			&gitcollector.Collector{Root: absPath},
 			&runtimecollector.Collector{Root: absPath},
+			&hostcollector.Collector{},
+			&hostruncollector.Collector{},
+			&diskcollector.Collector{Path: absPath},
+			&portcollector.Collector{},
+			&networkcollector.Collector{},
+			&systemdcollector.Collector{RepoExpectsDocker: repoHasDocker},
+			&permissioncollector.Collector{Root: absPath},
 			&collectors.SelfCollector{},
 		})
 

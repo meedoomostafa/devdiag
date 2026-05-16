@@ -93,6 +93,19 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	}, nil
 }
 
+// HasDockerSignal returns true if the repo contains Docker/Compose signals.
+func HasDockerSignal(root string) bool {
+	if root == "" {
+		root = "."
+	}
+	return fileExists(filepath.Join(root, "Dockerfile")) ||
+		fileExists(filepath.Join(root, "dockerfile")) ||
+		fileExists(filepath.Join(root, "compose.yaml")) ||
+		fileExists(filepath.Join(root, "docker-compose.yml")) ||
+		fileExists(filepath.Join(root, "docker-compose.yaml")) ||
+		fileExists(filepath.Join(root, ".devcontainer/devcontainer.json"))
+}
+
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil

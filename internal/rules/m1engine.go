@@ -2,13 +2,14 @@ package rules
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/meedoomostafa/devdiag/internal/graph"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
-// M1Engine is the Milestone 1 Go rule engine behind the PolicyEngine interface.
+// M1Engine is the Milestone 1+2 Go rule engine behind the PolicyEngine interface.
 type M1Engine struct{}
 
 // NewM1Engine creates the M1 rule engine.
@@ -19,6 +20,12 @@ func NewM1Engine() *M1Engine {
 // Evaluate converts collector evidence into findings.
 func (e *M1Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding, error) {
 	var findings []schema.Finding
+
+	// Build collector lookup for cross-collector joins
+	collectorMap := make(map[string]schema.CollectorResult)
+	for _, c := range snapshot.Collectors {
+		collectorMap[c.Name] = c
+	}
 
 	for _, c := range snapshot.Collectors {
 		switch c.Name {
@@ -34,8 +41,22 @@ func (e *M1Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 			findings = append(findings, e.runtimeRules(c)...)
 		case "ci":
 			findings = append(findings, e.ciRules(c)...)
+		case "host":
+			// host metadata is evidence-only, no standalone findings
+		case "host_runtime":
+			findings = append(findings, e.hostRuntimeRules(c, collectorMap)...)
+		case "disk":
+			findings = append(findings, e.diskRules(c)...)
+		case "port":
+			findings = append(findings, e.portRules(c, collectorMap)...)
+		case "network":
+			findings = append(findings, e.networkRules(c)...)
+		case "systemd":
+			findings = append(findings, e.systemdRules(c)...)
+		case "permission":
+			findings = append(findings, e.permissionRules(c)...)
 		case "self":
-			// self collector produces no findings in M1
+			// self collector produces no findings
 		}
 	}
 
@@ -206,4 +227,359 @@ func (e *M1Engine) runtimeRules(result schema.CollectorResult) []schema.Finding 
 func (e *M1Engine) ciRules(result schema.CollectorResult) []schema.Finding {
 	// M1: extract evidence only, no high-confidence mismatches yet
 	return nil
+}
+
+// hostRuntimeRules joins M1 runtime expectations with M2 host runtime state.
+func (e *M1Engine) hostRuntimeRules(result schema.CollectorResult, collectors map[string]schema.CollectorResult) []schema.Finding {
+	var findings []schema.Finding
+
+	// Build expected versions from M1 runtime collector
+	expected := map[string]string{} // runtime name → expected version
+	if m1Runtime, ok := collectors["runtime"]; ok {
+		for _, ev := range m1Runtime.Evidence {
+			parts := strings.SplitN(ev.Value, " ", 2)
+			if len(parts) == 2 {
+				expected[parts[0]] = parts[1]
+			}
+		}
+	}
+
+	// Build host actual versions from M2 host_runtime collector
+	actual := map[string]string{}   // runtime name → actual version
+	paths := map[string]string{}    // runtime name → path
+	missing := map[string]bool{}    // runtime name → missing
+	managers := map[string]string{} // runtime name → version manager
+
+	for _, ev := range result.Evidence {
+		switch {
+		case strings.HasSuffix(ev.Source, "_version"):
+			rt := strings.TrimSuffix(ev.Source, "_version")
+			rt = strings.TrimPrefix(rt, "host_")
+			actual[rt] = ev.Value
+		case strings.HasSuffix(ev.Source, "_path"):
+			rt := strings.TrimSuffix(ev.Source, "_path")
+			rt = strings.TrimPrefix(rt, "host_")
+			paths[rt] = ev.Value
+		case strings.HasSuffix(ev.Source, "_missing"):
+			rt := strings.TrimSuffix(ev.Source, "_missing")
+			rt = strings.TrimPrefix(rt, "host_")
+			missing[rt] = ev.Value == "true"
+		case strings.HasSuffix(ev.Source, "_manager"):
+			rt := strings.TrimSuffix(ev.Source, "_manager")
+			rt = strings.TrimPrefix(rt, "host_")
+			managers[rt] = ev.Value
+		}
+	}
+
+	// Check each expected runtime
+	for rt, expVer := range expected {
+		if missing[rt] {
+			findings = append(findings, schema.Finding{
+				ID:         "F-RUNTIME-003",
+				Title:      fmt.Sprintf("Required runtime '%s' not found on host", rt),
+				Severity:   schema.SeverityHigh,
+				Confidence: 0.8,
+				Symptom:    fmt.Sprintf("Project expects %s but it is not installed", rt),
+				Evidence: []schema.Evidence{
+					{Source: "expected_" + rt, Value: expVer},
+					{Source: "host_" + rt + "_missing", Value: "true"},
+				},
+				LikelyCauses: []string{
+					"Runtime is not installed or not in PATH",
+					"Version manager (nvm, pyenv, etc.) may not be active in this shell",
+				},
+			})
+			continue
+		}
+
+		actVer, hasActual := actual[rt]
+		if !hasActual || actVer == "" {
+			continue // version query failed, no finding
+		}
+
+		if !versionsCompatible(expVer, actVer) {
+			id := runtimeFindingID(rt)
+			findings = append(findings, schema.Finding{
+				ID:         id,
+				Title:      fmt.Sprintf("%s version mismatch: repo expects %s, host has %s", rt, expVer, actVer),
+				Severity:   schema.SeverityMedium,
+				Confidence: confidenceForVersion(expVer),
+				Symptom:    fmt.Sprintf("Installed %s version does not match project expectation", rt),
+				Evidence: []schema.Evidence{
+					{Source: "expected_" + rt, Value: expVer},
+					{Source: "host_" + rt + "_version", Value: actVer},
+					{Source: "host_" + rt + "_path", Value: paths[rt]},
+					{Source: "host_" + rt + "_manager", Value: managers[rt]},
+				},
+				LikelyCauses: []string{
+					"Version manager may be using a different version",
+					"Project was developed with a different runtime version",
+				},
+			})
+		}
+	}
+
+	return findings
+}
+
+func runtimeFindingID(rt string) string {
+	switch rt {
+	case "node":
+		return "F-RUNTIME-001"
+	case "python":
+		return "F-RUNTIME-002"
+	case "dotnet":
+		return "F-RUNTIME-004"
+	case "go":
+		return "F-RUNTIME-005"
+	case "rustc":
+		return "F-RUNTIME-006"
+	default:
+		return "F-RUNTIME-003"
+	}
+}
+
+func versionsCompatible(expected, actual string) bool {
+	// Normalize and compare
+	eNorm := normalizeVersion(expected)
+	aNorm := normalizeVersion(actual)
+
+	// Special cases: low-confidence, no hard mismatch
+	if expected == "lts/*" || expected == "node" || expected == "" {
+		return true
+	}
+
+	eParts := strings.Split(eNorm, ".")
+	aParts := strings.Split(aNorm, ".")
+
+	// Compare up to 2 segments (major.minor), ignoring patch differences
+	maxSeg := 2
+	if len(eParts) < maxSeg {
+		maxSeg = len(eParts)
+	}
+	for i := 0; i < maxSeg && i < len(aParts); i++ {
+		if eParts[i] != aParts[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeVersion(v string) string {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	v = strings.TrimPrefix(v, "go")
+	return v
+}
+
+func confidenceForVersion(expected string) float64 {
+	if expected == "lts/*" || expected == "node" || !strings.Contains(expected, ".") {
+		return 0.5
+	}
+	return 0.8
+}
+
+// diskRules creates findings from disk collector evidence.
+func (e *M1Engine) diskRules(result schema.CollectorResult) []schema.Finding {
+	var findings []schema.Finding
+
+	var freeBytes, freePct, freeInodesPct float64
+	for _, ev := range result.Evidence {
+		switch ev.Source {
+		case "host_disk_free_bytes":
+			freeBytes, _ = strconv.ParseFloat(ev.Value, 64)
+		case "host_disk_free_pct":
+			freePct, _ = strconv.ParseFloat(ev.Value, 64)
+		case "host_disk_free_inodes_pct":
+			freeInodesPct, _ = strconv.ParseFloat(ev.Value, 64)
+		}
+	}
+
+	giB := 1024.0 * 1024.0 * 1024.0
+	if freeBytes < giB || freePct < 2.0 || freeInodesPct < 2.0 {
+		findings = append(findings, schema.Finding{
+			ID:         "F-DISK-001",
+			Title:      "Disk or inode pressure on repo mount",
+			Severity:   schema.SeverityMedium,
+			Confidence: 0.8,
+			Symptom:    "Repo mount is critically low on disk space or inodes",
+			Evidence:   result.Evidence,
+			LikelyCauses: []string{
+				"Build artifacts or caches consuming space",
+				"Large dependency trees",
+			},
+		})
+	} else if freeBytes < 5*giB || freePct < 10.0 || freeInodesPct < 10.0 {
+		findings = append(findings, schema.Finding{
+			ID:         "F-DISK-001",
+			Title:      "Disk or inode pressure on repo mount",
+			Severity:   schema.SeverityMedium,
+			Confidence: 0.7,
+			Symptom:    "Repo mount is low on disk space or inodes",
+			Evidence:   result.Evidence,
+			LikelyCauses: []string{
+				"Build artifacts or caches consuming space",
+				"Large dependency trees",
+			},
+		})
+	}
+
+	return findings
+}
+
+// portRules creates findings from port collector evidence.
+func (e *M1Engine) portRules(result schema.CollectorResult, collectors map[string]schema.CollectorResult) []schema.Finding {
+	var findings []schema.Finding
+
+	// Build set of listening ports
+	listening := map[int]bool{}
+	for _, ev := range result.Evidence {
+		if strings.HasPrefix(ev.Source, "host_listen_port_") {
+			if p, err := strconv.Atoi(ev.Value); err == nil {
+				listening[p] = true
+			}
+		}
+	}
+
+	// Extract declared host ports from compose evidence
+	composePorts := extractComposeHostPorts(collectors)
+
+	for _, port := range composePorts {
+		if listening[port] {
+			findings = append(findings, schema.Finding{
+				ID:         "F-PORT-001",
+				Title:      fmt.Sprintf("Declared host port %d already in use", port),
+				Severity:   schema.SeverityHigh,
+				Confidence: 0.7,
+				Symptom:    "A port declared in compose is already listening on the host",
+				Evidence: []schema.Evidence{
+					{Source: "compose_host_port", Value: strconv.Itoa(port)},
+					{Source: "host_listen_port", Value: strconv.Itoa(port)},
+				},
+				LikelyCauses: []string{
+					"Another service is already bound to this port",
+					"Previous instance of the service did not shut down cleanly",
+				},
+			})
+		}
+	}
+
+	return findings
+}
+
+func extractComposeHostPorts(collectors map[string]schema.CollectorResult) []int {
+	var ports []int
+	compose, ok := collectors["compose"]
+	if !ok {
+		return ports
+	}
+	for _, ev := range compose.Evidence {
+		if ev.Source == "compose_host_port" {
+			// Value is the host port string (may include IP like "127.0.0.1:8000")
+			val := ev.Value
+			if strings.Contains(val, ":") {
+				// Extract port from "127.0.0.1:8000" style
+				parts := strings.Split(val, ":")
+				val = parts[len(parts)-1]
+			}
+			if p, err := strconv.Atoi(val); err == nil {
+				ports = append(ports, p)
+			}
+		}
+	}
+	return ports
+}
+
+// networkRules creates findings from network collector evidence.
+func (e *M1Engine) networkRules(result schema.CollectorResult) []schema.Finding {
+	var findings []schema.Finding
+
+	var hasProxy, hasNoProxy bool
+	for _, ev := range result.Evidence {
+		if ev.Source == "host_proxy_env" {
+			hasProxy = true
+		}
+		if ev.Source == "host_no_proxy" {
+			hasNoProxy = true
+		}
+	}
+
+	if hasProxy && !hasNoProxy {
+		findings = append(findings, schema.Finding{
+			ID:         "F-NET-001",
+			Title:      "Proxy env var set but NO_PROXY is empty",
+			Severity:   schema.SeverityLow,
+			Confidence: 0.5,
+			Symptom:    "HTTP proxy is configured without NO_PROXY exclusions",
+			Evidence:   result.Evidence,
+			LikelyCauses: []string{
+				"Proxy may redirect local service traffic unexpectedly",
+				"Add localhost, 127.0.0.1 to NO_PROXY if local services fail",
+			},
+		})
+	}
+
+	return findings
+}
+
+// systemdRules creates findings from systemd collector evidence.
+func (e *M1Engine) systemdRules(result schema.CollectorResult) []schema.Finding {
+	var findings []schema.Finding
+
+	for _, ev := range result.Evidence {
+		if ev.Source == "host_docker_service" && ev.Value == "inactive" {
+			findings = append(findings, schema.Finding{
+				ID:         "F-SVC-001",
+				Title:      "Docker service inactive but repo expects Docker",
+				Severity:   schema.SeverityMedium,
+				Confidence: 0.7,
+				Symptom:    "Repo contains Docker/Compose files but the Docker service is not running",
+				Evidence:   result.Evidence,
+				LikelyCauses: []string{
+					"Docker daemon is not started",
+					"User is not in the docker group",
+				},
+			})
+		}
+	}
+
+	return findings
+}
+
+// permissionRules creates findings from permission collector evidence.
+func (e *M1Engine) permissionRules(result schema.CollectorResult) []schema.Finding {
+	var findings []schema.Finding
+
+	for _, ev := range result.Evidence {
+		if ev.Source == "host_script_not_executable" {
+			findings = append(findings, schema.Finding{
+				ID:         "F-FS-001",
+				Title:      fmt.Sprintf("Script missing executable bit: %s", ev.Value),
+				Severity:   schema.SeverityMedium,
+				Confidence: 0.8,
+				Symptom:    "A referenced script cannot be executed due to missing permissions",
+				Evidence:   []schema.Evidence{ev},
+				LikelyCauses: []string{
+					"File was created without execute permissions",
+					"Permissions were reset during file copy or extraction",
+				},
+			})
+		}
+		if ev.Source == "host_file_root_owned" {
+			findings = append(findings, schema.Finding{
+				ID:         "F-PERM-002",
+				Title:      fmt.Sprintf("File owned by root: %s", ev.Value),
+				Severity:   schema.SeverityLow,
+				Confidence: 0.6,
+				Symptom:    "A repo-relevant file is owned by root",
+				Evidence:   []schema.Evidence{ev},
+				LikelyCauses: []string{
+					"Possibly created by prior sudo command",
+					"File was created as root and ownership was not transferred",
+				},
+			})
+		}
+	}
+
+	return findings
 }
