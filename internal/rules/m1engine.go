@@ -61,6 +61,8 @@ func (e *M1Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 			findings = append(findings, e.podmanRules(c)...)
 		case "compose_status":
 			findings = append(findings, e.composeStatusRules(c, collectorMap)...)
+		case "repro":
+			findings = append(findings, e.reproRules(c)...)
 		case "self":
 			// self collector produces no findings
 		}
@@ -772,6 +774,97 @@ func (e *M1Engine) composeStatusRules(result schema.CollectorResult, collectors 
 				}
 			}
 		}
+	}
+
+	return findings
+}
+
+// reproRules creates findings from repro collector evidence.
+func (e *M1Engine) reproRules(result schema.CollectorResult) []schema.Finding {
+	var findings []schema.Finding
+
+	if result.Status == schema.CollectorTimeout {
+		findings = append(findings, schema.Finding{
+			ID:         "F-REPRO-009",
+			Title:      "Command timed out during reproduction",
+			Severity:   schema.SeverityHigh,
+			Confidence: 0.9,
+			Symptom:    "The repro command exceeded its timeout budget",
+			Evidence:   result.Evidence,
+			LikelyCauses: []string{
+				"Command is slower than expected",
+				"Command may be waiting for input or a network resource",
+			},
+		})
+		return findings
+	}
+
+	var exitCode int
+	var hasClassification bool
+	for _, ev := range result.Evidence {
+		if ev.Source == "repro_exit_code" {
+			fmt.Sscanf(ev.Value, "%d", &exitCode)
+		}
+		if ev.Source == "repro_classification" {
+			hasClassification = true
+			kind := ev.Value
+			var id, title string
+			var severity schema.Severity
+			var symptom string
+			switch kind {
+			case "permission_denied":
+				id = "F-REPRO-002"
+				title = "Permission denied during command execution"
+				severity = schema.SeverityMedium
+				symptom = "Command output indicates permission was denied"
+			case "missing_file":
+				id = "F-REPRO-003"
+				title = "Missing file or command not found"
+				severity = schema.SeverityMedium
+				symptom = "Command output indicates a required file or command is missing"
+			case "address_in_use":
+				id = "F-REPRO-004"
+				title = "Address already in use (port conflict)"
+				severity = schema.SeverityMedium
+				symptom = "Command output indicates a port binding conflict"
+			case "connection_refused":
+				id = "F-REPRO-005"
+				title = "Connection refused or network unreachable"
+				severity = schema.SeverityMedium
+				symptom = "Command output indicates a connection was refused"
+			case "dependency_failure":
+				id = "F-REPRO-007"
+				title = "Dependency resolver failure"
+				severity = schema.SeverityMedium
+				symptom = "Command output indicates a dependency resolution failure"
+			case "compose_config_error":
+				id = "F-REPRO-008"
+				title = "Compose interpolation or config error"
+				severity = schema.SeverityMedium
+				symptom = "Command output indicates a Compose configuration error"
+			default:
+				continue
+			}
+			findings = append(findings, schema.Finding{
+				ID:         id,
+				Title:      title,
+				Severity:   severity,
+				Confidence: 0.7,
+				Symptom:    symptom,
+				Evidence:   []schema.Evidence{ev},
+			})
+		}
+	}
+
+	if exitCode != 0 && !hasClassification {
+		findings = append(findings, schema.Finding{
+			ID:         "F-REPRO-001",
+			Title:      "Command exited with non-zero code",
+			Severity:   schema.SeverityHigh,
+			Confidence: 0.8,
+			Symptom:    fmt.Sprintf("Command exited with code %d", exitCode),
+			Evidence:   result.Evidence,
+		})
 	}
 
 	return findings
