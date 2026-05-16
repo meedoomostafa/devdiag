@@ -1,0 +1,117 @@
+package git
+
+import (
+	"context"
+	"os/exec"
+	"strings"
+	"time"
+
+	"github.com/meedoomostafa/devdiag/internal/schema"
+)
+
+// Collector uses native git via exec.CommandContext to read repo state.
+type Collector struct {
+	Root string
+}
+
+func (c *Collector) Name() string {
+	return "git"
+}
+
+func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error) {
+	root := c.Root
+	if root == "" {
+		root = "."
+	}
+
+	evidence := []schema.Evidence{}
+	notes := []string{}
+
+	// Check if git binary exists
+	if _, err := exec.LookPath("git"); err != nil {
+		return schema.CollectorResult{
+			Name:    c.Name(),
+			Status:  schema.CollectorUnavailable,
+			Notes:   []string{"git binary not found"},
+			Partial: true,
+		}, nil
+	}
+
+	// Check if this is a git repo
+	topLevel, err := gitExec(ctx, root, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return schema.CollectorResult{
+			Name:    c.Name(),
+			Status:  schema.CollectorUnavailable,
+			Notes:   []string{"not a git repository"},
+			Partial: true,
+		}, nil
+	}
+	topLevel = strings.TrimSpace(topLevel)
+	evidence = append(evidence, schema.Evidence{Source: "git_toplevel", Value: topLevel})
+
+	// Check if .env is tracked
+	trackedOut, trackedErr := gitExec(ctx, root, "ls-files", "--", ".env", ".env.*")
+	trackedFiles := []string{}
+	if trackedErr == nil {
+		for _, line := range strings.Split(strings.TrimSpace(trackedOut), "\n") {
+			if line != "" {
+				trackedFiles = append(trackedFiles, line)
+			}
+		}
+	}
+	if len(trackedFiles) > 0 {
+		evidence = append(evidence, schema.Evidence{Source: "git_tracked_env", Value: strings.Join(trackedFiles, ", ")})
+	}
+
+	// Check if .env is ignored (using git check-ignore)
+	ignored := false
+	if out, err := gitExec(ctx, root, "check-ignore", "-q", ".env"); err == nil && out == "" {
+		// exit 0 means ignored
+		ignored = true
+	}
+	// Also check with --no-index for untracked files
+	if !ignored {
+		if out, err := gitExec(ctx, root, "check-ignore", "-q", "-n", ".env"); err == nil && out == "" {
+			ignored = true
+		}
+	}
+	evidence = append(evidence, schema.Evidence{Source: "git_env_ignored", Value: boolStr(ignored)})
+
+	// Dirty state as informational evidence only
+	statusOut, statusErr := gitExec(ctx, root, "status", "--porcelain=v1")
+	if statusErr == nil {
+		lines := strings.Split(strings.TrimSpace(statusOut), "\n")
+		if len(lines) > 0 && lines[0] != "" {
+			evidence = append(evidence, schema.Evidence{Source: "git_dirty", Value: "true"})
+		} else {
+			evidence = append(evidence, schema.Evidence{Source: "git_dirty", Value: "false"})
+		}
+	}
+
+	return schema.CollectorResult{
+		Name:     c.Name(),
+		Status:   schema.CollectorOK,
+		Evidence: evidence,
+		Notes:    notes,
+	}, nil
+}
+
+// gitExec runs a git command with timeout via exec.CommandContext.
+// Uses direct argv, no shell, and short timeout.
+func gitExec(ctx context.Context, dir string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return string(out), err
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
