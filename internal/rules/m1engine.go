@@ -56,7 +56,7 @@ func (e *M1Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 		case "permission":
 			findings = append(findings, e.permissionRules(c)...)
 		case "docker":
-			findings = append(findings, e.dockerRules(c)...)
+			findings = append(findings, e.dockerRules(c, collectorMap)...)
 		case "podman":
 			findings = append(findings, e.podmanRules(c)...)
 		case "compose_status":
@@ -596,7 +596,7 @@ func (e *M1Engine) permissionRules(result schema.CollectorResult) []schema.Findi
 }
 
 // dockerRules creates findings from docker collector evidence.
-func (e *M1Engine) dockerRules(result schema.CollectorResult) []schema.Finding {
+func (e *M1Engine) dockerRules(result schema.CollectorResult, collectors map[string]schema.CollectorResult) []schema.Finding {
 	var findings []schema.Finding
 
 	hasPermissionDenied := false
@@ -641,7 +641,17 @@ func (e *M1Engine) dockerRules(result schema.CollectorResult) []schema.Finding {
 		}
 	}
 
-	if !hasComposePlugin {
+	// Only emit F-DOCKER-003 if repo has compose/devcontainer signals
+	repoHasCompose := false
+	if compose, ok := collectors["compose"]; ok {
+		for _, ev := range compose.Evidence {
+			if ev.Source == "compose" {
+				repoHasCompose = true
+				break
+			}
+		}
+	}
+	if !hasComposePlugin && repoHasCompose {
 		for _, ev := range result.Evidence {
 			if ev.Source == "docker_compose_plugin" && (ev.Value == "missing" || ev.Value == "legacy_docker-compose") {
 				findings = append(findings, schema.Finding{
