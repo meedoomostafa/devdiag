@@ -22,5 +22,6 @@ type Finding struct {
 	Evidence        []Evidence `json:"evidence,omitempty"`
 	LikelyCauses    []string   `json:"likely_causes,omitempty"`
 	Fixes           []Fix      `json:"fixes,omitempty"`
+	FixHints        []string   `json:"fix_hints,omitempty"`
 	RedactionStatus string     `json:"redaction_status"`
 }

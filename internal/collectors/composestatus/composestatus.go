@@ -123,9 +123,9 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 				})
 			}
 		}
-		// Bind mounts
+		// Bind mounts (only explicit type=="bind"; empty type may be named volumes)
 		for _, vol := range svc.Volumes {
-			if vol.Type == "bind" || vol.Type == "" {
+			if vol.Type == "bind" {
 				exists := "false"
 				if vol.Source != "" {
 					if _, err := os.Stat(vol.Source); err == nil {

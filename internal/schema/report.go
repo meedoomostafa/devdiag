@@ -12,6 +12,7 @@ type HostInfo struct {
 	Distro  string `json:"distro,omitempty"`
 	Version string `json:"version,omitempty"`
 	Kernel  string `json:"kernel,omitempty"`
+	Arch    string `json:"arch,omitempty"`
 	Session string `json:"session,omitempty"`
 }
 

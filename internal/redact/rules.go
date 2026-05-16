@@ -24,6 +24,10 @@ var (
 	strictTokenPattern = regexp.MustCompile(`\b([a-fA-F0-9]{40,}|[A-Za-z0-9+/]{40,}=*)\b`)
 	// envValuePattern matches KEY=VALUE style assignments and redacts the value.
 	envValuePattern = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*=)(.*)$`)
+	// cliSecretPattern matches common CLI flag patterns that carry secrets.
+	// Covers: --password=secret, --password secret, --token=abc, --api-key=xyz, etc.
+	// Case-insensitive via (?i:...).
+	cliSecretPattern = regexp.MustCompile(`(?i)(--(?:password|token|api[-_]key|client[-_]secret|secret|auth[-_]token)(?:=|\s+))([^\s]+)`)
 )
 
 // homeDir caches the user's home directory.
@@ -65,4 +69,9 @@ func redactHome(input string) string {
 // redactEnvValues replaces values in KEY=VALUE patterns.
 func redactEnvValues(input string) string {
 	return envValuePattern.ReplaceAllString(input, "${1}<redacted>")
+}
+
+// redactCLISecrets replaces values after common secret-bearing CLI flags.
+func redactCLISecrets(input string) string {
+	return cliSecretPattern.ReplaceAllString(input, "${1}<redacted>")
 }

@@ -838,3 +838,47 @@ func TestM1Engine_ReproRules_AddressInUse(t *testing.T) {
 		t.Errorf("expected F-REPRO-004 finding, got: %v", findings)
 	}
 }
+
+func TestNormalizeVersion_StripsPrefixes(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{">=22.0.0", "22.0.0"},
+		{"<=18.0.0", "18.0.0"},
+		{"~>3.2.1", "3.2.1"},
+		{"^1.2.3", "1.2.3"},
+		{">14", "14"},
+		{"<20", "20"},
+		{"v20.0.0", "20.0.0"},
+		{"go1.23.4", "1.23.4"},
+		{"lts/*", "*"},
+		{"node", ""},
+		{"  18.0.0  ", "18.0.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := normalizeVersion(tt.input)
+			if got != tt.want {
+				t.Errorf("normalizeVersion(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestVersionsCompatible_WithPrefix(t *testing.T) {
+	// .nvmrc containing >=22 should not mismatch with host node 22.11.1
+	if !versionsCompatible(">=22", "22.11.1") {
+		t.Error("expected >=22 to be compatible with 22.11.1")
+	}
+	if !versionsCompatible("<=18", "18.20.0") {
+		t.Error("expected <=18 to be compatible with 18.20.0")
+	}
+	if !versionsCompatible("lts/*", "20.0.0") {
+		t.Error("expected lts/* to be compatible with any version")
+	}
+	// Pinned versions still require exact major.minor match
+	if versionsCompatible("18.0.0", "18.20.0") {
+		t.Error("expected 18.0.0 to NOT be compatible with 18.20.0")
+	}
+}

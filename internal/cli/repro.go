@@ -42,19 +42,19 @@ var reproCmd = &cobra.Command{
 		logger.Info("repro", fmt.Sprintf("running command=%s args=%v timeout=%v", command, cmdArgs, reproTimeout))
 
 		runner := repro.NewRunner()
+		runner.Redactor = redactEngine
 		if reproTimeout > 0 {
 			runner.Timeout = reproTimeout
 		}
 
 		result, startErr := runner.Run(cmd.Context(), command, cmdArgs)
-		if startErr != nil {
-			logger.Error("repro", fmt.Sprintf("command failed to start: %v", startErr))
-			return exitCodeError{code: exitcode.ReproFailed}
-		}
 
-		// Classify output
+		// Classify output (even if start failed, we may have partial data)
 		clf := classifier.New()
 		result.Classifications = clf.Classify(result.StdoutPreview, result.StderrPreview)
+
+		// Redact command args before using them as evidence
+		redactedArgs := redactEngine.RedactString(strings.Join(cmdArgs, " "), "repro_args")
 
 		// Build repro collector result for rules engine
 		reproCollector := schema.CollectorResult{
@@ -62,7 +62,7 @@ var reproCmd = &cobra.Command{
 			Status: schema.CollectorOK,
 			Evidence: []schema.Evidence{
 				{Source: "repro_command", Value: command},
-				{Source: "repro_args", Value: strings.Join(cmdArgs, " ")},
+				{Source: "repro_args", Value: redactedArgs},
 				{Source: "repro_exit_code", Value: fmt.Sprintf("%d", result.ExitCode)},
 				{Source: "repro_duration_ms", Value: fmt.Sprintf("%d", result.DurationMs)},
 				{Source: "repro_timed_out", Value: fmt.Sprintf("%v", result.TimedOut)},
@@ -70,6 +70,11 @@ var reproCmd = &cobra.Command{
 		}
 		if result.TimedOut {
 			reproCollector.Status = schema.CollectorTimeout
+		}
+		if startErr != nil {
+			reproCollector.Status = schema.CollectorFailed
+			reproCollector.Notes = append(reproCollector.Notes, startErr.Error())
+			reproCollector.Partial = true
 		}
 		for _, c := range result.Classifications {
 			reproCollector.Evidence = append(reproCollector.Evidence, schema.Evidence{
@@ -114,15 +119,14 @@ var reproCmd = &cobra.Command{
 			return err
 		}
 
-		// Exit code contract
-		maxSeverity := schema.SeverityInfo
-		for _, f := range rawFindings {
-			if severityHigher(f.Severity, maxSeverity) {
-				maxSeverity = f.Severity
-			}
+		if startErr != nil {
+			logger.Error("repro", fmt.Sprintf("command failed to start: %v", startErr))
 		}
-		if maxSeverity == schema.SeverityHigh || maxSeverity == schema.SeverityCritical || result.ExitCode != 0 {
-			return exitCodeError{code: exitcode.FindingsExist}
+
+		reproFailed := startErr != nil || result.ExitCode != 0
+		code := exitCodeFromResults(rawFindings, []schema.CollectorResult{reproCollector}, reproFailed)
+		if code != exitcode.Success {
+			return exitCodeError{code: code}
 		}
 		return nil
 	},
@@ -139,7 +143,7 @@ func writeReproArtifacts(runID string, report *schema.Report, result *repro.Repr
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(runsDir, "report.json"), reportData, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(runsDir, "report.json"), reportData, 0600); err != nil {
 		return err
 	}
 
@@ -154,17 +158,17 @@ func writeReproArtifacts(runID string, report *schema.Report, result *repro.Repr
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(runsDir, "repro.json"), reproData, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(runsDir, "repro.json"), reproData, 0600); err != nil {
 		return err
 	}
 
 	// Captured logs (already redacted previews)
 	stdoutLog := engine.RedactString(result.StdoutPreview, "repro_stdout")
 	stderrLog := engine.RedactString(result.StderrPreview, "repro_stderr")
-	if err := os.WriteFile(filepath.Join(runsDir, "logs", "command.stdout.log"), []byte(stdoutLog), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(runsDir, "logs", "command.stdout.log"), []byte(stdoutLog), 0600); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(runsDir, "logs", "command.stderr.log"), []byte(stderrLog), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(runsDir, "logs", "command.stderr.log"), []byte(stderrLog), 0600); err != nil {
 		return err
 	}
 

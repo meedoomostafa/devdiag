@@ -118,6 +118,18 @@ func HasPodmanSignal(root string) bool {
 		fileExists(filepath.Join(root, "podman-compose.yaml"))
 }
 
+// HasPythonSignal returns true if the repo contains Python signals.
+func HasPythonSignal(root string) bool {
+	if root == "" {
+		root = "."
+	}
+	return fileExists(filepath.Join(root, "requirements.txt")) ||
+		fileExists(filepath.Join(root, "pyproject.toml")) ||
+		fileExists(filepath.Join(root, "setup.py")) ||
+		fileExists(filepath.Join(root, "setup.cfg")) ||
+		fileExists(filepath.Join(root, "Pipfile"))
+}
+
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil

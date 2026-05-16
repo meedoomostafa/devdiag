@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -16,6 +17,24 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/schema"
 	"github.com/meedoomostafa/devdiag/internal/version"
 )
+
+var runIDAllowlist = regexp.MustCompile(`^[a-zA-Z0-9_:-]+$`)
+
+func validateRunID(id string) error {
+	if id == "" {
+		return fmt.Errorf("run-id must not be empty")
+	}
+	if strings.Contains(id, string(filepath.Separator)) || strings.Contains(id, "/") {
+		return fmt.Errorf("run-id must not contain path separators")
+	}
+	if strings.Contains(id, "..") {
+		return fmt.Errorf("run-id must not contain path traversal sequences")
+	}
+	if !runIDAllowlist.MatchString(id) {
+		return fmt.Errorf("run-id contains invalid characters (allowed: a-zA-Z0-9_:-)")
+	}
+	return nil
+}
 
 var capsuleRunID string
 
@@ -35,8 +54,14 @@ var capsuleCreateCmd = &cobra.Command{
 			logger.Warn("capsule", "redaction is disabled; secrets may be visible in the capsule")
 		}
 
-		// Resolve run ID
+		// Resolve and validate run ID
 		runID := capsuleRunID
+		if runID != "" {
+			if err := validateRunID(runID); err != nil {
+				logger.Error("capsule", err.Error())
+				return exitCodeError{code: exitcode.InvalidInput}
+			}
+		}
 		if runID == "" {
 			// Use latest run
 			latest, err := findLatestRunID()
@@ -126,7 +151,11 @@ func findLatestRunID() (string, error) {
 	sort.Slice(entries, func(i, j int) bool {
 		return strings.Compare(entries[i].Name(), entries[j].Name()) < 0
 	})
-	return entries[len(entries)-1].Name(), nil
+	latest := entries[len(entries)-1].Name()
+	if err := validateRunID(latest); err != nil {
+		return "", fmt.Errorf("latest run ID invalid: %w", err)
+	}
+	return latest, nil
 }
 
 func init() {

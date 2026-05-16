@@ -79,7 +79,7 @@ func makeCheckRun(collectorsList func(string) []collectors.Collector) func(*cobr
 			RunID:           generateRunID(),
 			RedactionStatus: string(redactEngine.Level),
 			Repo:            schema.RepoInfo{Root: absPath},
-			Host:            schema.HostInfo{OS: ""},
+			Host:            populateHostInfo(collectorResults),
 			Collectors:      collectorResults,
 			Findings:        sortedFindings,
 		}
@@ -90,14 +90,9 @@ func makeCheckRun(collectorsList func(string) []collectors.Collector) func(*cobr
 			return err
 		}
 
-		maxSeverity := schema.SeverityInfo
-		for _, f := range sortedFindings {
-			if severityHigher(f.Severity, maxSeverity) {
-				maxSeverity = f.Severity
-			}
-		}
-		if maxSeverity == schema.SeverityHigh || maxSeverity == schema.SeverityCritical {
-			return exitCodeError{code: exitcode.FindingsExist}
+		code := exitCodeFromResults(sortedFindings, collectorResults, false)
+		if code != exitcode.Success {
+			return exitCodeError{code: code}
 		}
 		return nil
 	}
@@ -208,5 +203,7 @@ func init() {
 	checkCmd.AddCommand(checkNetworkCmd)
 	checkCmd.AddCommand(checkFilesystemCmd)
 	checkCmd.AddCommand(checkContainersCmd)
+	checkCmd.AddCommand(checkGPUCmd)
+	checkCmd.AddCommand(checkCacheCmd)
 	rootCmd.AddCommand(checkCmd)
 }

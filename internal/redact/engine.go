@@ -22,6 +22,7 @@ func (e *Engine) RedactString(input string, sourceType string) string {
 
 	result := input
 	result = redactEnvValues(result)
+	result = redactCLISecrets(result)
 	result = redactURL(result)
 	result = redactJWT(result)
 	result = redactHome(result)
@@ -61,6 +62,7 @@ func (e *Engine) RedactReport(r *schema.Report) *schema.Report {
 	redacted.Host.Distro = e.RedactString(r.Host.Distro, "host_distro")
 	redacted.Host.Version = e.RedactString(r.Host.Version, "host_version")
 	redacted.Host.Kernel = e.RedactString(r.Host.Kernel, "host_kernel")
+	redacted.Host.Arch = e.RedactString(r.Host.Arch, "host_arch")
 	redacted.Host.Session = e.RedactString(r.Host.Session, "host_session")
 	return &redacted
 }

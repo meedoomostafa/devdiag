@@ -106,6 +106,12 @@ func (r *InspectResult) Summary() string {
 		for _, f := range m.Files {
 			fmt.Fprintf(&b, "  %s (%d bytes)\n", f.Path, f.SizeBytes)
 		}
+		if len(m.Notes) > 0 {
+			fmt.Fprintln(&b, "Notes:")
+			for _, n := range m.Notes {
+				fmt.Fprintf(&b, "  - %s\n", n)
+			}
+		}
 	} else {
 		fmt.Fprintln(&b, "Capsule: manifest not found")
 	}

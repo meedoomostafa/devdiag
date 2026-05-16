@@ -97,3 +97,78 @@ func TestIsSafePath(t *testing.T) {
 		}
 	}
 }
+
+func TestBuilder_TraceArtifactWithoutCollectors(t *testing.T) {
+	b := NewBuilder("default", "0.1.0")
+	b.SetTraceArtifact([]byte(`{"events":[]}`))
+	report := &schema.Report{
+		RunID: "test-run-trace",
+	}
+	var buf bytes.Buffer
+	if err := b.Build(&buf, report, nil); err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+
+	result, err := InspectFromBytes(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Inspect error: %v", err)
+	}
+	var hasSnapshot bool
+	var hasTrace bool
+	for _, f := range result.FileList {
+		if f == "snapshot/" {
+			hasSnapshot = true
+		}
+		if f == "snapshot/trace.json" {
+			hasTrace = true
+		}
+	}
+	if !hasSnapshot {
+		t.Error("expected snapshot/ directory in capsule")
+	}
+	if !hasTrace {
+		t.Error("expected snapshot/trace.json in capsule")
+	}
+}
+
+func TestBuilder_ManifestNotes_FieldAvailable(t *testing.T) {
+	b := NewBuilder("default", "0.1.0")
+	report := &schema.Report{
+		RunID: "test-run-notes",
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "ok",
+				Status: schema.CollectorOK,
+				Evidence: []schema.Evidence{
+					{Source: "data", Value: "value"},
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := b.Build(&buf, report, nil); err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+
+	result, err := InspectFromBytes(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Inspect error: %v", err)
+	}
+	if result.Manifest == nil {
+		t.Fatal("expected manifest")
+	}
+	// Verify the Notes field is empty for normal builds (may be nil due to omitempty)
+	if len(result.Manifest.Notes) != 0 {
+		t.Errorf("expected no notes, got %v", result.Manifest.Notes)
+	}
+	// Verify snapshot was included normally
+	var hasSnapshot bool
+	for _, f := range result.FileList {
+		if f == "snapshot/ok.json" {
+			hasSnapshot = true
+		}
+	}
+	if !hasSnapshot {
+		t.Error("expected snapshot/ok.json to be present")
+	}
+}

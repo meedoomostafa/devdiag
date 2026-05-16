@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/meedoomostafa/devdiag/internal/redact"
 )
 
 func TestRunner_ExitCodeZero(t *testing.T) {
@@ -134,14 +136,66 @@ func TestRunner_SensitiveEnvKeyExcludesPath(t *testing.T) {
 	}
 }
 
-func TestRunner_RedactString_URL(t *testing.T) {
-	input := "connecting to postgres://admin:secret123@localhost:5432/db"
-	redacted := redactString(input)
-	if strings.Contains(redacted, "secret123") {
-		t.Errorf("password should be redacted, got: %s", redacted)
+func TestRunner_RedactsURLCredentials(t *testing.T) {
+	r := NewRunner()
+	res, err := r.Run(context.Background(), "echo", []string{"postgres://admin:secret123@localhost:5432/db"})
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
 	}
-	if !strings.Contains(redacted, "<redacted>") {
-		t.Errorf("expected <redacted> in output, got: %s", redacted)
+	if strings.Contains(res.StdoutPreview, "secret123") {
+		t.Errorf("password should be redacted, got: %s", res.StdoutPreview)
+	}
+	if !strings.Contains(res.StdoutPreview, "<redacted>") {
+		t.Errorf("expected <redacted> in output, got: %s", res.StdoutPreview)
+	}
+}
+
+func TestRunner_RedactsJWT(t *testing.T) {
+	r := NewRunner()
+	jwt := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	res, err := r.Run(context.Background(), "echo", []string{jwt})
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if strings.Contains(res.StdoutPreview, jwt) {
+		t.Errorf("JWT should be redacted, got: %s", res.StdoutPreview)
+	}
+}
+
+func TestRunner_RedactsCLISecrets(t *testing.T) {
+	r := NewRunner()
+	res, err := r.Run(context.Background(), "echo", []string{"--api-key=secretvalue"})
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if strings.Contains(res.StdoutPreview, "secretvalue") {
+		t.Errorf("--api-key value should be redacted, got: %s", res.StdoutPreview)
+	}
+	if !strings.Contains(res.StdoutPreview, "<redacted>") {
+		t.Errorf("expected <redacted> in output, got: %s", res.StdoutPreview)
+	}
+}
+
+func TestRunner_RedactsEnvValues(t *testing.T) {
+	r := NewRunner()
+	res, err := r.Run(context.Background(), "printf", []string{"API_KEY=secret123"})
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if strings.Contains(res.StdoutPreview, "secret123") {
+		t.Errorf("env value should be redacted, got: %s", res.StdoutPreview)
+	}
+}
+
+func TestRunner_EngineOverride(t *testing.T) {
+	r := NewRunner()
+	r.Redactor = redact.NewEngine(redact.LevelOff)
+	res, err := r.Run(context.Background(), "echo", []string{"--api-key=secretvalue"})
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if !strings.Contains(res.StdoutPreview, "secretvalue") {
+		t.Errorf("LevelOff should not redact, got: %s", res.StdoutPreview)
 	}
 }
 

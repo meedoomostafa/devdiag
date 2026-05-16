@@ -66,3 +66,26 @@ func TestCollector_Writable(t *testing.T) {
 		t.Error("expected repo to be writable")
 	}
 }
+
+func TestCollector_NoTempFilesCreated(t *testing.T) {
+	tmpDir := t.TempDir()
+	before, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeCount := len(before)
+
+	c := &Collector{Root: tmpDir}
+	ctx := context.Background()
+	_, _ = c.Collect(ctx)
+
+	after, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterCount := len(after)
+
+	if afterCount != beforeCount {
+		t.Errorf("collector created files in target dir: before=%d after=%d", beforeCount, afterCount)
+	}
+}
