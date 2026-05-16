@@ -35,7 +35,7 @@ var checkCmd = &cobra.Command{
 	Short: "Run specific diagnostic checks",
 }
 
-func makeCheckRun(collectorsList func(string) []collectors.Collector) func(*cobra.Command, []string) error {
+func makeCheckRun(engineFactory func() rules.PolicyEngine, collectorsList func(string) []collectors.Collector) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 		colorMode := buildColorMode()
@@ -63,7 +63,7 @@ func makeCheckRun(collectorsList func(string) []collectors.Collector) func(*cobr
 		snapshotBuilder := graph.NewSnapshotBuilder()
 		snapshot := snapshotBuilder.Build(collectorResults)
 
-		engine := rules.NewM1Engine()
+		engine := engineFactory()
 		rawFindings, err := engine.Evaluate(snapshot)
 		if err != nil {
 			logger.Error("policy", err.Error())
@@ -102,7 +102,7 @@ var checkEnvCmd = &cobra.Command{
 	Use:   "env [path]",
 	Short: "Check environment configuration",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: makeCheckRun(func(path string) []collectors.Collector {
+	RunE: makeCheckRun(func() rules.PolicyEngine { return rules.NewM1Engine() }, func(path string) []collectors.Collector {
 		return []collectors.Collector{
 			&envcollector.Collector{Root: path},
 			&composecollector.Collector{Root: path},
@@ -114,7 +114,7 @@ var checkRuntimesCmd = &cobra.Command{
 	Use:   "runtimes [path]",
 	Short: "Check runtime declarations and host installations",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: makeCheckRun(func(path string) []collectors.Collector {
+	RunE: makeCheckRun(func() rules.PolicyEngine { return rules.NewM1Engine() }, func(path string) []collectors.Collector {
 		return []collectors.Collector{
 			&runtimecollector.Collector{Root: path},
 			&hostruncollector.Collector{},
@@ -126,7 +126,7 @@ var checkGitCmd = &cobra.Command{
 	Use:   "git [path]",
 	Short: "Check Git state",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: makeCheckRun(func(path string) []collectors.Collector {
+	RunE: makeCheckRun(func() rules.PolicyEngine { return rules.NewM1Engine() }, func(path string) []collectors.Collector {
 		return []collectors.Collector{
 			&gitcollector.Collector{Root: path},
 		}
@@ -137,7 +137,7 @@ var checkPortsCmd = &cobra.Command{
 	Use:   "ports [path]",
 	Short: "Check port conflicts with compose declarations",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: makeCheckRun(func(path string) []collectors.Collector {
+	RunE: makeCheckRun(func() rules.PolicyEngine { return rules.NewM1Engine() }, func(path string) []collectors.Collector {
 		return []collectors.Collector{
 			&composecollector.Collector{Root: path},
 			&portcollector.Collector{},
@@ -149,7 +149,7 @@ var checkServicesCmd = &cobra.Command{
 	Use:   "services [path]",
 	Short: "Check systemd and network services",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: makeCheckRun(func(path string) []collectors.Collector {
+	RunE: makeCheckRun(func() rules.PolicyEngine { return rules.NewM1Engine() }, func(path string) []collectors.Collector {
 		return []collectors.Collector{
 			&systemdcollector.Collector{RepoExpectsDocker: repocollector.HasDockerSignal(path)},
 			&networkcollector.Collector{},
@@ -161,7 +161,7 @@ var checkNetworkCmd = &cobra.Command{
 	Use:   "network [path]",
 	Short: "Check network and host metadata",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: makeCheckRun(func(path string) []collectors.Collector {
+	RunE: makeCheckRun(func() rules.PolicyEngine { return rules.NewM1Engine() }, func(path string) []collectors.Collector {
 		return []collectors.Collector{
 			&networkcollector.Collector{},
 			&hostcollector.Collector{},
@@ -173,7 +173,7 @@ var checkFilesystemCmd = &cobra.Command{
 	Use:   "filesystem [path]",
 	Short: "Check filesystem permissions and disk usage",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: makeCheckRun(func(path string) []collectors.Collector {
+	RunE: makeCheckRun(func() rules.PolicyEngine { return rules.NewM1Engine() }, func(path string) []collectors.Collector {
 		return []collectors.Collector{
 			&diskcollector.Collector{Path: path},
 			&permissioncollector.Collector{Root: path},
@@ -185,7 +185,7 @@ var checkContainersCmd = &cobra.Command{
 	Use:   "containers [path]",
 	Short: "Check Docker, Podman, and Compose container status",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: makeCheckRun(func(path string) []collectors.Collector {
+	RunE: makeCheckRun(func() rules.PolicyEngine { return rules.NewM1Engine() }, func(path string) []collectors.Collector {
 		return []collectors.Collector{
 			&dockercollector.Collector{},
 			&podmancollector.Collector{},
