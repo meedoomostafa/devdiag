@@ -34,18 +34,24 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// Lightweight systemd availability check
 	cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	err = exec.CommandContext(cmdCtx, "systemctl", "is-system-running").Run()
+	out, err := exec.CommandContext(cmdCtx, "systemctl", "is-system-running").Output()
 	cancel()
+	systemdState := strings.TrimSpace(string(out))
 	if err != nil {
-		// systemctl exists but may not work (e.g., in container without systemd)
-		return schema.CollectorResult{
-			Name:     c.Name(),
-			Status:   schema.CollectorUnavailable,
-			Evidence: []schema.Evidence{{Source: "host_systemd", Value: "not_running"}},
-		}, nil
+		// Distinguish degraded (still running) from offline/missing
+		if systemdState == "degraded" {
+			evidence = append(evidence, schema.Evidence{Source: "host_systemd", Value: "degraded"})
+		} else {
+			// systemctl exists but may not work (e.g., in container without systemd)
+			return schema.CollectorResult{
+				Name:     c.Name(),
+				Status:   schema.CollectorUnavailable,
+				Evidence: []schema.Evidence{{Source: "host_systemd", Value: "not_running"}},
+			}, nil
+		}
+	} else {
+		evidence = append(evidence, schema.Evidence{Source: "host_systemd", Value: systemdState})
 	}
-
-	evidence = append(evidence, schema.Evidence{Source: "host_systemd", Value: "available"})
 
 	// Docker service check only if repo expects Docker
 	if c.RepoExpectsDocker {

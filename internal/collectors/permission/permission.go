@@ -102,14 +102,20 @@ func findPackageJSONScripts(root string) []string {
 	seen := map[string]bool{}
 	for _, cmd := range pkg.Scripts {
 		// Extract simple local file references from commands
-		// e.g. "./bin/setup.sh", "node build.js"
+		// e.g. "./bin/setup.sh", "../bin/build.sh"
 		for _, field := range strings.Fields(cmd) {
 			field = strings.Trim(field, `"'`)
-			if strings.HasPrefix(field, "./") || strings.HasPrefix(field, "../") {
+			if strings.HasPrefix(field, "./") {
 				path := strings.TrimPrefix(field, "./")
-				if !seen[path] {
+				if path != "" && !seen[path] {
 					seen[path] = true
 					scripts = append(scripts, path)
+				}
+			} else if strings.HasPrefix(field, "../") {
+				// Preserve parent-directory traversal
+				if !seen[field] {
+					seen[field] = true
+					scripts = append(scripts, field)
 				}
 			}
 		}

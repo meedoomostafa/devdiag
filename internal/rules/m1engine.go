@@ -239,7 +239,12 @@ func (e *M1Engine) hostRuntimeRules(result schema.CollectorResult, collectors ma
 		for _, ev := range m1Runtime.Evidence {
 			parts := strings.SplitN(ev.Value, " ", 2)
 			if len(parts) == 2 {
-				expected[parts[0]] = parts[1]
+				name := parts[0]
+				// M1 uses "rust" from Cargo.toml, M2 checks "rustc" binary
+				if name == "rust" {
+					name = "rustc"
+				}
+				expected[name] = parts[1]
 			}
 		}
 	}
