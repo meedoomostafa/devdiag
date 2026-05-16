@@ -48,6 +48,17 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 				Value:  fmt.Sprintf("%s references %s", ref.Path, ref.Raw),
 			})
 		}
+
+		// Also extract port mappings for M2 port conflict detection
+		ports, err := extractPortMappings(path)
+		if err == nil {
+			for _, p := range ports {
+				evidence = append(evidence, schema.Evidence{
+					Source: "compose_host_port",
+					Value:  p,
+				})
+			}
+		}
 	}
 
 	status := schema.CollectorOK
@@ -76,6 +87,49 @@ var (
 	// Does NOT match $$VAR (escaped)
 	composeVarRe = regexp.MustCompile(`\$\$?\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
 )
+
+func extractPortMappings(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil, err
+	}
+
+	var ports []string
+	start := &root
+	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		start = root.Content[0]
+	}
+	walkYAML(start, "", func(path string, node *yaml.Node) {
+		if node.Kind == yaml.ScalarNode && strings.Contains(path, "ports") {
+			// Port syntax: "5432:5432", "127.0.0.1:8000:8000", "5432"
+			val := strings.TrimSpace(node.Value)
+			if val == "" {
+				return
+			}
+			// Only capture explicit host:container mappings
+			if strings.Contains(val, ":") {
+				parts := strings.Split(val, ":")
+				if len(parts) >= 2 {
+					hostPart := strings.TrimSpace(parts[0])
+					// Handle IP prefix: "127.0.0.1:8000:8000"
+					if strings.Count(val, ":") == 2 {
+						hostPart = strings.TrimSpace(parts[1])
+					}
+					if hostPart != "" {
+						ports = append(ports, hostPart)
+					}
+				}
+			}
+			// Single port like "5432" is ambiguous; skip for host conflict
+		}
+	})
+	return ports, nil
+}
 
 func extractEnvRefs(path string) ([]envRef, error) {
 	data, err := os.ReadFile(path)

@@ -8,10 +8,17 @@ import (
 
 	"github.com/meedoomostafa/devdiag/internal/collectors"
 	composecollector "github.com/meedoomostafa/devdiag/internal/collectors/compose"
+	diskcollector "github.com/meedoomostafa/devdiag/internal/collectors/disk"
 	envcollector "github.com/meedoomostafa/devdiag/internal/collectors/env"
 	gitcollector "github.com/meedoomostafa/devdiag/internal/collectors/git"
+	hostcollector "github.com/meedoomostafa/devdiag/internal/collectors/host"
+	hostruncollector "github.com/meedoomostafa/devdiag/internal/collectors/hostruntime"
+	networkcollector "github.com/meedoomostafa/devdiag/internal/collectors/network"
+	permissioncollector "github.com/meedoomostafa/devdiag/internal/collectors/permission"
+	portcollector "github.com/meedoomostafa/devdiag/internal/collectors/port"
 	repocollector "github.com/meedoomostafa/devdiag/internal/collectors/repo"
 	runtimecollector "github.com/meedoomostafa/devdiag/internal/collectors/runtime"
+	systemdcollector "github.com/meedoomostafa/devdiag/internal/collectors/systemd"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/findings"
 	"github.com/meedoomostafa/devdiag/internal/graph"
@@ -107,12 +114,12 @@ var checkEnvCmd = &cobra.Command{
 
 var checkRuntimesCmd = &cobra.Command{
 	Use:   "runtimes [path]",
-	Short: "Check runtime declarations",
+	Short: "Check runtime declarations and host installations",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: makeCheckRun(func(path string) []collectors.Collector {
 		return []collectors.Collector{
 			&runtimecollector.Collector{Root: path},
-			&repocollector.Collector{Root: path},
+			&hostruncollector.Collector{},
 		}
 	}),
 }
@@ -128,9 +135,61 @@ var checkGitCmd = &cobra.Command{
 	}),
 }
 
+var checkPortsCmd = &cobra.Command{
+	Use:   "ports [path]",
+	Short: "Check port conflicts with compose declarations",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: makeCheckRun(func(path string) []collectors.Collector {
+		return []collectors.Collector{
+			&composecollector.Collector{Root: path},
+			&portcollector.Collector{},
+		}
+	}),
+}
+
+var checkServicesCmd = &cobra.Command{
+	Use:   "services [path]",
+	Short: "Check systemd and network services",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: makeCheckRun(func(path string) []collectors.Collector {
+		return []collectors.Collector{
+			&systemdcollector.Collector{RepoExpectsDocker: repocollector.HasDockerSignal(path)},
+			&networkcollector.Collector{},
+		}
+	}),
+}
+
+var checkNetworkCmd = &cobra.Command{
+	Use:   "network [path]",
+	Short: "Check network and host metadata",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: makeCheckRun(func(path string) []collectors.Collector {
+		return []collectors.Collector{
+			&networkcollector.Collector{},
+			&hostcollector.Collector{},
+		}
+	}),
+}
+
+var checkFilesystemCmd = &cobra.Command{
+	Use:   "filesystem [path]",
+	Short: "Check filesystem permissions and disk usage",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: makeCheckRun(func(path string) []collectors.Collector {
+		return []collectors.Collector{
+			&diskcollector.Collector{Path: path},
+			&permissioncollector.Collector{Root: path},
+		}
+	}),
+}
+
 func init() {
 	checkCmd.AddCommand(checkEnvCmd)
 	checkCmd.AddCommand(checkRuntimesCmd)
 	checkCmd.AddCommand(checkGitCmd)
+	checkCmd.AddCommand(checkPortsCmd)
+	checkCmd.AddCommand(checkServicesCmd)
+	checkCmd.AddCommand(checkNetworkCmd)
+	checkCmd.AddCommand(checkFilesystemCmd)
 	rootCmd.AddCommand(checkCmd)
 }
