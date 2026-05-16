@@ -118,7 +118,7 @@ func TestRulesList_JSON_ReturnsValidJSON(t *testing.T) {
 }
 
 func TestNDJSON_OneObjectPerLine(t *testing.T) {
-	stdout, _, code := runBinary("scan", ".", "--format", "ndjson")
+	stdout, _, code := runBinary("scan", "../..", "--format", "ndjson")
 	if code != 0 {
 		t.Fatalf("unexpected exit code: %d", code)
 	}
