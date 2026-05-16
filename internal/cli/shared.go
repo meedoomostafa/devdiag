@@ -32,6 +32,8 @@ func pickRenderer(colorMode output.ColorMode) output.Renderer {
 		return &output.NDJSONRenderer{}
 	case "markdown":
 		return &output.MarkdownRenderer{}
+	case "github":
+		return &output.GitHubRenderer{}
 	default:
 		return &output.HumanRenderer{ColorMode: colorMode}
 	}

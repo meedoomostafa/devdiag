@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -350,5 +351,22 @@ func TestTraceCommand_InvalidScope(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "invalid") && !strings.Contains(stderr, "scope") {
 		t.Errorf("expected invalid scope error in stderr, got: %s", stderr)
+	}
+}
+
+func TestCheckCI_Fixture(t *testing.T) {
+	fixture := filepath.Join("..", "..", "fixtures", "ci-local-parity")
+	cmd := exec.Command("go", "run", "../../cmd/devdiag", "check", "ci", fixture)
+	out, _ := cmd.CombinedOutput()
+	output := string(out)
+	t.Logf("output:\n%s", output)
+	if !strings.Contains(output, "F-CI-RUNTIME-001") {
+		t.Errorf("expected F-CI-RUNTIME-001 in output")
+	}
+	if !strings.Contains(output, "F-CI-CONTAINER-001") {
+		t.Errorf("expected F-CI-CONTAINER-001 in output")
+	}
+	if !strings.Contains(output, "F-CI-ENV-001") {
+		t.Errorf("expected F-CI-ENV-001 in output")
 	}
 }

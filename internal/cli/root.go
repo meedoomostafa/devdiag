@@ -43,7 +43,7 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "human", "Output format: human, json, ndjson, markdown")
+	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "human", "Output format: human, json, ndjson, markdown, github")
 	rootCmd.PersistentFlags().StringVar(&flagRedact, "redact", "default", "Redaction level: default, strict, off")
 	rootCmd.PersistentFlags().BoolVar(&flagDebug, "debug", false, "Enable debug/trace logs")
 	rootCmd.PersistentFlags().BoolVar(&flagNoColor, "no-color", false, "Disable ANSI color")
@@ -68,7 +68,7 @@ func Execute() int {
 
 func validateFormat(v string) error {
 	switch v {
-	case "human", "json", "ndjson", "markdown":
+	case "human", "json", "ndjson", "markdown", "github":
 		return nil
 	}
 	return exitCodeError{code: exitcode.InvalidInput}

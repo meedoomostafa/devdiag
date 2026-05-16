@@ -10,6 +10,7 @@ import (
 
 	"github.com/meedoomostafa/devdiag/internal/collectors"
 	"github.com/meedoomostafa/devdiag/internal/collectors/cache"
+	cicollector "github.com/meedoomostafa/devdiag/internal/collectors/ci"
 	composecollector "github.com/meedoomostafa/devdiag/internal/collectors/compose"
 	composestatuscollector "github.com/meedoomostafa/devdiag/internal/collectors/composestatus"
 	cudacollector "github.com/meedoomostafa/devdiag/internal/collectors/cuda"
@@ -95,6 +96,11 @@ var scanCmd = &cobra.Command{
 			)
 		}
 
+		// Conditionally include CI collector when workflows exist
+		if repocollector.HasCISignal(absPath) {
+			allCollectors = append(allCollectors, &cicollector.Collector{Root: absPath})
+		}
+
 		// Conditionally include M6 collectors when --profile ai-ml is set
 		if flagProfile == "ai-ml" {
 			allCollectors = append(allCollectors,
@@ -134,6 +140,17 @@ var scanCmd = &cobra.Command{
 				logger.Error("m6-policy", err.Error())
 			} else {
 				rawFindings = append(rawFindings, m6Findings...)
+			}
+		}
+
+		// Evaluate M8 policies when CI workflows exist
+		if repocollector.HasCISignal(absPath) {
+			m8Engine := rules.NewM8Engine()
+			m8Findings, err := m8Engine.Evaluate(snapshot)
+			if err != nil {
+				logger.Error("m8-policy", err.Error())
+			} else {
+				rawFindings = append(rawFindings, m8Findings...)
 			}
 		}
 
