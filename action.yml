@@ -1,0 +1,60 @@
+name: 'DevDiag'
+description: 'Run DevDiag diagnostic scan and annotate findings in GitHub Actions'
+inputs:
+  path:
+    description: 'Path to scan'
+    required: false
+    default: '.'
+  profile:
+    description: 'Diagnostic profile (e.g., ai-ml)'
+    required: false
+    default: ''
+  redact:
+    description: 'Redaction level: default, strict, off'
+    required: false
+    default: 'default'
+  format:
+    description: 'Output format: github, json, markdown'
+    required: false
+    default: 'github'
+outputs:
+  report-path:
+    description: 'Path to the generated JSON report artifact'
+    value: ${{ steps.devdiag.outputs.report-path }}
+runs:
+  using: 'composite'
+  steps:
+    - id: devdiag
+      run: |
+        if ! command -v devdiag &> /dev/null; then
+          echo "devdiag not found in PATH"
+          exit 1
+        fi
+        PROFILE_ARGS=()
+        if [ -n "$PROFILE" ]; then
+          PROFILE_ARGS+=(--profile "$PROFILE")
+        fi
+        mkdir -p "$RUNNER_TEMP/devdiag-artifacts"
+        set +e
+        devdiag scan "$PATH_ARG" --format "$FORMAT" --redact "$REDACT" "${PROFILE_ARGS[@]}"
+        SCAN_EXIT=$?
+        devdiag scan "$PATH_ARG" --format json --redact "$REDACT" "${PROFILE_ARGS[@]}" > "$RUNNER_TEMP/devdiag-artifacts/devdiag-report.json"
+        JSON_EXIT=$?
+        set -e
+        if [ ! -f "$RUNNER_TEMP/devdiag-artifacts/devdiag-report.json" ]; then
+          printf '{"error":"devdiag json report was not generated"}\n' > "$RUNNER_TEMP/devdiag-artifacts/devdiag-report.json"
+        fi
+        echo "report-path=$RUNNER_TEMP/devdiag-artifacts/devdiag-report.json" >> "$GITHUB_OUTPUT"
+        if [ "$JSON_EXIT" -ne 0 ]; then exit "$JSON_EXIT"; fi
+        exit "$SCAN_EXIT"
+      shell: bash
+      env:
+        PATH_ARG: ${{ inputs.path }}
+        FORMAT: ${{ inputs.format }}
+        REDACT: ${{ inputs.redact }}
+        PROFILE: ${{ inputs.profile }}
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: devdiag-report
+        path: ${{ runner.temp }}/devdiag-artifacts/devdiag-report.json
