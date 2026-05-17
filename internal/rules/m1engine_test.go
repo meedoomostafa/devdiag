@@ -882,3 +882,27 @@ func TestVersionsCompatible_WithPrefix(t *testing.T) {
 		t.Error("expected 18.0.0 to NOT be compatible with 18.20.0")
 	}
 }
+
+func TestVersionsCompatible_SemverRanges(t *testing.T) {
+	tests := []struct {
+		expected string
+		actual   string
+		want     bool
+	}{
+		{">=20 <23", "22.11.1", true},
+		{">=20 <23", "23.0.0", false},
+		{"^20.1.0", "20.4.0", true},
+		{"^20.1.0", "21.0.0", false},
+		{"~20.1.0", "20.1.9", true},
+		{"~20.1.0", "20.2.0", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected+"_"+tt.actual, func(t *testing.T) {
+			got := versionsCompatible(tt.expected, tt.actual)
+			if got != tt.want {
+				t.Fatalf("versionsCompatible(%q, %q) = %v, want %v", tt.expected, tt.actual, got, tt.want)
+			}
+		})
+	}
+}

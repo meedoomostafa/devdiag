@@ -47,6 +47,9 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// Go runtime OS as a fallback hint
 	evidence = append(evidence, schema.Evidence{Source: "host_goos", Value: runtime.GOOS})
+	if shell := shellName(os.Getenv("SHELL")); shell != "" {
+		evidence = append(evidence, schema.Evidence{Source: "host_shell", Value: shell})
+	}
 
 	return schema.CollectorResult{
 		Name:     c.Name(),
@@ -81,4 +84,15 @@ func utsString(a [65]int8) string {
 		buf[i] = byte(v)
 	}
 	return string(buf[:])
+}
+
+func shellName(shell string) string {
+	shell = strings.TrimSpace(shell)
+	if shell == "" {
+		return ""
+	}
+	if idx := strings.LastIndex(shell, "/"); idx != -1 {
+		return shell[idx+1:]
+	}
+	return shell
 }

@@ -59,6 +59,32 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 				})
 			}
 		}
+
+		services, err := extractServiceSpecs(path)
+		if err == nil {
+			for _, svc := range services {
+				if svc.Image != "" {
+					evidence = append(evidence, schema.Evidence{
+						Source: fmt.Sprintf("compose_service__%s__image", sanitizeSource(svc.Name)),
+						Value:  svc.Image,
+					})
+				}
+				for _, p := range svc.Ports {
+					if p.HostPort != "" {
+						evidence = append(evidence, schema.Evidence{
+							Source: fmt.Sprintf("compose_service__%s__host_port", sanitizeSource(svc.Name)),
+							Value:  p.HostPort,
+						})
+					}
+					if p.ContainerPort != "" {
+						evidence = append(evidence, schema.Evidence{
+							Source: fmt.Sprintf("compose_service__%s__container_port", sanitizeSource(svc.Name)),
+							Value:  p.ContainerPort,
+						})
+					}
+				}
+			}
+		}
 	}
 
 	status := schema.CollectorOK
@@ -80,6 +106,17 @@ type envRef struct {
 	Raw  string
 	Path string // e.g. services.api.environment.DATABASE_URL
 	Line int
+}
+
+type serviceSpec struct {
+	Name  string
+	Image string
+	Ports []portSpec
+}
+
+type portSpec struct {
+	HostPort      string
+	ContainerPort string
 }
 
 var (
@@ -138,6 +175,95 @@ func extractPortMappings(path string) ([]string, error) {
 		}
 	})
 	return ports, nil
+}
+
+func extractServiceSpecs(path string) ([]serviceSpec, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil, err
+	}
+
+	start := &root
+	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		start = root.Content[0]
+	}
+	if start.Kind != yaml.MappingNode {
+		return nil, nil
+	}
+
+	var services []serviceSpec
+	for i := 0; i < len(start.Content); i += 2 {
+		if start.Content[i].Value != "services" || start.Content[i+1].Kind != yaml.MappingNode {
+			continue
+		}
+		servicesNode := start.Content[i+1]
+		for j := 0; j < len(servicesNode.Content); j += 2 {
+			name := servicesNode.Content[j].Value
+			node := servicesNode.Content[j+1]
+			if node.Kind != yaml.MappingNode {
+				continue
+			}
+			svc := serviceSpec{Name: name}
+			for k := 0; k < len(node.Content); k += 2 {
+				key := node.Content[k].Value
+				val := node.Content[k+1]
+				switch key {
+				case "image":
+					if val.Kind == yaml.ScalarNode {
+						svc.Image = strings.TrimSpace(val.Value)
+					}
+				case "ports":
+					svc.Ports = append(svc.Ports, extractServicePorts(val)...)
+				}
+			}
+			services = append(services, svc)
+		}
+	}
+	return services, nil
+}
+
+func extractServicePorts(node *yaml.Node) []portSpec {
+	switch node.Kind {
+	case yaml.SequenceNode:
+		ports := make([]portSpec, 0, len(node.Content))
+		for _, item := range node.Content {
+			if item.Kind == yaml.ScalarNode {
+				if spec := parsePortSpec(item.Value); spec.HostPort != "" || spec.ContainerPort != "" {
+					ports = append(ports, spec)
+				}
+			}
+		}
+		return ports
+	case yaml.ScalarNode:
+		if spec := parsePortSpec(node.Value); spec.HostPort != "" || spec.ContainerPort != "" {
+			return []portSpec{spec}
+		}
+	}
+	return nil
+}
+
+func parsePortSpec(portStr string) portSpec {
+	portStr = strings.TrimSpace(portStr)
+	if portStr == "" {
+		return portSpec{}
+	}
+	portStr = strings.SplitN(portStr, "/", 2)[0]
+	parts := strings.Split(portStr, ":")
+	switch len(parts) {
+	case 1:
+		return portSpec{ContainerPort: strings.TrimSpace(parts[0])}
+	case 2:
+		return portSpec{HostPort: strings.TrimSpace(parts[0]), ContainerPort: strings.TrimSpace(parts[1])}
+	case 3:
+		return portSpec{HostPort: strings.TrimSpace(parts[1]), ContainerPort: strings.TrimSpace(parts[2])}
+	default:
+		return portSpec{}
+	}
 }
 
 func extractEnvRefs(path string) ([]envRef, error) {
@@ -224,4 +350,16 @@ func extractVarName(raw string) string {
 		}
 	}
 	return strings.TrimSpace(raw)
+}
+
+func sanitizeSource(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	return strings.ReplaceAll(b.String(), "__", "%5F%5F")
 }

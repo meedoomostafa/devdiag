@@ -25,6 +25,7 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 	var runtimeEvs map[string]string
 	var envEvs []schema.Evidence
 	var composeEvs []schema.Evidence
+	var repoEvs []schema.Evidence
 	var hostShell string
 	var devcontainerImage string
 
@@ -49,6 +50,7 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 			}
 		case "repo":
 			for _, ev := range c.Evidence {
+				repoEvs = append(repoEvs, ev)
 				if ev.Source == "devcontainer_image" {
 					devcontainerImage = ev.Value
 				}
@@ -67,33 +69,33 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 			ciSetupActions = append(ciSetupActions, ev)
 		}
 	}
+	ciRunCommands := collectCIRunCommands(ciEvidence)
+	localCommands := collectRepoCommands(repoEvs)
+	repoPackageManager := collectRepoPackageManager(repoEvs)
 
-	// Collect all CI env keys
 	allCIEnvKeys := make(map[string]bool)
 	for _, ev := range ciEvidence {
 		if key, ok := ciEnvKey(ev.Source); ok {
+			if isIgnoredCIEnv(key, ev.Value) {
+				continue
+			}
 			allCIEnvKeys[key] = true
 		}
 	}
 
-	// Collect local env keys from .env and .env.example
 	localEnvKeys := make(map[string]bool)
+	localEnvKeysForCI := make(map[string]bool)
 	for _, ev := range envEvs {
-		if ev.Source == ".env" && strings.HasPrefix(ev.Value, "keys: ") {
-			keys := strings.Split(strings.TrimPrefix(ev.Value, "keys: "), ", ")
-			for _, k := range keys {
+		if ev.Source == ".env" || ev.Source == ".env.example" || ev.Source == ".env.local" || (strings.HasPrefix(ev.Source, ".env.") && strings.HasSuffix(ev.Source, ".example")) {
+			for _, k := range envKeysFromEvidence(ev.Value) {
 				localEnvKeys[k] = true
-			}
-		}
-		if ev.Source == ".env.example" && strings.HasPrefix(ev.Value, "keys: ") {
-			keys := strings.Split(strings.TrimPrefix(ev.Value, "keys: "), ", ")
-			for _, k := range keys {
-				localEnvKeys[k] = true
+				if ev.Source != ".env.local" {
+					localEnvKeysForCI[k] = true
+				}
 			}
 		}
 	}
 
-	// Collect compose host ports
 	composePorts := make(map[int]bool)
 	for _, ev := range composeEvs {
 		if ev.Source == "compose_host_port" {
@@ -102,14 +104,8 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 			}
 		}
 	}
-
-	// Collect CI service ports
-	var ciServices []schema.Evidence
-	for _, ev := range ciEvidence {
-		if strings.HasPrefix(ev.Source, "ci_service__") && strings.HasSuffix(ev.Source, "__host_port") {
-			ciServices = append(ciServices, ev)
-		}
-	}
+	ciServices := collectCIServices(ciEvidence)
+	composeServices := collectComposeServices(composeEvs)
 
 	// Collect CI containers
 	var ciContainers []schema.Evidence
@@ -138,6 +134,9 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 			continue
 		}
 		ciVal := ev.Value
+		if isOpaqueCIValue(ciVal) {
+			continue
+		}
 		localRT := localRuntimes[actionName]
 		if localRT == "" {
 			findings = append(findings, schema.Finding{
@@ -173,6 +172,42 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 		}
 	}
 
+	for _, ciCmd := range ciRunCommands {
+		ciPM := commandPackageManager(ciCmd.Value)
+		if repoPackageManager != "" && ciPM != "" && ciPM != packageManagerName(repoPackageManager) && localCommandWithSameArgs(ciCmd.Value, localCommands) {
+			findings = append(findings, schema.Finding{
+				ID:         "F-CI-PACKAGE-002",
+				Title:      fmt.Sprintf("CI command package manager differs from local %s", repoPackageManager),
+				Severity:   schema.SeverityLow,
+				Confidence: 0.6,
+				Symptom:    fmt.Sprintf("CI runs %s but repo package manager is %s", ciCmd.Value, repoPackageManager),
+				Evidence: []schema.Evidence{
+					ciCmd,
+					{Source: "repo_package_manager", Value: repoPackageManager},
+				},
+				LikelyCauses: []string{
+					"CI workflow may use a stale package manager command",
+				},
+			})
+			continue
+		}
+		if len(localCommands) > 0 && !localCommandMatches(ciCmd.Value, localCommands) {
+			findings = append(findings, schema.Finding{
+				ID:         "F-CI-COMMAND-001",
+				Title:      fmt.Sprintf("CI command %s is not documented locally", ciCmd.Value),
+				Severity:   schema.SeverityLow,
+				Confidence: 0.5,
+				Symptom:    "CI run command does not match collected local README/package/Makefile/Taskfile/justfile commands",
+				Evidence: []schema.Evidence{
+					ciCmd,
+				},
+				LikelyCauses: []string{
+					"Local command documentation may be out of sync with CI",
+				},
+			})
+		}
+	}
+
 	// Check env parity
 	for key := range allCIEnvKeys {
 		if !localEnvKeys[key] {
@@ -193,7 +228,7 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 		}
 	}
 
-	for key := range localEnvKeys {
+	for key := range localEnvKeysForCI {
 		if !allCIEnvKeys[key] {
 			findings = append(findings, schema.Finding{
 				ID:         "F-CI-ENV-002",
@@ -212,27 +247,55 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 		}
 	}
 
-	// Check service port parity
-	for _, ev := range ciServices {
-		service, port, ok := ciServicePort(ev.Source, ev.Value)
+	for name, ciService := range ciServices {
+		composeService, ok := composeServices[name]
 		if !ok {
-			continue
-		}
-		if !composePorts[port] {
+			if len(composeServices) == 0 && legacyComposePortMatch(ciService, composePorts) {
+				continue
+			}
 			findings = append(findings, schema.Finding{
 				ID:         "F-CI-SERVICE-001",
-				Title:      fmt.Sprintf("CI service %s port %d not exposed locally", service, port),
+				Title:      fmt.Sprintf("CI service %s is not matched locally", name),
 				Severity:   schema.SeverityMedium,
 				Confidence: 0.6,
-				Symptom:    fmt.Sprintf("CI defines service %s on port %d but local compose does not expose it", service, port),
-				Evidence: []schema.Evidence{
-					{Source: ev.Source, Value: ev.Value},
-				},
+				Symptom:    fmt.Sprintf("CI defines service %s but local compose does not define a matching service", name),
+				Evidence:   ciService.Evidence,
 				LikelyCauses: []string{
-					"Local compose.yaml is missing service port mapping",
+					"Local compose.yaml is missing a matching service definition",
+				},
+			})
+			continue
+		}
+		if serviceMismatch(ciService, composeService) {
+			findings = append(findings, schema.Finding{
+				ID:         "F-CI-SERVICE-001",
+				Title:      fmt.Sprintf("CI service %s differs from local compose service", name),
+				Severity:   schema.SeverityMedium,
+				Confidence: 0.6,
+				Symptom:    fmt.Sprintf("CI service %s image or ports do not match local compose", name),
+				Evidence:   append(ciService.Evidence, composeService.Evidence...),
+				LikelyCauses: []string{
+					"CI and local compose service definitions drifted",
 				},
 			})
 		}
+	}
+
+	for name, composeService := range composeServices {
+		if _, ok := ciServices[name]; ok {
+			continue
+		}
+		findings = append(findings, schema.Finding{
+			ID:         "F-CI-SERVICE-002",
+			Title:      fmt.Sprintf("Local compose service %s is not defined in CI", name),
+			Severity:   schema.SeverityLow,
+			Confidence: 0.5,
+			Symptom:    fmt.Sprintf("Local compose defines service %s but CI does not define a matching service", name),
+			Evidence:   composeService.Evidence,
+			LikelyCauses: []string{
+				"CI workflow may not start a local dependency required during development",
+			},
+		})
 	}
 
 	// Check container vs devcontainer drift
@@ -240,7 +303,7 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 		if devcontainerImage == "" {
 			continue
 		}
-		if !strings.Contains(ev.Value, devcontainerImage) && !strings.Contains(devcontainerImage, ev.Value) {
+		if normalizeContainerImage(ev.Value) != normalizeContainerImage(devcontainerImage) {
 			findings = append(findings, schema.Finding{
 				ID:         "F-CI-CONTAINER-001",
 				Title:      "CI container image differs from devcontainer image",
@@ -283,18 +346,18 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 
 func ciEnvKey(source string) (key string, ok bool) {
 	if strings.HasPrefix(source, "ci_env__workflow__") {
-		return strings.TrimPrefix(source, "ci_env__workflow__"), true
+		return decodeSourceSegment(strings.TrimPrefix(source, "ci_env__workflow__")), true
 	}
 	if strings.HasPrefix(source, "ci_env__job__") {
-		parts := strings.SplitN(strings.TrimPrefix(source, "ci_env__job__"), "__", 2)
-		if len(parts) == 2 {
-			return parts[1], true
+		rest := strings.TrimPrefix(source, "ci_env__job__")
+		if idx := strings.LastIndex(rest, "__"); idx != -1 {
+			return decodeSourceSegment(rest[idx+2:]), true
 		}
 	}
 	if strings.HasPrefix(source, "ci_env__step__") {
-		parts := strings.SplitN(strings.TrimPrefix(source, "ci_env__step__"), "__", 3)
-		if len(parts) == 3 {
-			return parts[2], true
+		rest := strings.TrimPrefix(source, "ci_env__step__")
+		if idx := strings.LastIndex(rest, "__"); idx != -1 {
+			return decodeSourceSegment(rest[idx+2:]), true
 		}
 	}
 	return "", false
@@ -308,22 +371,23 @@ func ciSetupInfo(source string) (actionName string, ok bool) {
 	if len(parts) < 4 {
 		return "", false
 	}
-	return actionRuntimeKey(parts[2]), true
+	return actionRuntimeKey(decodeSourceSegment(parts[len(parts)-2])), true
 }
 
 func ciServicePort(source, value string) (service string, port int, ok bool) {
 	if !strings.HasPrefix(source, "ci_service__") || !strings.HasSuffix(source, "__host_port") {
 		return "", 0, false
 	}
-	parts := strings.Split(strings.TrimPrefix(source, "ci_service__"), "__")
-	if len(parts) != 3 {
+	rest := strings.TrimSuffix(strings.TrimPrefix(source, "ci_service__"), "__host_port")
+	idx := strings.LastIndex(rest, "__")
+	if idx == -1 {
 		return "", 0, false
 	}
 	p, err := strconv.Atoi(value)
 	if err != nil || p <= 0 {
 		return "", 0, false
 	}
-	return parts[1], p, true
+	return decodeSourceSegment(rest[idx+2:]), p, true
 }
 
 func actionRuntimeKey(action string) string {
@@ -336,6 +400,8 @@ func actionRuntimeKey(action string) string {
 		return "setup-go"
 	case "setup_ruby":
 		return "setup-ruby"
+	case "setup_dotnet":
+		return "setup-dotnet"
 	}
 	return action
 }
@@ -345,13 +411,15 @@ func extractLocalRuntimes(runtimeEvs map[string]string) map[string]string {
 	for src, val := range runtimeEvs {
 		switch src {
 		case ".nvmrc":
-			result["setup-node"] = normalizeVersion(strings.TrimPrefix(val, "node "))
+			result["setup-node"] = strings.TrimSpace(strings.TrimPrefix(val, "node "))
 		case ".python-version":
-			result["setup-python"] = normalizeVersion(strings.TrimPrefix(val, "python "))
+			result["setup-python"] = strings.TrimSpace(strings.TrimPrefix(val, "python "))
 		case "go.mod":
-			result["setup-go"] = normalizeVersion(strings.TrimPrefix(val, "go "))
+			result["setup-go"] = strings.TrimSpace(strings.TrimPrefix(val, "go "))
 		case ".ruby-version":
-			result["setup-ruby"] = normalizeVersion(strings.TrimPrefix(val, "ruby "))
+			result["setup-ruby"] = strings.TrimSpace(strings.TrimPrefix(val, "ruby "))
+		case "global.json":
+			result["setup-dotnet"] = strings.TrimSpace(strings.TrimPrefix(val, "dotnet "))
 		case "package.json":
 			if strings.Contains(val, "engines:") {
 				engines := strings.TrimPrefix(val, "engines: ")
@@ -363,7 +431,7 @@ func extractLocalRuntimes(runtimeEvs map[string]string) map[string]string {
 						if len(ep) == 2 {
 							ver := strings.Trim(strings.TrimSpace(ep[1]), `"`)
 							if ver != "" {
-								result["setup-node"] = normalizeVersion(ver)
+								result["setup-node"] = ver
 							}
 						}
 					}
@@ -372,4 +440,269 @@ func extractLocalRuntimes(runtimeEvs map[string]string) map[string]string {
 		}
 	}
 	return result
+}
+
+func decodeSourceSegment(s string) string {
+	return strings.ReplaceAll(s, "%5F%5F", "__")
+}
+
+func isOpaqueCIValue(value string) bool {
+	return strings.Contains(value, "${{")
+}
+
+func collectCIRunCommands(evidence []schema.Evidence) []schema.Evidence {
+	var commands []schema.Evidence
+	for _, ev := range evidence {
+		if strings.HasPrefix(ev.Source, "ci_run__") {
+			commands = append(commands, ev)
+		}
+	}
+	return commands
+}
+
+func collectRepoCommands(evidence []schema.Evidence) []schema.Evidence {
+	var commands []schema.Evidence
+	for _, ev := range evidence {
+		if strings.HasPrefix(ev.Source, "repo_command__") {
+			commands = append(commands, ev)
+		}
+	}
+	return commands
+}
+
+func collectRepoPackageManager(evidence []schema.Evidence) string {
+	for _, ev := range evidence {
+		if ev.Source == "repo_package_manager" {
+			return ev.Value
+		}
+	}
+	return ""
+}
+
+func commandPackageManager(command string) string {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return ""
+	}
+	switch fields[0] {
+	case "npm", "pnpm", "yarn", "bun":
+		return fields[0]
+	default:
+		return ""
+	}
+}
+
+func packageManagerName(pm string) string {
+	if idx := strings.Index(pm, "@"); idx != -1 {
+		return pm[:idx]
+	}
+	return pm
+}
+
+func localCommandMatches(command string, localCommands []schema.Evidence) bool {
+	normalized := normalizeCommand(command)
+	for _, ev := range localCommands {
+		if normalizeCommand(ev.Value) == normalized {
+			return true
+		}
+	}
+	return false
+}
+
+func localCommandWithSameArgs(command string, localCommands []schema.Evidence) bool {
+	targetArgs := commandWithoutPackageManager(command)
+	if targetArgs == "" {
+		return false
+	}
+	for _, ev := range localCommands {
+		if commandWithoutPackageManager(ev.Value) == targetArgs {
+			return true
+		}
+	}
+	return false
+}
+
+func commandWithoutPackageManager(command string) string {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return ""
+	}
+	if commandPackageManager(command) == "" {
+		return normalizeCommand(command)
+	}
+	return strings.Join(fields[1:], " ")
+}
+
+func normalizeCommand(command string) string {
+	return strings.Join(strings.Fields(command), " ")
+}
+
+type m8ServiceSpec struct {
+	Name           string
+	Image          string
+	HostPorts      map[int]bool
+	ContainerPorts map[int]bool
+	Evidence       []schema.Evidence
+}
+
+func collectCIServices(evidence []schema.Evidence) map[string]m8ServiceSpec {
+	services := make(map[string]m8ServiceSpec)
+	for _, ev := range evidence {
+		name, field, ok := parseServiceEvidenceSource(ev.Source, "ci_service__")
+		if !ok {
+			continue
+		}
+		spec := services[name]
+		if spec.Name == "" {
+			spec = newM8ServiceSpec(name)
+		}
+		applyServiceEvidence(&spec, field, ev)
+		services[name] = spec
+	}
+	return services
+}
+
+func collectComposeServices(evidence []schema.Evidence) map[string]m8ServiceSpec {
+	services := make(map[string]m8ServiceSpec)
+	for _, ev := range evidence {
+		name, field, ok := parseServiceEvidenceSource(ev.Source, "compose_service__")
+		if !ok {
+			continue
+		}
+		spec := services[name]
+		if spec.Name == "" {
+			spec = newM8ServiceSpec(name)
+		}
+		applyServiceEvidence(&spec, field, ev)
+		services[name] = spec
+	}
+	return services
+}
+
+func newM8ServiceSpec(name string) m8ServiceSpec {
+	return m8ServiceSpec{
+		Name:           name,
+		HostPorts:      make(map[int]bool),
+		ContainerPorts: make(map[int]bool),
+	}
+}
+
+func parseServiceEvidenceSource(source, prefix string) (name, field string, ok bool) {
+	if !strings.HasPrefix(source, prefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(source, prefix)
+	idx := strings.LastIndex(rest, "__")
+	if idx == -1 {
+		return "", "", false
+	}
+	return decodeSourceSegment(rest[:idx]), rest[idx+2:], true
+}
+
+func applyServiceEvidence(spec *m8ServiceSpec, field string, ev schema.Evidence) {
+	spec.Evidence = append(spec.Evidence, ev)
+	switch field {
+	case "image":
+		spec.Image = strings.TrimSpace(ev.Value)
+	case "host_port":
+		if port, ok := parsePortInt(ev.Value); ok {
+			spec.HostPorts[port] = true
+		}
+	case "container_port":
+		if port, ok := parsePortInt(ev.Value); ok {
+			spec.ContainerPorts[port] = true
+		}
+	}
+}
+
+func parsePortInt(value string) (int, bool) {
+	value = strings.TrimSpace(value)
+	value = strings.SplitN(value, "/", 2)[0]
+	port, err := strconv.Atoi(value)
+	return port, err == nil && port > 0
+}
+
+func legacyComposePortMatch(ciService m8ServiceSpec, composePorts map[int]bool) bool {
+	for port := range ciService.HostPorts {
+		if composePorts[port] {
+			return true
+		}
+	}
+	return false
+}
+
+func serviceMismatch(ciService, composeService m8ServiceSpec) bool {
+	if ciService.Image != "" && composeService.Image != "" && normalizeContainerImage(ciService.Image) != normalizeContainerImage(composeService.Image) {
+		return true
+	}
+	if len(ciService.HostPorts) > 0 && len(composeService.HostPorts) > 0 && !portsOverlap(ciService.HostPorts, composeService.HostPorts) {
+		return true
+	}
+	if len(ciService.ContainerPorts) > 0 && len(composeService.ContainerPorts) > 0 && !portsOverlap(ciService.ContainerPorts, composeService.ContainerPorts) {
+		return true
+	}
+	return false
+}
+
+func portsOverlap(left, right map[int]bool) bool {
+	for port := range left {
+		if right[port] {
+			return true
+		}
+	}
+	return false
+}
+
+func envKeysFromEvidence(value string) []string {
+	if !strings.HasPrefix(value, "keys: ") {
+		return nil
+	}
+	raw := strings.TrimPrefix(value, "keys: ")
+	parts := strings.Split(raw, ",")
+	keys := make([]string, 0, len(parts))
+	for _, part := range parts {
+		key := strings.TrimSpace(part)
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func isIgnoredCIEnv(key, value string) bool {
+	if key == "" {
+		return true
+	}
+	if key == "CI" || key == "GITHUB_TOKEN" {
+		return true
+	}
+	if strings.HasPrefix(key, "GITHUB_") || strings.HasPrefix(key, "RUNNER_") || strings.HasPrefix(key, "ACTIONS_") {
+		return true
+	}
+	value = strings.TrimSpace(value)
+	return strings.HasPrefix(value, "${{ github.") || strings.HasPrefix(value, "${{ runner.") || strings.HasPrefix(value, "${{ env.")
+}
+
+func normalizeContainerImage(image string) string {
+	image = strings.TrimSpace(strings.ToLower(image))
+	if image == "" {
+		return ""
+	}
+	if idx := strings.Index(image, "@"); idx != -1 {
+		image = image[:idx]
+	}
+	if !strings.Contains(image, ":") || strings.LastIndex(image, ":") < strings.LastIndex(image, "/") {
+		image += ":latest"
+	}
+	parts := strings.Split(image, "/")
+	if len(parts) == 1 {
+		return "docker.io/library/" + parts[0]
+	}
+	if len(parts) == 2 && !strings.Contains(parts[0], ".") && !strings.Contains(parts[0], ":") && parts[0] != "localhost" {
+		return "docker.io/" + image
+	}
+	if strings.HasPrefix(image, "index.docker.io/") {
+		image = strings.TrimPrefix(image, "index.")
+	}
+	return image
 }
