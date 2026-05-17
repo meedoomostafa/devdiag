@@ -72,6 +72,27 @@ func TestCollector_PackageManager(t *testing.T) {
 	}
 }
 
+func TestCollector_GlobalJSONDotnetSDK(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "global.json"), []byte(`{"sdk":{"version":"8.0.204"}}`), 0644)
+
+	c := &Collector{Root: dir}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+
+	var found bool
+	for _, ev := range res.Evidence {
+		if ev.Source == "global.json" && ev.Value == "dotnet 8.0.204" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected global.json dotnet evidence, got: %v", res.Evidence)
+	}
+}
+
 func TestCollector_NoRuntimeFiles(t *testing.T) {
 	dir := t.TempDir()
 	c := &Collector{Root: dir}

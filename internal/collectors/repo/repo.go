@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -37,6 +38,7 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	if fileExists(filepath.Join(root, "package.json")) {
 		signals = append(signals, "nodejs")
 		evidence = append(evidence, schema.Evidence{Source: "package.json", Value: "Node.js project detected"})
+		evidence = append(evidence, packageJSONEvidence(filepath.Join(root, "package.json"))...)
 	}
 	if fileExists(filepath.Join(root, "Cargo.toml")) {
 		signals = append(signals, "rust")
@@ -86,6 +88,9 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		signals = append(signals, "workspace")
 		evidence = append(evidence, schema.Evidence{Source: "workspace", Value: "Workspace/monorepo detected"})
 	}
+
+	evidence = append(evidence, localCISimulatorEvidence(root)...)
+	evidence = append(evidence, localCommandEvidence(root)...)
 
 	// Devcontainer image extraction
 	devcontainerPath := filepath.Join(root, ".devcontainer", "devcontainer.json")
@@ -175,6 +180,129 @@ func parseDevcontainerImage(path string) string {
 		return ""
 	}
 	return cfg.Image
+}
+
+func packageJSONEvidence(path string) []schema.Evidence {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var pkg struct {
+		PackageManager string            `json:"packageManager"`
+		Scripts        map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return nil
+	}
+	var ev []schema.Evidence
+	pmName := packageManagerName(pkg.PackageManager)
+	if pkg.PackageManager != "" {
+		ev = append(ev, schema.Evidence{Source: "repo_package_manager", Value: pkg.PackageManager})
+	}
+	if pmName == "" {
+		pmName = inferPackageManagerFromFiles(filepath.Dir(path))
+	}
+	for name := range pkg.Scripts {
+		ev = append(ev, schema.Evidence{
+			Source: "repo_command__package_json__" + sanitizeSource(name),
+			Value:  strings.TrimSpace(pmName + " " + name),
+		})
+	}
+	return ev
+}
+
+func localCISimulatorEvidence(root string) []schema.Evidence {
+	var ev []schema.Evidence
+	if fileExists(filepath.Join(root, ".actrc")) {
+		ev = append(ev, schema.Evidence{Source: "local_ci_simulator", Value: "act"})
+	}
+	if fileExists(filepath.Join(root, "wrkflw.toml")) || fileExists(filepath.Join(root, ".wrkflw.yml")) || fileExists(filepath.Join(root, ".wrkflw.yaml")) {
+		ev = append(ev, schema.Evidence{Source: "local_ci_simulator", Value: "wrkflw"})
+	}
+	return ev
+}
+
+func localCommandEvidence(root string) []schema.Evidence {
+	var ev []schema.Evidence
+	ev = append(ev, targetCommandEvidence(filepath.Join(root, "Makefile"), "repo_command__makefile__", "make")...)
+	ev = append(ev, targetCommandEvidence(filepath.Join(root, "Taskfile.yml"), "repo_command__taskfile__", "task")...)
+	ev = append(ev, targetCommandEvidence(filepath.Join(root, "Taskfile.yaml"), "repo_command__taskfile__", "task")...)
+	ev = append(ev, targetCommandEvidence(filepath.Join(root, "justfile"), "repo_command__justfile__", "just")...)
+	ev = append(ev, readmeCommandEvidence(filepath.Join(root, "README.md"))...)
+	return ev
+}
+
+var targetRe = regexp.MustCompile(`(?m)^\s*([A-Za-z0-9_.-]+)\s*:`)
+
+func targetCommandEvidence(path, sourcePrefix, command string) []schema.Evidence {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var ev []schema.Evidence
+	matches := targetRe.FindAllStringSubmatch(string(data), -1)
+	for _, m := range matches {
+		name := m[1]
+		if name == "tasks" || name == "cmds" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		ev = append(ev, schema.Evidence{
+			Source: sourcePrefix + sanitizeSource(name),
+			Value:  command + " " + name,
+		})
+	}
+	return ev
+}
+
+var readmeCommandRe = regexp.MustCompile("`((?:npm|pnpm|yarn|bun|make|task|just) [^`]+)`")
+
+func readmeCommandEvidence(path string) []schema.Evidence {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var ev []schema.Evidence
+	matches := readmeCommandRe.FindAllStringSubmatch(string(data), -1)
+	for _, m := range matches {
+		cmd := strings.TrimSpace(m[1])
+		ev = append(ev, schema.Evidence{
+			Source: "repo_command__readme__" + sanitizeSource(cmd),
+			Value:  cmd,
+		})
+	}
+	return ev
+}
+
+func packageManagerName(pm string) string {
+	if idx := strings.Index(pm, "@"); idx != -1 {
+		return pm[:idx]
+	}
+	return pm
+}
+
+func inferPackageManagerFromFiles(root string) string {
+	switch {
+	case fileExists(filepath.Join(root, "pnpm-lock.yaml")):
+		return "pnpm"
+	case fileExists(filepath.Join(root, "yarn.lock")):
+		return "yarn"
+	case fileExists(filepath.Join(root, "bun.lock")) || fileExists(filepath.Join(root, "bun.lockb")):
+		return "bun"
+	default:
+		return "npm"
+	}
+}
+
+func sanitizeSource(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }
 
 func fileExists(path string) bool {

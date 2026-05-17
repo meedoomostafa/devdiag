@@ -15,6 +15,7 @@ func TestCollector_Name(t *testing.T) {
 }
 
 func TestCollector_Collect(t *testing.T) {
+	t.Setenv("SHELL", "/usr/bin/zsh")
 	c := &Collector{}
 	ctx := context.Background()
 	res, err := c.Collect(ctx)
@@ -28,6 +29,7 @@ func TestCollector_Collect(t *testing.T) {
 	// Should have at least host_goos and host_arch evidence
 	hasGoos := false
 	hasArch := false
+	hasShell := false
 	for _, ev := range res.Evidence {
 		if ev.Source == "host_goos" {
 			hasGoos = true
@@ -35,12 +37,18 @@ func TestCollector_Collect(t *testing.T) {
 		if ev.Source == "host_arch" {
 			hasArch = true
 		}
+		if ev.Source == "host_shell" && ev.Value == "zsh" {
+			hasShell = true
+		}
 	}
 	if !hasGoos {
 		t.Error("missing host_goos evidence")
 	}
 	if !hasArch {
 		t.Error("missing host_arch evidence")
+	}
+	if !hasShell {
+		t.Error("missing host_shell evidence")
 	}
 }
 
