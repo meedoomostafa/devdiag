@@ -1,0 +1,725 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/meedoomostafa/devdiag/internal/exitcode"
+	"github.com/meedoomostafa/devdiag/internal/redact"
+	"github.com/meedoomostafa/devdiag/internal/remote/inject"
+	"github.com/meedoomostafa/devdiag/internal/remote/profile"
+	"github.com/meedoomostafa/devdiag/internal/remote/render"
+	"github.com/meedoomostafa/devdiag/internal/remote/session"
+	"github.com/meedoomostafa/devdiag/internal/remote/target"
+	"github.com/meedoomostafa/devdiag/internal/remote/transport"
+	containertransport "github.com/meedoomostafa/devdiag/internal/remote/transport/container"
+	sshtransport "github.com/meedoomostafa/devdiag/internal/remote/transport/ssh"
+	"github.com/meedoomostafa/devdiag/internal/schema"
+	"github.com/meedoomostafa/devdiag/internal/version"
+)
+
+var (
+	flagRemoteProfile string
+	flagRemoteSession string
+	flagRemoteKeep    bool
+	flagRemoteCleanup string
+	flagRemoteDryRun  bool
+	flagRemoteAll     bool
+)
+
+var remoteCmd = &cobra.Command{
+	Use:   "remote",
+	Short: "Remote environment sync for SSH, containers, and Kubernetes",
+	Long: `Remote environment sync temporarily injects a safe, minimal developer environment
+into SSH hosts, containers, or Kubernetes pods.
+
+By default DevDiag does not overwrite dotfiles, does not require root, and writes
+a manifest so every created file can be cleaned up later.`,
+}
+
+var remoteDoctorCmd = &cobra.Command{
+	Use:   "doctor <target>",
+	Short: "Diagnose whether remote sync can work on the target",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runRemoteDoctor,
+}
+
+var remoteSyncCmd = &cobra.Command{
+	Use:   "sync <target>",
+	Short: "Inject a remote profile without opening an interactive shell",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runRemoteSync,
+}
+
+var remoteEnterCmd = &cobra.Command{
+	Use:   "enter <target>",
+	Short: "Inject a remote profile and open an interactive shell",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runRemoteEnter,
+}
+
+var remoteCleanCmd = &cobra.Command{
+	Use:   "clean <target>",
+	Short: "Clean up DevDiag-managed files on the remote target",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runRemoteClean,
+}
+
+var remoteStatusCmd = &cobra.Command{
+	Use:   "status <target>",
+	Short: "Show remote sync status for the target",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runRemoteStatus,
+}
+
+func init() {
+	remoteCmd.PersistentFlags().StringVar(&flagRemoteProfile, "profile", "minimal", "Remote profile to inject: minimal")
+	remoteCmd.PersistentFlags().StringVar(&flagRemoteSession, "session", "", "Session ID for targeted operations")
+	remoteCmd.PersistentFlags().BoolVar(&flagRemoteDryRun, "dry-run", false, "Show planned operations without executing")
+	remoteCmd.PersistentFlags().BoolVar(&flagRemoteKeep, "keep", false, "Keep remote files after shell exits (enter only)")
+	remoteCmd.PersistentFlags().StringVar(&flagRemoteCleanup, "cleanup", "always", "Cleanup mode: always, never")
+	remoteCmd.PersistentFlags().BoolVar(&flagRemoteAll, "all", false, "Clean all sessions for the target")
+
+	remoteCmd.AddCommand(remoteDoctorCmd)
+	remoteCmd.AddCommand(remoteSyncCmd)
+	remoteCmd.AddCommand(remoteEnterCmd)
+	remoteCmd.AddCommand(remoteCleanCmd)
+	remoteCmd.AddCommand(remoteStatusCmd)
+	rootCmd.AddCommand(remoteCmd)
+}
+
+func runRemoteDoctor(cmd *cobra.Command, args []string) error {
+	logger := buildLogger()
+	redactEngine := buildRedactEngine()
+
+	t, err := target.Parse(args[0])
+	if err != nil {
+		return exitCodeError{code: exitcode.InvalidInput}
+	}
+
+	result := render.NewDoctorResult(t)
+	result.DevDiagVersion = version.Version
+	result.RedactionStatus = string(redactEngine.Level)
+
+	if flagRemoteDryRun {
+		result.Profile = flagRemoteProfile
+		result.Notes = append(result.Notes, "dry-run: no remote commands executed")
+		result.Status = "doctor"
+		return outputRemoteResult(result, redactEngine, cmd)
+	}
+
+	logger.Info("remote.doctor", fmt.Sprintf("probing %s", t.String()))
+
+	var probeResult *render.Finding
+	switch t.Kind {
+	case target.KindSSH:
+		tr := sshtransport.NewTransport(t, nil)
+		ctx, cancel := contextWithTimeout(cmd.Context(), 15)
+		defer cancel()
+		probe, err := tr.Probe(ctx)
+		if err != nil {
+			return exitCodeError{code: exitcode.InternalError}
+		}
+		probeResult = buildSSHProbeFindings(result, probe)
+	case target.KindContainer:
+		tr, err := containertransport.NewTransport(t)
+		if err != nil {
+			result.Notes = append(result.Notes, err.Error())
+			result.Findings = append(result.Findings, render.Finding{
+				ID: "F-REMOTE-007", Title: "Target container is not running", Severity: "high", Message: err.Error(),
+			})
+		} else {
+			ctx, cancel := contextWithTimeout(cmd.Context(), 15)
+			defer cancel()
+			probe, err := tr.Probe(ctx)
+			if err != nil {
+				return exitCodeError{code: exitcode.InternalError}
+			}
+			probeResult = buildContainerProbeFindings(result, probe)
+		}
+	case target.KindK8s:
+		result.Notes = append(result.Notes, "kubernetes doctor not yet implemented")
+	}
+
+	result.Profile = flagRemoteProfile
+	result.Status = "doctor"
+	if probeResult != nil {
+		result.Findings = append(result.Findings, *probeResult)
+	}
+
+	return outputRemoteResult(result, redactEngine, cmd)
+}
+
+func runRemoteSync(cmd *cobra.Command, args []string) error {
+	logger := buildLogger()
+	redactEngine := buildRedactEngine()
+
+	t, err := target.Parse(args[0])
+	if err != nil {
+		return exitCodeError{code: exitcode.InvalidInput}
+	}
+
+	// Validate profile
+	var p *profile.RemoteProfile
+	switch flagRemoteProfile {
+	case "minimal":
+		p = profile.Minimal()
+	default:
+		return exitCodeError{code: exitcode.InvalidInput}
+	}
+
+	sessionID := session.GenerateID()
+	p.SubstituteSessionID(sessionID)
+
+	var remoteDir string
+	if t.Kind == target.KindContainer {
+		remoteDir = session.ContainerRootDir(sessionID)
+	} else {
+		remoteDir = session.SSHRootDir(sessionID)
+	}
+
+	logger.Info("remote.sync", fmt.Sprintf("session=%s target=%s profile=%s", sessionID, t.String(), flagRemoteProfile))
+
+	// Stage profile locally
+	stageDir, stagedFiles, err := inject.Stage(p)
+	if err != nil {
+		return exitCodeError{code: exitcode.InternalError}
+	}
+	defer os.RemoveAll(stageDir)
+
+	var files []string
+	for _, f := range p.Files {
+		files = append(files, filepath.Join(remoteDir, f.TargetPath))
+	}
+
+	result := render.NewSyncResult(t, flagRemoteProfile, sessionID, remoteDir, files)
+	result.DevDiagVersion = version.Version
+	result.RedactionStatus = string(redactEngine.Level)
+
+	if flagRemoteDryRun {
+		result.Notes = append(result.Notes, "dry-run: no files uploaded")
+		return outputRemoteResult(result, redactEngine, cmd)
+	}
+
+	// Upload for SSH targets
+	manifest := &session.Manifest{
+		SchemaVersion:  "0.1",
+		DevDiagVersion: version.Version,
+		SessionID:      sessionID,
+		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+		Target:         *t,
+		Profile:        flagRemoteProfile,
+		Mode:           "temporary",
+		RootDir:        remoteDir,
+		Status:         "active",
+	}
+	for _, f := range p.Files {
+		manifest.Files = append(manifest.Files, session.ManagedFile{
+			Path:    filepath.Join(remoteDir, f.TargetPath),
+			Mode:    f.Mode,
+			Created: true,
+		})
+	}
+
+	// Upload based on target kind
+	if t.Kind == target.KindSSH {
+		ctx, cancel := contextWithTimeout(cmd.Context(), 30)
+		defer cancel()
+		if err := inject.UploadTarStream(ctx, t, stageDir, remoteDir); err != nil {
+			logger.Error("remote.sync", fmt.Sprintf("upload failed: %v", err))
+			result.Status = "failed"
+			manifest.Status = "failed"
+			result.Notes = append(result.Notes, fmt.Sprintf("upload failed: %v", err))
+			return outputRemoteResult(result, redactEngine, cmd)
+		}
+		result.Notes = append(result.Notes, "upload completed")
+
+		// Write remote manifest
+		if err := writeRemoteManifest(ctx, t, manifest); err != nil {
+			logger.Warn("remote.sync", fmt.Sprintf("manifest write failed: %v", err))
+			result.Notes = append(result.Notes, fmt.Sprintf("manifest write failed: %v", err))
+		}
+	} else if t.Kind == target.KindContainer {
+		tr, err := containertransport.NewTransport(t)
+		if err != nil {
+			logger.Error("remote.sync", fmt.Sprintf("container transport failed: %v", err))
+			result.Status = "failed"
+			manifest.Status = "failed"
+			result.Notes = append(result.Notes, fmt.Sprintf("container transport failed: %v", err))
+			return outputRemoteResult(result, redactEngine, cmd)
+		}
+		ctx, cancel := contextWithTimeout(cmd.Context(), 30)
+		defer cancel()
+		if err := tr.Upload(ctx, stageDir, remoteDir); err != nil {
+			logger.Error("remote.sync", fmt.Sprintf("upload failed: %v", err))
+			result.Status = "failed"
+			manifest.Status = "failed"
+			result.Notes = append(result.Notes, fmt.Sprintf("upload failed: %v", err))
+			return outputRemoteResult(result, redactEngine, cmd)
+		}
+		result.Notes = append(result.Notes, "upload completed")
+
+		// Write remote manifest via container exec
+		data, _ := json.MarshalIndent(manifest, "", "  ")
+		res, err := tr.Run(ctx, transport.RemoteCommand{
+			Args:  []string{"sh", "-lc", "cat > '" + filepath.Join(remoteDir, "manifest.json") + "'"},
+			Stdin: data,
+		})
+		if err != nil || res.ExitCode != 0 {
+			logger.Warn("remote.sync", fmt.Sprintf("manifest write failed: %v", err))
+			result.Notes = append(result.Notes, fmt.Sprintf("manifest write failed: %v", err))
+		}
+	} else {
+		result.Notes = append(result.Notes, fmt.Sprintf("upload for %s not yet implemented", t.Kind))
+	}
+
+	// Write local session cache
+	if err := session.WriteCache(manifest); err != nil {
+		logger.Warn("remote.sync", fmt.Sprintf("cache write failed: %v", err))
+	}
+	_ = stagedFiles
+	return outputRemoteResult(result, redactEngine, cmd)
+}
+
+func runRemoteEnter(cmd *cobra.Command, args []string) error {
+	logger := buildLogger()
+	redactEngine := buildRedactEngine()
+
+	t, err := target.Parse(args[0])
+	if err != nil {
+		return exitCodeError{code: exitcode.InvalidInput}
+	}
+
+	var p *profile.RemoteProfile
+	switch flagRemoteProfile {
+	case "minimal":
+		p = profile.Minimal()
+	default:
+		return exitCodeError{code: exitcode.InvalidInput}
+	}
+
+	sessionID := session.GenerateID()
+	p.SubstituteSessionID(sessionID)
+
+	var remoteDir string
+	if t.Kind == target.KindContainer {
+		remoteDir = session.ContainerRootDir(sessionID)
+	} else {
+		remoteDir = session.SSHRootDir(sessionID)
+	}
+
+	logger.Info("remote.enter", fmt.Sprintf("session=%s target=%s profile=%s", sessionID, t.String(), flagRemoteProfile))
+
+	if flagRemoteDryRun {
+		if flagFormat == "json" || flagFormat == "ndjson" || flagFormat == "markdown" || flagFormat == "github" {
+			result := render.NewDoctorResult(t)
+			result.DevDiagVersion = version.Version
+			result.RedactionStatus = string(redactEngine.Level)
+			result.Status = "planned"
+			result.Profile = flagRemoteProfile
+			result.SessionID = sessionID
+			result.RemoteDir = remoteDir
+			result.CleanupCommand = fmt.Sprintf("devdiag remote clean %s --session %s", t.String(), sessionID)
+			result.Notes = append(result.Notes, "dry-run: no files uploaded and no interactive shell opened")
+			return outputRemoteResult(result, redactEngine, cmd)
+		}
+		fmt.Fprintf(os.Stderr, "dry-run: would stage profile, upload to %s, then open interactive shell\n", remoteDir)
+		fmt.Fprintf(os.Stderr, "Cleanup:\n  devdiag remote clean %s --session %s\n", t.String(), sessionID)
+		return nil
+	}
+
+	// Stage and upload profile
+	stageDir, _, err := inject.Stage(p)
+	if err != nil {
+		return exitCodeError{code: exitcode.InternalError}
+	}
+	defer os.RemoveAll(stageDir)
+
+	manifest := &session.Manifest{
+		SchemaVersion: "0.1", DevDiagVersion: version.Version, SessionID: sessionID,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339), Target: *t,
+		Profile: flagRemoteProfile, Mode: "temporary", RootDir: remoteDir, Status: "active",
+	}
+	for _, f := range p.Files {
+		manifest.Files = append(manifest.Files, session.ManagedFile{Path: filepath.Join(remoteDir, f.TargetPath), Mode: f.Mode, Created: true})
+	}
+
+	// Upload based on target kind
+	if t.Kind == target.KindSSH {
+		ctx, cancel := contextWithTimeout(cmd.Context(), 30)
+		defer cancel()
+		if err := inject.UploadTarStream(ctx, t, stageDir, remoteDir); err != nil {
+			logger.Error("remote.enter", fmt.Sprintf("upload failed: %v", err))
+			return exitCodeError{code: exitcode.ReproFailed}
+		}
+		if err := writeRemoteManifest(ctx, t, manifest); err != nil {
+			logger.Warn("remote.enter", fmt.Sprintf("manifest write failed: %v", err))
+		}
+	} else if t.Kind == target.KindContainer {
+		tr, err := containertransport.NewTransport(t)
+		if err != nil {
+			logger.Error("remote.enter", fmt.Sprintf("container transport failed: %v", err))
+			return exitCodeError{code: exitcode.ReproFailed}
+		}
+		ctx, cancel := contextWithTimeout(cmd.Context(), 30)
+		defer cancel()
+		if err := tr.Upload(ctx, stageDir, remoteDir); err != nil {
+			logger.Error("remote.enter", fmt.Sprintf("upload failed: %v", err))
+			return exitCodeError{code: exitcode.ReproFailed}
+		}
+		data, _ := json.MarshalIndent(manifest, "", "  ")
+		res, err := tr.Run(ctx, transport.RemoteCommand{
+			Args:  []string{"sh", "-lc", "cat > '" + filepath.Join(remoteDir, "manifest.json") + "'"},
+			Stdin: data,
+		})
+		if err != nil || res.ExitCode != 0 {
+			logger.Warn("remote.enter", fmt.Sprintf("manifest write failed: %v", err))
+		}
+	} else {
+		logger.Info("remote.enter", fmt.Sprintf("upload for %s not yet implemented in enter", t.Kind))
+	}
+	if err := session.WriteCache(manifest); err != nil {
+		logger.Warn("remote.enter", fmt.Sprintf("cache write failed: %v", err))
+	}
+
+	// Determine cleanup mode
+	cleanupMode := flagRemoteCleanup
+	if flagRemoteKeep {
+		cleanupMode = "never"
+	}
+
+	// Launch interactive shell
+	var enterErr error
+	var shellExitCode int
+	switch t.Kind {
+	case target.KindSSH:
+		tr := sshtransport.NewTransport(t, nil)
+		enterErr = tr.Enter(remoteDir)
+	case target.KindContainer:
+		tr, err := containertransport.NewTransport(t)
+		if err != nil {
+			enterErr = err
+		} else {
+			enterErr = tr.Enter(remoteDir)
+		}
+	default:
+		enterErr = fmt.Errorf("enter not supported for target kind %s", t.Kind)
+	}
+
+	if exitErr, ok := enterErr.(*exec.ExitError); ok {
+		shellExitCode = exitErr.ExitCode()
+	} else if enterErr != nil {
+		shellExitCode = 1
+	}
+
+	// Cleanup after exit
+	needsCleanup := cleanupMode == "always"
+	if needsCleanup && shellExitCode == 0 {
+		ctx, cancel := contextWithTimeout(context.Background(), 15)
+		defer cancel()
+		var tr transport.Transport
+		if t.Kind == target.KindSSH {
+			tr = sshtransport.NewTransport(t, nil)
+		} else if t.Kind == target.KindContainer {
+			tr, _ = containertransport.NewTransport(t)
+		}
+		if tr != nil {
+			if err := cleanManifest(ctx, tr, manifest); err != nil {
+				logger.Warn("remote.enter", fmt.Sprintf("cleanup failed: %v", err))
+				fmt.Fprintf(os.Stderr, "\nCleanup failed. Run manually:\n  devdiag remote clean %s --session %s\n", t.String(), sessionID)
+				needsCleanup = false
+			} else {
+				manifest.Status = "cleaned"
+				session.WriteCache(manifest)
+			}
+		}
+	}
+
+	if !needsCleanup || enterErr != nil {
+		fmt.Fprintf(os.Stderr, "\nCleanup:\n  devdiag remote clean %s --session %s\n", t.String(), sessionID)
+	}
+
+	if shellExitCode != 0 {
+		return exitCodeError{code: exitcode.ReproFailed}
+	}
+	return nil
+}
+
+func runRemoteClean(cmd *cobra.Command, args []string) error {
+	logger := buildLogger()
+	redactEngine := buildRedactEngine()
+
+	t, err := target.Parse(args[0])
+	if err != nil {
+		return exitCodeError{code: exitcode.InvalidInput}
+	}
+
+	logger.Info("remote.clean", fmt.Sprintf("target=%s session=%s", t.String(), flagRemoteSession))
+
+	result := render.NewDoctorResult(t)
+	result.DevDiagVersion = version.Version
+	result.RedactionStatus = string(redactEngine.Level)
+	result.Status = "cleaned"
+	result.SessionID = flagRemoteSession
+
+	// Read cached manifest: prefer session ID lookup if provided
+	var cached *session.Manifest
+	var cacheErr error
+	if flagRemoteSession != "" {
+		cached, cacheErr = session.ReadCacheBySessionID(flagRemoteSession)
+		if cacheErr != nil {
+			result.Notes = append(result.Notes, fmt.Sprintf("session %s not found", flagRemoteSession))
+			return outputRemoteResult(result, redactEngine, cmd)
+		}
+	} else {
+		cached, cacheErr = session.ReadCache(string(t.Kind), t.Raw)
+		if cacheErr != nil {
+			result.Notes = append(result.Notes, "no cached session found; nothing to clean")
+			return outputRemoteResult(result, redactEngine, cmd)
+		}
+	}
+
+	// Validate root dir
+	if err := session.ValidateRootDir(cached.RootDir, t.Kind); err != nil {
+		result.Status = "refused"
+		result.Findings = append(result.Findings, render.Finding{
+			ID: "F-REMOTE-005", Title: "Unsafe cleanup refused", Severity: "high", Message: err.Error(),
+		})
+		return outputRemoteResult(result, redactEngine, cmd)
+	}
+
+	if flagRemoteDryRun {
+		result.Notes = append(result.Notes, fmt.Sprintf("dry-run: would remove %d files from %s", len(cached.Files), cached.RootDir))
+		return outputRemoteResult(result, redactEngine, cmd)
+	}
+
+	// Perform cleanup via transport
+	var cleanErr error
+	switch t.Kind {
+	case target.KindSSH:
+		tr := sshtransport.NewTransport(t, nil)
+		ctx, cancel := contextWithTimeout(context.Background(), 30)
+		defer cancel()
+		cleanErr = cleanManifest(ctx, tr, cached)
+	case target.KindContainer:
+		tr, err := containertransport.NewTransport(t)
+		if err != nil {
+			cleanErr = err
+		} else {
+			ctx, cancel := contextWithTimeout(context.Background(), 30)
+			defer cancel()
+			cleanErr = cleanManifest(ctx, tr, cached)
+		}
+	}
+
+	if cleanErr != nil {
+		result.Status = "partial"
+		result.Findings = append(result.Findings, render.Finding{
+			ID: "F-REMOTE-010", Title: "Cleanup completed partially", Severity: "medium", Message: cleanErr.Error(),
+		})
+		result.Notes = append(result.Notes, fmt.Sprintf("cleanup error: %v", cleanErr))
+	} else {
+		result.Notes = append(result.Notes, fmt.Sprintf("removed %d files from %s", len(cached.Files), cached.RootDir))
+		cached.Status = "cleaned"
+		if err := session.WriteCache(cached); err != nil {
+			logger.Warn("remote.clean", fmt.Sprintf("cache update failed: %v", err))
+		}
+	}
+
+	result.CleanupCommand = fmt.Sprintf("devdiag remote clean %s --session %s", t.String(), cached.SessionID)
+	return outputRemoteResult(result, redactEngine, cmd)
+}
+
+func runRemoteStatus(cmd *cobra.Command, args []string) error {
+	logger := buildLogger()
+	redactEngine := buildRedactEngine()
+
+	t, err := target.Parse(args[0])
+	if err != nil {
+		return exitCodeError{code: exitcode.InvalidInput}
+	}
+
+	logger.Info("remote.status", fmt.Sprintf("target=%s", t.String()))
+
+	result := render.NewDoctorResult(t)
+	result.DevDiagVersion = version.Version
+	result.RedactionStatus = string(redactEngine.Level)
+	result.Status = "status"
+
+	// Read from local cache
+	cached, err := session.ReadCache(string(t.Kind), t.Raw)
+	if err != nil {
+		result.Notes = append(result.Notes, "no cached session found for target")
+	} else {
+		result.SessionID = cached.SessionID
+		result.RemoteDir = cached.RootDir
+		result.Profile = cached.Profile
+		result.Status = cached.Status
+		result.Notes = append(result.Notes, fmt.Sprintf("cached session: %s", cached.SessionID))
+		result.Notes = append(result.Notes, fmt.Sprintf("profile: %s", cached.Profile))
+		result.Notes = append(result.Notes, fmt.Sprintf("mode: %s", cached.Mode))
+		result.Notes = append(result.Notes, fmt.Sprintf("files managed: %d", len(cached.Files)))
+	}
+
+	return outputRemoteResult(result, redactEngine, cmd)
+}
+
+// outputRemoteResult renders the result respecting format and redaction.
+func outputRemoteResult(result *render.RemoteResult, redactEngine *redact.Engine, cmd *cobra.Command) error {
+	// Apply redaction to notes
+	for i := range result.Notes {
+		result.Notes[i] = redactEngine.RedactString(result.Notes[i], "remote_note")
+	}
+	for i := range result.Findings {
+		result.Findings[i].Message = redactEngine.RedactString(result.Findings[i].Message, "remote_finding")
+	}
+
+	if flagFormat == "json" || flagFormat == "ndjson" || flagFormat == "markdown" || flagFormat == "github" {
+		return render.Render(result, flagFormat, cmd.OutOrStdout())
+	}
+	return render.Render(result, "human", cmd.OutOrStdout())
+}
+
+func cleanManifest(ctx context.Context, tr transport.Transport, manifest *session.Manifest) error {
+	if err := session.ValidateRootDir(manifest.RootDir, manifest.Target.Kind); err != nil {
+		return err
+	}
+	var lastErr error
+	for _, f := range manifest.Files {
+		if err := session.ValidateManagedPath(manifest.RootDir, f.Path); err != nil {
+			lastErr = err
+			continue
+		}
+		res, err := tr.Run(ctx, transport.RemoteCommand{
+			Args: []string{"rm", "-f", f.Path},
+		})
+		if err != nil {
+			lastErr = err
+		} else if res.ExitCode != 0 {
+			lastErr = fmt.Errorf("rm %s failed: %s", f.Path, res.Stderr)
+		}
+	}
+	// Remove empty directories bottom-up
+	rootDir := session.ShellPath(manifest.RootDir)
+	res, err := tr.Run(ctx, transport.RemoteCommand{
+		Args: []string{"sh", "-lc", "cd " + rootDir + " 2>/dev/null && rmdir $(find . -type d -empty | sort -r) 2>/dev/null || true"},
+	})
+	if err != nil {
+		lastErr = err
+	} else if res.ExitCode != 0 {
+		// Non-zero is fine for rmdir on non-empty dirs
+	}
+	return lastErr
+}
+
+func writeRemoteManifest(ctx context.Context, t *target.Target, manifest *session.Manifest) error {
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	tr := sshtransport.NewTransport(t, nil)
+	remotePath := session.ShellPath(filepath.Join(manifest.RootDir, "manifest.json"))
+	// Write manifest using cat over ssh
+	res, err := tr.Run(ctx, transport.RemoteCommand{
+		Args:  []string{"sh", "-lc", "cat > " + remotePath},
+		Stdin: data,
+	})
+	if err != nil {
+		return err
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("remote manifest write failed: %s", res.Stderr)
+	}
+	return nil
+}
+
+func contextWithTimeout(parent context.Context, seconds time.Duration) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, seconds*time.Second)
+}
+
+func buildSSHProbeFindings(result *render.RemoteResult, probe *transport.RemoteProbeResult) *render.Finding {
+	if !probe.Reachable {
+		return &render.Finding{
+			ID:       "F-REMOTE-001",
+			Title:    "Remote target unreachable",
+			Severity: "high",
+			Message:  probe.Error,
+		}
+	}
+	if !probe.HomeWritable {
+		return &render.Finding{
+			ID:       "F-REMOTE-002",
+			Title:    "Remote home directory not writable",
+			Severity: "high",
+			Message:  fmt.Sprintf("home=%s is not writable; remote sync cannot inject profile", probe.Home),
+		}
+	}
+	if probe.Shell == "" {
+		return &render.Finding{
+			ID:       "F-REMOTE-003",
+			Title:    "No supported remote shell found",
+			Severity: "high",
+			Message:  "no supported shell detected on remote target",
+		}
+	}
+	if !probe.HasTar {
+		return &render.Finding{
+			ID:       "F-REMOTE-004",
+			Title:    "Required upload method unavailable",
+			Severity: "medium",
+			Message:  "tar not available on remote; upload will use fallback methods",
+		}
+	}
+	return nil
+}
+
+func buildContainerProbeFindings(result *render.RemoteResult, probe *transport.RemoteProbeResult) *render.Finding {
+	if !probe.Reachable {
+		return &render.Finding{
+			ID:       "F-REMOTE-007",
+			Title:    "Target container is not running",
+			Severity: "high",
+			Message:  probe.Error,
+		}
+	}
+	if !probe.HomeWritable {
+		return &render.Finding{
+			ID:       "F-REMOTE-006",
+			Title:    "Remote filesystem is read-only",
+			Severity: "high",
+			Message:  "container filesystem appears read-only; temporary remote sync cannot inject profile",
+		}
+	}
+	// Shell detection: $SHELL may be unset in minimal containers; fall back to Tools map.
+	hasShell := probe.Shell != "" || probe.Tools["sh"] || probe.Tools["bash"] || probe.Tools["zsh"] || probe.Tools["fish"]
+	if !hasShell {
+		return &render.Finding{
+			ID:       "F-REMOTE-003",
+			Title:    "No supported remote shell found",
+			Severity: "high",
+			Message:  "no supported shell detected in container",
+		}
+	}
+	if !probe.HasTar {
+		return &render.Finding{
+			ID:       "F-REMOTE-004",
+			Title:    "Required upload method unavailable",
+			Severity: "medium",
+			Message:  "tar not available in container; upload will use fallback methods",
+		}
+	}
+	return nil
+}
+
+// unused import placeholder to avoid compile errors during development.
+var _ = schema.SeverityInfo

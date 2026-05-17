@@ -20,9 +20,20 @@ func TestResolveColorMode_ColorAlwaysWinsOverAuto(t *testing.T) {
 }
 
 func TestResolveColorMode_DefaultIsAuto(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+
 	mode := ResolveColorMode("auto", false)
 	if mode != ColorAuto {
 		t.Errorf("ResolveColorMode(auto) = %v, want auto", mode)
+	}
+}
+
+func TestResolveColorMode_NoColorEnv(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+
+	mode := ResolveColorMode("auto", false)
+	if mode != ColorNever {
+		t.Errorf("ResolveColorMode(auto) with NO_COLOR = %v, want never", mode)
 	}
 }
 

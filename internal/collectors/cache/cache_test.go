@@ -231,6 +231,8 @@ func TestCollectorNPMWithoutPackageJSON(t *testing.T) {
 }
 
 func TestCollectorGoConditional(t *testing.T) {
+	t.Setenv("GOCACHE", "")
+
 	home := t.TempDir()
 	repo := t.TempDir()
 	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module test"), 0644); err != nil {
