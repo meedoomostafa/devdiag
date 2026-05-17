@@ -201,6 +201,30 @@ func TestM8Engine_ServiceImageMismatch(t *testing.T) {
 	assertFindingM8(t, findings, "F-CI-SERVICE-001")
 }
 
+func TestM8Engine_ServiceMatchIgnoresCIJobSegment(t *testing.T) {
+	e := NewM8Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_service__test__postgres__image", Value: "postgres:15"},
+				{Source: "ci_service__test__postgres__host_port", Value: "5432"},
+				{Source: "ci_service__test__postgres__container_port", Value: "5432"},
+			}},
+			{Name: "compose", Evidence: []schema.Evidence{
+				{Source: "compose_service__postgres__image", Value: "postgres:15"},
+				{Source: "compose_service__postgres__host_port", Value: "5432"},
+				{Source: "compose_service__postgres__container_port", Value: "5432"},
+			}},
+		},
+	}
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoFindingM8(t, findings, "F-CI-SERVICE-001")
+	assertNoFindingM8(t, findings, "F-CI-SERVICE-002")
+}
+
 func TestM8Engine_ComposeServiceMissingInCI(t *testing.T) {
 	e := NewM8Engine()
 	snapshot := graph.NormalizedSnapshot{

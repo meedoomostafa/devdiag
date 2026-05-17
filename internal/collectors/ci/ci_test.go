@@ -344,7 +344,7 @@ variables:
 cache:
   key: node-cache
 test:
-  image: node:22
+  image: node:22-alpine
   services:
     - redis:7
   variables:
@@ -366,7 +366,7 @@ test:
 		"ci_env__workflow__API_KEY":                           "value",
 		"ci_env__job__test__JOB_KEY":                          "job-value",
 		"ci_container__workflow__image":                       "node:20",
-		"ci_container__test__image":                           "node:22",
+		"ci_container__test__image":                           "node:22-alpine",
 		"ci_service__test__redis__image":                      "redis:7",
 		"ci_run__test__0":                                     "npm ci",
 		"ci_run__test__1":                                     "npm test",
