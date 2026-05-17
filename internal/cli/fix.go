@@ -19,6 +19,7 @@ import (
 var (
 	fixRunID     string
 	fixApply     bool
+	fixDryRun    bool
 	fixFresh     bool
 	fixList      bool
 	fixTemplates bool
@@ -31,6 +32,11 @@ var fixCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 		colorMode := buildColorMode()
+
+		if fixDryRun && fixApply {
+			logger.Error("fix", "cannot use --dry-run with --apply")
+			return exitCodeError{code: exitcode.InvalidInput}
+		}
 
 		if fixList {
 			return runFixList(cmd, logger, colorMode)
@@ -106,7 +112,11 @@ func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger, colorM
 		}
 	}
 
-	return exitCodeError{code: exitCodeFromFixResults(true, blocked, false)}
+	code := exitCodeFromFixResults(true, blocked, false)
+	if code != exitcode.Success {
+		return exitCodeError{code: code}
+	}
+	return nil
 }
 
 func runFixList(cmd *cobra.Command, logger *logging.Logger, colorMode output.ColorMode) error {
@@ -133,7 +143,11 @@ func runFixList(cmd *cobra.Command, logger *logging.Logger, colorMode output.Col
 	if err := renderer.Render(proposals, cmd.OutOrStdout()); err != nil {
 		return err
 	}
-	return exitCodeError{code: exitCodeFromFixResults(true, false, false)}
+	code := exitCodeFromFixResults(true, false, false)
+	if code != exitcode.Success {
+		return exitCodeError{code: code}
+	}
+	return nil
 }
 
 func runFixTemplates(cmd *cobra.Command, logger *logging.Logger, colorMode output.ColorMode) error {
@@ -214,6 +228,7 @@ func isTTY() bool {
 func init() {
 	fixCmd.Flags().StringVar(&fixRunID, "run-id", "", "Run ID to use (defaults to latest)")
 	fixCmd.Flags().BoolVar(&fixApply, "apply", false, "Apply fix proposals")
+	fixCmd.Flags().BoolVar(&fixDryRun, "dry-run", false, "Show fix proposals without applying (default)")
 	fixCmd.Flags().BoolVar(&fixFresh, "fresh", false, "Force fresh validation before applying")
 	fixCmd.Flags().BoolVar(&fixList, "list", false, "List all fix proposals from report")
 	fixCmd.Flags().BoolVar(&fixTemplates, "templates", false, "List registry templates")

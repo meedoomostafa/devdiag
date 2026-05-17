@@ -40,16 +40,17 @@ then analyzes the trace output to produce diagnostic findings.`,
 			return exitCodeError{code: exitcode.InvalidInput}
 		}
 
-		// Check strace availability
-		if _, err := exec.LookPath("strace"); err != nil {
-			logger.Warn("trace", "strace not found; trace mode unavailable")
-			return exitCodeError{code: exitcode.TraceUnavailable}
-		}
-
 		scopes, err := trace.ParseScopes(flagTraceScope)
 		if err != nil {
 			logger.Warn("trace", err.Error())
 			return exitCodeError{code: exitcode.InvalidInput}
+		}
+
+		// Check strace availability after validating user input so malformed
+		// flags return the stable invalid-input exit code on every host.
+		if _, err := exec.LookPath("strace"); err != nil {
+			logger.Warn("trace", "strace not found; trace mode unavailable")
+			return exitCodeError{code: exitcode.TraceUnavailable}
 		}
 
 		command := args[0]

@@ -203,7 +203,5 @@ func init() {
 	checkCmd.AddCommand(checkNetworkCmd)
 	checkCmd.AddCommand(checkFilesystemCmd)
 	checkCmd.AddCommand(checkContainersCmd)
-	checkCmd.AddCommand(checkGPUCmd)
-	checkCmd.AddCommand(checkCacheCmd)
 	rootCmd.AddCommand(checkCmd)
 }

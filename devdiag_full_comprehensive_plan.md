@@ -60,6 +60,22 @@ But there is no dominant tool that joins all of these into one developer-facing 
 
 **DevDiag fills the gap by joining evidence across layers.**
 
+### 1.1 Internet Keyword Coverage Audit
+
+Current market and documentation signals confirm that DevDiag should deliberately cover these searchable problem clusters:
+
+- **Local development environment troubleshooting:** "works on my machine", environment drift, developer environment diagnostics, reproducible dev environments, project bootstrap failure.
+- **Docker Compose and Dev Containers:** Docker Compose environment variable precedence, Compose `develop`/watch workflows, service containers, `devcontainer.json`, bind mounts, health checks, profiles, and local service parity.
+- **Podman and rootless Linux containers:** Podman, rootless containers, Podman Compose, user namespace UID/GID mapping, SELinux labels, AppArmor profiles, and Docker-to-Podman drift.
+- **Nix-family and shell environment tools:** Nix, devenv, Devbox, direnv, `mise`, `asdf`, `pyenv`, `nvm`, `fnm`, SDKMAN, and version-manager shims.
+- **CI/local parity:** GitHub Actions local execution, `act`, `wrkflw`, runner image drift, matrix runtime drift, secrets unavailable locally, and Docker-backed local CI simulation.
+- **Service readiness and orchestration:** port conflicts, DNS/proxy/VPN drift, service readiness, Testcontainers-style dependency startup, `wait-for` tools, and host-to-container networking.
+- **GPU/AI developer diagnostics:** CUDA, NVIDIA driver, `nvidia-smi`, NVIDIA Container Toolkit, PyTorch, TensorFlow, JAX, CPU-only wheels, container GPU visibility, and cache ownership for ML stacks.
+- **Deep Linux evidence:** `strace`, syscall tracing, seccomp-bpf, eBPF, BTF/CO-RE, ptrace permissions, trace redaction, and opt-in overhead controls.
+- **Policy, safety, and sharing:** OPA/Rego, CUE validation, JSON/NDJSON output, redaction, local-only support capsule, dry-run fixes, guarded fixes, prompt-injection resistance, and AI-agent sandboxing.
+
+Sources checked in May 2026 include Docker Compose environment-variable and Compose Develop documentation, the Dev Container specification, Podman documentation, `act`/`wrkflw` local GitHub Actions projects, devenv and Devbox documentation, CUE documentation, OPA/Rego references, and the Linux `strace(1)` manual.
+
 ---
 
 ## 2. Product Scope
@@ -1549,7 +1565,7 @@ DevDiag must feel like a serious Linux tool: predictable, scriptable, readable, 
 devdiag scan [path]
 devdiag repro -- <cmd>
 devdiag check <domain>
-devdiag trace --scope file,exec,net -- <cmd>
+devdiag trace --scope file,process,network -- <cmd>
 devdiag fix <finding-id> --dry-run
 devdiag fix <finding-id> --apply
 devdiag capsule create
@@ -2181,7 +2197,7 @@ However, `strace -f` can heavily slow dependency-resolution and build commands b
 Command:
 
 ```bash
-devdiag trace --scope file,exec,net -- npm run dev
+devdiag trace --scope file,process,network -- npm run dev
 ```
 
 Preferred internal invocation:
@@ -2690,7 +2706,7 @@ Commands:
 
 ```bash
 devdiag trace --scope file -- npm run dev
-devdiag trace --scope file,exec,net -- python app.py
+devdiag trace --scope file,process,network -- python app.py
 ```
 
 Supported findings:
@@ -3160,4 +3176,3 @@ Once that is trusted, every other layer becomes natural.
 ## 25. One-Sentence Pitch
 
 **DevDiag is a Linux-first diagnostic CLI that correlates repo metadata, host state, containers, services, logs, and optional traces to explain broken developer environments with evidence and safe fixes.**
-

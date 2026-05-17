@@ -43,6 +43,17 @@ func runBinary(args ...string) (string, string, int) {
 	return stdout.String(), stderr.String(), cmd.ProcessState.ExitCode()
 }
 
+func runBinaryInDir(dir string, args ...string) (string, string, int) {
+	cmd := exec.Command(binaryPath, args...)
+	cmd.Dir = dir
+	cmd.Env = os.Environ()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Run()
+	return stdout.String(), stderr.String(), cmd.ProcessState.ExitCode()
+}
+
 func TestInvalidFormat_ReturnsExitCode2(t *testing.T) {
 	_, _, code := runBinary("scan", ".", "--format", "invalid")
 	if code != 2 {
@@ -121,6 +132,21 @@ func TestRulesList_JSON_ReturnsValidJSON(t *testing.T) {
 	}
 }
 
+func TestRulesList_JSON_ListsImplementedRules(t *testing.T) {
+	stdout, _, code := runBinary("rules", "list", "--format", "json")
+	if code != 0 {
+		t.Fatalf("unexpected exit code: %d", code)
+	}
+	if strings.Contains(stdout, "F-RULES-000") {
+		t.Fatalf("rules list still exposes placeholder rule: %s", stdout)
+	}
+	for _, id := range []string{"F-ENV-001", "F-RUNTIME-001", "F-PORT-001", "F-CI-RUNTIME-001", "F-GPU-001"} {
+		if !strings.Contains(stdout, id) {
+			t.Errorf("rules list missing %s", id)
+		}
+	}
+}
+
 func TestNDJSON_OneObjectPerLine(t *testing.T) {
 	stdout, _, code := runBinary("scan", "../..", "--format", "ndjson")
 	if code != 0 {
@@ -158,6 +184,53 @@ func TestDebugFlag_DoesNotBreakScan(t *testing.T) {
 	_, _, code := runBinary("scan", ".", "--debug")
 	if code != 0 {
 		t.Errorf("--debug scan exit code = %d, want 0", code)
+	}
+}
+
+func TestCheckHelp_DoesNotDuplicateSubcommands(t *testing.T) {
+	stdout, _, code := runBinary("check", "--help")
+	if code != 0 {
+		t.Fatalf("check --help exit code = %d, want 0", code)
+	}
+	for _, name := range []string{"cache", "gpu"} {
+		if got := strings.Count(stdout, "  "+name+"       "); got != 1 {
+			t.Errorf("check --help lists %q %d times, want 1\n%s", name, got, stdout)
+		}
+	}
+}
+
+func TestFixDryRunFlag_AcceptedForTemplates(t *testing.T) {
+	stdout, _, code := runBinary("fix", "--templates", "--dry-run", "--format", "json")
+	if code != 0 {
+		t.Fatalf("fix --templates --dry-run exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "warn-disk-cleanup") {
+		t.Errorf("fix --templates --dry-run output missing expected template: %s", stdout)
+	}
+}
+
+func TestFixDryRunFlag_ConflictsWithApply(t *testing.T) {
+	_, stderr, code := runBinary("fix", "F-DISK-001", "--dry-run", "--apply")
+	if code != 2 {
+		t.Fatalf("fix --dry-run --apply exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr, "cannot use --dry-run with --apply") {
+		t.Errorf("stderr missing dry-run/apply conflict message: %q", stderr)
+	}
+}
+
+func TestFixList_SuccessDoesNotPrintExitCodeZero(t *testing.T) {
+	dir := t.TempDir()
+	if _, stderr, code := runBinaryInDir(dir, "scan", ".", "--format", "json"); code != 0 {
+		t.Fatalf("scan in temp dir exit code = %d, stderr=%s", code, stderr)
+	}
+
+	_, stderr, code := runBinaryInDir(dir, "fix", "--list", "--format", "json")
+	if code != 0 {
+		t.Fatalf("fix --list exit code = %d, want 0, stderr=%s", code, stderr)
+	}
+	if strings.Contains(stderr, "exit code 0") {
+		t.Errorf("fix --list printed success as an error: %q", stderr)
 	}
 }
 
@@ -233,6 +306,11 @@ func TestExitCodeFromResults_MapsCorrectly(t *testing.T) {
 			want:       exitcode.CollectorPartial,
 		},
 		{
+			name:       "collector partial",
+			collectors: []schema.CollectorResult{{Status: schema.CollectorPartial}},
+			want:       exitcode.CollectorPartial,
+		},
+		{
 			name:       "collector permission denied",
 			collectors: []schema.CollectorResult{{Status: schema.CollectorPermissionDenied}},
 			want:       exitcode.PermissionDenied,
@@ -240,7 +318,7 @@ func TestExitCodeFromResults_MapsCorrectly(t *testing.T) {
 		{
 			name:       "collector unavailable",
 			collectors: []schema.CollectorResult{{Status: schema.CollectorUnavailable}},
-			want:       exitcode.CollectorPartial,
+			want:       exitcode.Success,
 		},
 		{
 			name:       "collector failed",
@@ -339,13 +417,7 @@ func TestTraceCommand_ExecutesTrue(t *testing.T) {
 }
 
 func TestTraceCommand_InvalidScope(t *testing.T) {
-	if _, err := exec.LookPath("strace"); err != nil {
-		t.Skip("strace not installed")
-	}
 	_, stderr, code := runBinary("trace", "--scope", "gpu", "--", "true")
-	if code == int(exitcode.TraceUnavailable) {
-		t.Skip("ptrace unavailable in this environment")
-	}
 	if code != 2 {
 		t.Errorf("expected exit code 2 for invalid scope, got %d", code)
 	}

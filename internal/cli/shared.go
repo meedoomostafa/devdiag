@@ -61,12 +61,12 @@ func exitCodeFromResults(findings []schema.Finding, collectors []schema.Collecto
 
 	for _, c := range collectors {
 		switch c.Status {
+		case schema.CollectorPartial:
+			return exitcode.CollectorPartial
 		case schema.CollectorTimeout:
 			return exitcode.CollectorPartial
 		case schema.CollectorPermissionDenied:
 			return exitcode.PermissionDenied
-		case schema.CollectorUnavailable:
-			return exitcode.CollectorPartial
 		case schema.CollectorFailed:
 			return exitcode.CollectorPartial
 		}
