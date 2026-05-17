@@ -216,6 +216,242 @@ jobs:
 	}
 }
 
+func TestCollector_EscapesDoubleUnderscoreSourceSegments(t *testing.T) {
+	dir := t.TempDir()
+	workflowDir := filepath.Join(dir, ".github", "workflows")
+	os.MkdirAll(workflowDir, 0755)
+	yaml := `name: CI
+on: push
+jobs:
+  build__prod:
+    runs-on: ubuntu-latest
+    env:
+      API__KEY: value
+    services:
+      postgres__primary:
+        image: postgres:15
+        ports:
+          - "5432:5432"
+    steps:
+      - run: npm test
+`
+	os.WriteFile(filepath.Join(workflowDir, "ci.yml"), []byte(yaml), 0644)
+
+	c := &Collector{Root: dir}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+
+	checks := map[string]string{
+		"ci_env__job__build%5F%5Fprod__API%5F%5FKEY":                    "value",
+		"ci_service__build%5F%5Fprod__postgres%5F%5Fprimary__host_port": "5432",
+	}
+	for source, value := range checks {
+		var found bool
+		for _, ev := range res.Evidence {
+			if ev.Source == source && ev.Value == value {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing expected evidence %s=%s in %v", source, value, res.Evidence)
+		}
+	}
+}
+
+func TestCollector_ExtractsSetupDotnetVersion(t *testing.T) {
+	dir := t.TempDir()
+	workflowDir := filepath.Join(dir, ".github", "workflows")
+	os.MkdirAll(workflowDir, 0755)
+	yaml := `name: CI
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+`
+	os.WriteFile(filepath.Join(workflowDir, "ci.yml"), []byte(yaml), 0644)
+
+	c := &Collector{Root: dir}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+
+	var found bool
+	for _, ev := range res.Evidence {
+		if strings.HasPrefix(ev.Source, "ci_setup__test__") && strings.Contains(ev.Source, "__setup_dotnet__dotnet_version") && ev.Value == "8.0.x" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected setup-dotnet version evidence, got: %v", res.Evidence)
+	}
+}
+
+func TestCollector_ExtractsMatrixRuntimeVersions(t *testing.T) {
+	dir := t.TempDir()
+	workflowDir := filepath.Join(dir, ".github", "workflows")
+	os.MkdirAll(workflowDir, 0755)
+	yaml := `name: CI
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+        dotnet: ['8.0.x']
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet }}
+`
+	os.WriteFile(filepath.Join(workflowDir, "ci.yml"), []byte(yaml), 0644)
+
+	c := &Collector{Root: dir}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+
+	values := map[string]bool{}
+	for _, ev := range res.Evidence {
+		if strings.Contains(ev.Source, "__setup_node__node_version") || strings.Contains(ev.Source, "__setup_dotnet__dotnet_version") {
+			values[ev.Value] = true
+		}
+	}
+	for _, want := range []string{"20", "22", "8.0.x"} {
+		if !values[want] {
+			t.Errorf("expected matrix runtime value %s, got %v", want, res.Evidence)
+		}
+	}
+}
+
+func TestCollector_ExtractsGitLabCIEvidence(t *testing.T) {
+	dir := t.TempDir()
+	yaml := `image: node:20
+variables:
+  API_KEY: value
+cache:
+  key: node-cache
+test:
+  image: node:22
+  services:
+    - redis:7
+  variables:
+    JOB_KEY: job-value
+  script:
+    - npm ci
+    - npm test
+`
+	os.WriteFile(filepath.Join(dir, ".gitlab-ci.yml"), []byte(yaml), 0644)
+
+	c := &Collector{Root: dir}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+
+	checks := map[string]string{
+		"ci_platform":                                         "gitlab",
+		"ci_env__workflow__API_KEY":                           "value",
+		"ci_env__job__test__JOB_KEY":                          "job-value",
+		"ci_container__workflow__image":                       "node:20",
+		"ci_container__test__image":                           "node:22",
+		"ci_service__test__redis__image":                      "redis:7",
+		"ci_run__test__0":                                     "npm ci",
+		"ci_run__test__1":                                     "npm test",
+		"ci_cache__workflow__key":                             "node-cache",
+		"ci_setup__test__image__setup_node__node_version":     "22",
+		"ci_setup__workflow__image__setup_node__node_version": "20",
+	}
+	for source, value := range checks {
+		var found bool
+		for _, ev := range res.Evidence {
+			if ev.Source == source && ev.Value == value {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing expected evidence %s=%s in %v", source, value, res.Evidence)
+		}
+	}
+}
+
+func TestCollector_ExtractsGitHubActionsKeywordEvidence(t *testing.T) {
+	dir := t.TempDir()
+	workflowDir := filepath.Join(dir, ".github", "workflows")
+	os.MkdirAll(workflowDir, 0755)
+	yaml := `name: CI
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  build:
+    uses: org/repo/.github/workflows/build.yml@v1
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+    services:
+      docker:
+        image: docker:dind
+        options: --privileged
+    steps:
+      - uses: actions/cache@v4
+        with:
+          key: ${{ runner.os }}-node
+      - uses: ./.github/actions/setup
+      - run: docker run hello-world
+`
+	os.WriteFile(filepath.Join(workflowDir, "ci.yml"), []byte(yaml), 0644)
+
+	c := &Collector{Root: dir}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+
+	checks := map[string]string{
+		"ci_workflow_call__present":           "true",
+		"ci_permissions__workflow__contents":  "read",
+		"ci_reusable_workflow__build":         "org/repo/.github/workflows/build.yml@v1",
+		"ci_runs_on__test":                    "ubuntu-latest",
+		"ci_needs__test":                      "build",
+		"ci_if__job__test":                    "github.event_name == 'push'",
+		"ci_permissions__job__test__contents": "read",
+		"ci_service__test__docker__options":   "--privileged",
+		"ci_dind__test":                       "docker:dind",
+		"ci_cache__test__0__key":              "${{ runner.os }}-node",
+		"ci_composite_action__test__1":        "./.github/actions/setup",
+	}
+	for source, value := range checks {
+		var found bool
+		for _, ev := range res.Evidence {
+			if ev.Source == source && ev.Value == value {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing expected evidence %s=%s in %v", source, value, res.Evidence)
+		}
+	}
+}
+
 func TestCollector_NoWorkflows(t *testing.T) {
 	dir := t.TempDir()
 	c := &Collector{Root: dir}

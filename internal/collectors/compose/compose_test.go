@@ -193,6 +193,48 @@ func TestCollector_PortMappings(t *testing.T) {
 	}
 }
 
+func TestCollector_ServiceImageAndPorts(t *testing.T) {
+	dir := t.TempDir()
+	yaml := `services:
+  postgres:
+    image: postgres:15
+    ports:
+      - "5432:5432/tcp"
+  redis:
+    image: redis:7
+    ports:
+      - "127.0.0.1:6379:6379"
+`
+	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(yaml), 0644)
+
+	c := &Collector{Root: dir}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+
+	checks := map[string]string{
+		"compose_service__postgres__image":          "postgres:15",
+		"compose_service__postgres__host_port":      "5432",
+		"compose_service__postgres__container_port": "5432",
+		"compose_service__redis__image":             "redis:7",
+		"compose_service__redis__host_port":         "6379",
+		"compose_service__redis__container_port":    "6379",
+	}
+	for source, value := range checks {
+		var found bool
+		for _, ev := range res.Evidence {
+			if ev.Source == source && ev.Value == value {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing expected evidence %s=%s in %v", source, value, res.Evidence)
+		}
+	}
+}
+
 func TestCollector_LineNumbersPreserved(t *testing.T) {
 	dir := t.TempDir()
 	yaml := "services:\n  api:\n    environment:\n      API_KEY: ${API_KEY}\n"

@@ -357,14 +357,22 @@ func runtimeFindingID(rt string) string {
 }
 
 func versionsCompatible(expected, actual string) bool {
-	// Normalize and compare
-	eNorm := normalizeVersion(expected)
-	aNorm := normalizeVersion(actual)
+	expected = strings.TrimSpace(expected)
+	actual = strings.TrimSpace(actual)
 
-	// Special cases: low-confidence, no hard mismatch
 	if expected == "lts/*" || expected == "node" || expected == "" {
 		return true
 	}
+
+	if ok, evaluated := versionExpressionSatisfied(expected, actual); evaluated {
+		return ok
+	}
+	if ok, evaluated := versionExpressionSatisfied(actual, expected); evaluated {
+		return ok
+	}
+
+	eNorm := normalizeVersion(expected)
+	aNorm := normalizeVersion(actual)
 
 	eParts := strings.Split(eNorm, ".")
 	aParts := strings.Split(aNorm, ".")
@@ -380,6 +388,186 @@ func versionsCompatible(expected, actual string) bool {
 		}
 	}
 	return true
+}
+
+func versionExpressionSatisfied(expr, actual string) (bool, bool) {
+	expr = strings.TrimSpace(expr)
+	if expr == "" || !looksLikeVersionExpression(expr) {
+		return false, false
+	}
+
+	actualParts, ok := parseVersionParts(actual)
+	if !ok {
+		return false, false
+	}
+
+	if strings.HasPrefix(expr, "^") {
+		base, ok := parseVersionParts(strings.TrimPrefix(expr, "^"))
+		if !ok {
+			return false, false
+		}
+		return compareVersionParts(actualParts, base) >= 0 && compareVersionParts(actualParts, caretUpperBound(base)) < 0, true
+	}
+	if strings.HasPrefix(expr, "~") && !strings.HasPrefix(expr, "~>") {
+		base, ok := parseVersionParts(strings.TrimPrefix(expr, "~"))
+		if !ok {
+			return false, false
+		}
+		return compareVersionParts(actualParts, base) >= 0 && compareVersionParts(actualParts, tildeUpperBound(base)) < 0, true
+	}
+
+	tokens := strings.Fields(strings.ReplaceAll(expr, ",", " "))
+	if len(tokens) == 0 {
+		return false, false
+	}
+	for _, token := range tokens {
+		ok, evaluated := versionConstraintSatisfied(token, actualParts)
+		if !evaluated || !ok {
+			return ok, evaluated
+		}
+	}
+	return true, true
+}
+
+func looksLikeVersionExpression(expr string) bool {
+	return strings.Contains(expr, " ") ||
+		strings.Contains(expr, ",") ||
+		strings.HasPrefix(expr, ">") ||
+		strings.HasPrefix(expr, "<") ||
+		strings.HasPrefix(expr, "^") ||
+		strings.HasPrefix(expr, "~") ||
+		strings.Contains(expr, ".x") ||
+		strings.Contains(expr, ".*")
+}
+
+func versionConstraintSatisfied(token string, actualParts []int) (bool, bool) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return true, true
+	}
+
+	operator := "="
+	switch {
+	case strings.HasPrefix(token, ">="):
+		operator = ">="
+		token = strings.TrimSpace(strings.TrimPrefix(token, ">="))
+	case strings.HasPrefix(token, "<="):
+		operator = "<="
+		token = strings.TrimSpace(strings.TrimPrefix(token, "<="))
+	case strings.HasPrefix(token, ">"):
+		operator = ">"
+		token = strings.TrimSpace(strings.TrimPrefix(token, ">"))
+	case strings.HasPrefix(token, "<"):
+		operator = "<"
+		token = strings.TrimSpace(strings.TrimPrefix(token, "<"))
+	case strings.HasPrefix(token, "="):
+		token = strings.TrimSpace(strings.TrimPrefix(token, "="))
+	}
+
+	targetParts, ok := parseVersionParts(token)
+	if !ok {
+		return false, false
+	}
+	cmp := compareVersionPartsPrefix(actualParts, targetParts)
+	switch operator {
+	case ">=":
+		return cmp >= 0, true
+	case "<=":
+		return cmp <= 0, true
+	case ">":
+		return cmp > 0, true
+	case "<":
+		return cmp < 0, true
+	default:
+		return cmp == 0, true
+	}
+}
+
+func parseVersionParts(v string) ([]int, bool) {
+	v = normalizeVersion(v)
+	v = strings.TrimSpace(v)
+	if v == "" || v == "*" {
+		return nil, false
+	}
+	fields := strings.Split(v, ".")
+	parts := make([]int, 0, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		field = strings.TrimRight(field, "xX*")
+		if field == "" {
+			break
+		}
+		n, err := strconv.Atoi(field)
+		if err != nil {
+			return nil, false
+		}
+		parts = append(parts, n)
+	}
+	if len(parts) == 0 {
+		return nil, false
+	}
+	return parts, true
+}
+
+func compareVersionParts(actual, target []int) int {
+	maxLen := len(actual)
+	if len(target) > maxLen {
+		maxLen = len(target)
+	}
+	for i := 0; i < maxLen; i++ {
+		a := 0
+		if i < len(actual) {
+			a = actual[i]
+		}
+		t := 0
+		if i < len(target) {
+			t = target[i]
+		}
+		if a < t {
+			return -1
+		}
+		if a > t {
+			return 1
+		}
+	}
+	return 0
+}
+
+func compareVersionPartsPrefix(actual, target []int) int {
+	for i := 0; i < len(target); i++ {
+		a := 0
+		if i < len(actual) {
+			a = actual[i]
+		}
+		if a < target[i] {
+			return -1
+		}
+		if a > target[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+func caretUpperBound(base []int) []int {
+	if len(base) == 0 {
+		return []int{1}
+	}
+	upper := append([]int(nil), base...)
+	if upper[0] > 0 {
+		return []int{upper[0] + 1}
+	}
+	if len(upper) > 1 {
+		return []int{0, upper[1] + 1}
+	}
+	return []int{1}
+}
+
+func tildeUpperBound(base []int) []int {
+	if len(base) > 1 {
+		return []int{base[0], base[1] + 1}
+	}
+	return []int{base[0] + 1}
 }
 
 func normalizeVersion(v string) string {

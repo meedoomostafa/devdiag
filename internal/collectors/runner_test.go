@@ -114,6 +114,37 @@ func (c *slowCollector) Collect(ctx context.Context) (schema.CollectorResult, er
 	return schema.CollectorResult{Name: "slow"}, ctx.Err()
 }
 
+type contextAwareCollector struct{}
+
+func (c *contextAwareCollector) Name() string { return "context_aware" }
+func (c *contextAwareCollector) Collect(ctx context.Context) (schema.CollectorResult, error) {
+	<-ctx.Done()
+	return schema.CollectorResult{
+		Name: "context_aware",
+		Evidence: []schema.Evidence{
+			{Source: "partial", Value: "observed before timeout"},
+		},
+	}, ctx.Err()
+}
+
+type ignoringContextCollector struct{}
+
+func (c *ignoringContextCollector) Name() string { return "ignoring_context" }
+func (c *ignoringContextCollector) Collect(ctx context.Context) (schema.CollectorResult, error) {
+	select {}
+}
+
+type customTimeoutCollector struct{}
+
+func (c *customTimeoutCollector) Name() string { return "custom_timeout" }
+func (c *customTimeoutCollector) Timeout() time.Duration {
+	return 25 * time.Millisecond
+}
+func (c *customTimeoutCollector) Collect(ctx context.Context) (schema.CollectorResult, error) {
+	<-ctx.Done()
+	return schema.CollectorResult{Name: "custom_timeout"}, ctx.Err()
+}
+
 func TestRunner_TimeoutSetsTimeoutMs(t *testing.T) {
 	runner := NewRunner()
 	runner.Timeout = 100 * time.Millisecond
@@ -136,5 +167,134 @@ func TestRunner_TimeoutSetsTimeoutMs(t *testing.T) {
 	}
 	if res.TimeoutMs != 100 {
 		t.Errorf("expected TimeoutMs = 100, got %d", res.TimeoutMs)
+	}
+}
+
+func TestRunner_NewRunnerConfiguresDefaultTimeout(t *testing.T) {
+	runner := NewRunner()
+	if runner.Timeout <= 0 {
+		t.Fatalf("expected NewRunner to configure a default timeout, got %s", runner.Timeout)
+	}
+}
+
+func TestRunner_TimeoutCancelsSlowCollector(t *testing.T) {
+	runner := NewRunner()
+	runner.Timeout = 25 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan []schema.CollectorResult, 1)
+	go func() {
+		done <- runner.Run(ctx, []Collector{&slowCollector{}})
+	}()
+
+	var results []schema.CollectorResult
+	select {
+	case results = <-done:
+	case <-time.After(250 * time.Millisecond):
+		cancel()
+		t.Fatal("runner did not enforce default timeout")
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	res := results[0]
+	if res.Status != schema.CollectorTimeout {
+		t.Fatalf("expected timeout status, got %s", res.Status)
+	}
+	if !res.Partial {
+		t.Fatal("expected Partial=true")
+	}
+	if res.TimeoutMs != 25 {
+		t.Fatalf("expected TimeoutMs = 25, got %d", res.TimeoutMs)
+	}
+}
+
+func TestRunner_ContextDeadlinePreservesPartialEvidenceAsTimeout(t *testing.T) {
+	runner := NewRunner()
+	runner.Timeout = 50 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan []schema.CollectorResult, 1)
+	go func() {
+		done <- runner.Run(ctx, []Collector{&contextAwareCollector{}})
+	}()
+
+	var results []schema.CollectorResult
+	select {
+	case results = <-done:
+	case <-time.After(250 * time.Millisecond):
+		cancel()
+		t.Fatal("runner did not enforce collector timeout")
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	res := results[0]
+	if res.Status != schema.CollectorTimeout {
+		t.Fatalf("expected timeout status, got %s", res.Status)
+	}
+	if len(res.Evidence) != 1 || res.Evidence[0].Value != "observed before timeout" {
+		t.Fatalf("expected preserved partial evidence, got %v", res.Evidence)
+	}
+	if res.TimeoutMs != 50 {
+		t.Fatalf("expected TimeoutMs = 50, got %d", res.TimeoutMs)
+	}
+}
+
+func TestRunner_ReturnsTimeoutWhenCollectorIgnoresContext(t *testing.T) {
+	runner := NewRunner()
+	runner.Timeout = 25 * time.Millisecond
+
+	done := make(chan []schema.CollectorResult, 1)
+	go func() {
+		done <- runner.Run(context.Background(), []Collector{&ignoringContextCollector{}})
+	}()
+
+	select {
+	case results := <-done:
+		if len(results) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(results))
+		}
+		if results[0].Status != schema.CollectorTimeout {
+			t.Fatalf("expected timeout status, got %s", results[0].Status)
+		}
+		if !results[0].Partial {
+			t.Fatal("expected Partial=true")
+		}
+		if results[0].TimeoutMs != 25 {
+			t.Fatalf("expected TimeoutMs = 25, got %d", results[0].TimeoutMs)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("runner blocked on collector that ignored context")
+	}
+}
+
+func TestRunner_UsesPerCollectorTimeoutOverride(t *testing.T) {
+	runner := NewRunner()
+	runner.Timeout = 200 * time.Millisecond
+
+	done := make(chan []schema.CollectorResult, 1)
+	go func() {
+		done <- runner.Run(context.Background(), []Collector{&customTimeoutCollector{}})
+	}()
+
+	var results []schema.CollectorResult
+	select {
+	case results = <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("runner did not enforce per-collector timeout")
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != schema.CollectorTimeout {
+		t.Fatalf("expected timeout status, got %s", results[0].Status)
+	}
+	if results[0].TimeoutMs != 25 {
+		t.Fatalf("expected TimeoutMs = 25, got %d", results[0].TimeoutMs)
 	}
 }

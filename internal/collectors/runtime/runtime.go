@@ -52,6 +52,10 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		evidence = append(evidence, schema.Evidence{Source: "Cargo.toml", Value: "rust " + v})
 	}
 
+	if v := parseDotnetSDKVersion(filepath.Join(root, "global.json")); v != "" {
+		evidence = append(evidence, schema.Evidence{Source: "global.json", Value: "dotnet " + v})
+	}
+
 	// package.json engines / packageManager
 	if pm, engines := parsePackageJSONRuntime(filepath.Join(root, "package.json")); pm != "" || engines != "" {
 		if pm != "" {
@@ -109,6 +113,19 @@ func parseRustVersion(path string) string {
 		if m := rustVersionRe.FindStringSubmatch(line); m != nil {
 			return m[1]
 		}
+	}
+	return ""
+}
+
+var dotnetSDKVersionRe = regexp.MustCompile(`"version"\s*:\s*"([^"]+)"`)
+
+func parseDotnetSDKVersion(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if m := dotnetSDKVersionRe.FindStringSubmatch(string(data)); m != nil {
+		return strings.TrimSpace(m[1])
 	}
 	return ""
 }
