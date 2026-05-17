@@ -548,7 +548,7 @@ type m8ServiceSpec struct {
 func collectCIServices(evidence []schema.Evidence) map[string]m8ServiceSpec {
 	services := make(map[string]m8ServiceSpec)
 	for _, ev := range evidence {
-		name, field, ok := parseServiceEvidenceSource(ev.Source, "ci_service__")
+		name, field, ok := parseCIServiceEvidenceSource(ev.Source)
 		if !ok {
 			continue
 		}
@@ -560,6 +560,26 @@ func collectCIServices(evidence []schema.Evidence) map[string]m8ServiceSpec {
 		services[name] = spec
 	}
 	return services
+}
+
+func parseCIServiceEvidenceSource(source string) (name, field string, ok bool) {
+	if !strings.HasPrefix(source, "ci_service__") {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(source, "ci_service__")
+	parts := strings.Split(rest, "__")
+	if len(parts) < 2 {
+		return "", "", false
+	}
+	field = parts[len(parts)-1]
+	service := parts[0]
+	if len(parts) >= 3 {
+		service = parts[len(parts)-2]
+	}
+	if service == "" || field == "" {
+		return "", "", false
+	}
+	return decodeSourceSegment(service), field, true
 }
 
 func collectComposeServices(evidence []schema.Evidence) map[string]m8ServiceSpec {

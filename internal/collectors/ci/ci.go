@@ -772,10 +772,18 @@ func runtimeFromImage(image string) (runtimeName, version string) {
 	}
 	switch parts[0] {
 	case "node":
-		return "setup_node", parts[1]
+		return "setup_node", runtimeVersionFromImageTag(parts[1])
 	default:
 		return "", ""
 	}
+}
+
+func runtimeVersionFromImageTag(tag string) string {
+	tag = strings.TrimSpace(tag)
+	if idx := strings.Index(tag, "-"); idx != -1 {
+		tag = tag[:idx]
+	}
+	return tag
 }
 
 func imageName(image string) string {
