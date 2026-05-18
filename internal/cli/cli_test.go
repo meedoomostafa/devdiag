@@ -58,6 +58,16 @@ func runBinaryInDir(dir string, args ...string) (string, string, int) {
 	return stdout.String(), stderr.String(), cmd.ProcessState.ExitCode()
 }
 
+func runBinaryWithEnv(env []string, args ...string) (string, string, int) {
+	cmd := exec.Command(binaryPath, args...)
+	cmd.Env = env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Run()
+	return stdout.String(), stderr.String(), cmd.ProcessState.ExitCode()
+}
+
 func TestInvalidFormat_ReturnsExitCode2(t *testing.T) {
 	_, _, code := runBinary("scan", ".", "--format", "invalid")
 	if code != 2 {
@@ -225,7 +235,7 @@ func TestFixDryRunFlag_ConflictsWithApply(t *testing.T) {
 
 func TestFixList_SuccessDoesNotPrintExitCodeZero(t *testing.T) {
 	dir := t.TempDir()
-	if _, stderr, code := runBinaryInDir(dir, "scan", ".", "--format", "json"); code != 0 {
+	if _, stderr, code := runBinaryInDir(dir, "scan", ".", "--format", "json", "--save-report"); code != 0 {
 		t.Fatalf("scan in temp dir exit code = %d, stderr=%s", code, stderr)
 	}
 
@@ -235,6 +245,48 @@ func TestFixList_SuccessDoesNotPrintExitCodeZero(t *testing.T) {
 	}
 	if strings.Contains(stderr, "exit code 0") {
 		t.Errorf("fix --list printed success as an error: %q", stderr)
+	}
+}
+
+func TestScan_DoesNotPersistReportByDefault(t *testing.T) {
+	dir := t.TempDir()
+
+	_, stderr, code := runBinary("scan", dir, "--format", "json")
+	if code != 0 {
+		t.Fatalf("scan exit code = %d, stderr=%s", code, stderr)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, ".devdiag")); !os.IsNotExist(err) {
+		t.Fatalf("expected scan without --save-report not to create .devdiag, stat err=%v", err)
+	}
+}
+
+func TestScan_SaveReportPersistsReport(t *testing.T) {
+	dir := t.TempDir()
+
+	_, stderr, code := runBinary("scan", dir, "--format", "json", "--save-report")
+	if code != 0 {
+		t.Fatalf("scan --save-report exit code = %d, stderr=%s", code, stderr)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(dir, ".devdiag", "runs", "*", "report.json"))
+	if err != nil {
+		t.Fatalf("glob saved reports: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 saved report, got %d: %v", len(matches), matches)
+	}
+}
+
+func TestFixList_MissingReportMentionsSaveReport(t *testing.T) {
+	dir := t.TempDir()
+
+	_, stderr, code := runBinaryInDir(dir, "fix", "--list")
+	if code != exitcode.CollectorPartial.Int() {
+		t.Fatalf("fix --list exit code = %d, want %d; stderr=%s", code, exitcode.CollectorPartial.Int(), stderr)
+	}
+	if !strings.Contains(stderr, "devdiag scan --save-report") {
+		t.Fatalf("missing-report guidance should mention devdiag scan --save-report, stderr=%q", stderr)
 	}
 }
 
@@ -421,9 +473,33 @@ func TestCheckGPU_NewFlagsDoNotCrash(t *testing.T) {
 }
 
 func TestCheckGPU_CombinedFlags(t *testing.T) {
-	_, _, code := runBinary("check", "gpu", "--python", "--gpu-verify", "--allow-pull")
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "nvidia-smi"), "#!/bin/sh\necho '0, NVIDIA Test GPU, 580.0, 8192'\n")
+	writeExecutable(t, filepath.Join(binDir, "docker"), `#!/bin/sh
+if [ "$1" = "info" ]; then
+  echo '{"Runtimes":{}}'
+  exit 0
+fi
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  exit 0
+fi
+if [ "$1" = "run" ]; then
+  echo 'GPU 0: NVIDIA Test GPU'
+  exit 0
+fi
+exit 1
+`)
+	env := append(os.Environ(), "PATH="+binDir)
+	_, _, code := runBinaryWithEnv(env, "check", "gpu", "--python", "--gpu-verify", "--allow-pull")
 	if code != 0 {
 		t.Errorf("check gpu combined flags exit code = %d, want 0", code)
+	}
+}
+
+func writeExecutable(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write executable %s: %v", path, err)
 	}
 }
 

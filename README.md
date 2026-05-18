@@ -39,6 +39,7 @@ The module targets Go 1.25.
 devdiag doctor self
 devdiag scan . --format human
 devdiag scan . --format json
+devdiag scan . --save-report
 devdiag check env .
 devdiag check runtimes .
 devdiag check containers .
@@ -52,6 +53,9 @@ devdiag fix --list
 devdiag capsule create
 devdiag rules list --format json
 ```
+
+`devdiag scan` is non-mutating by default. Commands that load saved reports,
+such as `devdiag fix --list`, require a prior `devdiag scan --save-report`.
 
 Remote dry-run examples:
 

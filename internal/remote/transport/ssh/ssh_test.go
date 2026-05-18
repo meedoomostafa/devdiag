@@ -32,6 +32,21 @@ func (r *prefixRunner) Run(ctx context.Context, name string, args ...string) cmd
 	return cmdrunner.Result{NotFound: true, ExitCode: -1}
 }
 
+type recordingRunner struct {
+	calls []recordedCall
+	res   cmdrunner.Result
+}
+
+type recordedCall struct {
+	name string
+	args []string
+}
+
+func (r *recordingRunner) Run(ctx context.Context, name string, args ...string) cmdrunner.Result {
+	r.calls = append(r.calls, recordedCall{name: name, args: append([]string(nil), args...)})
+	return r.res
+}
+
 func TestTransport_Probe_Unreachable(t *testing.T) {
 	tr := NewTransport(&target.Target{Kind: target.KindSSH, User: "u", Host: "unreachable"},
 		cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
@@ -188,5 +203,48 @@ func TestClassifySSHError(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("classifySSHError(%q, %d) = %q, want %q", tt.stderr, tt.code, got, tt.want)
 		}
+	}
+}
+
+func TestTransportUpload_DefaultPortOmitsScpPort(t *testing.T) {
+	runner := &recordingRunner{res: cmdrunner.Result{ExitCode: 0}}
+	tr := NewTransport(&target.Target{Kind: target.KindSSH, User: "user", Host: "host", Port: 22}, runner)
+
+	if err := tr.Upload(context.Background(), "/tmp/local", "~/.devdiag/remote/session"); err != nil {
+		t.Fatalf("Upload error: %v", err)
+	}
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(runner.calls))
+	}
+	call := runner.calls[0]
+	if call.name != "scp" {
+		t.Fatalf("expected scp command, got %q", call.name)
+	}
+	for _, arg := range call.args {
+		if arg == "-P" {
+			t.Fatalf("default port should omit -P, args=%v", call.args)
+		}
+	}
+	want := []string{"-r", "-o", "ConnectTimeout=5", "/tmp/local", "user@host:~/.devdiag/remote/session"}
+	if strings.Join(call.args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("scp args = %#v, want %#v", call.args, want)
+	}
+}
+
+func TestTransportUpload_CustomPortPassesSeparateScpPortArgs(t *testing.T) {
+	runner := &recordingRunner{res: cmdrunner.Result{ExitCode: 0}}
+	tr := NewTransport(&target.Target{Kind: target.KindSSH, User: "user", Host: "host", Port: 2222}, runner)
+
+	if err := tr.Upload(context.Background(), "/tmp/local", "/tmp/remote"); err != nil {
+		t.Fatalf("Upload error: %v", err)
+	}
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(runner.calls))
+	}
+	want := []string{"-r", "-o", "ConnectTimeout=5", "-P", "2222", "/tmp/local", "user@host:/tmp/remote"}
+	if strings.Join(runner.calls[0].args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("scp args = %#v, want %#v", runner.calls[0].args, want)
 	}
 }

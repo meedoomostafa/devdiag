@@ -5,26 +5,34 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
 // Collector checks Docker daemon accessibility and collects summary facts.
-type Collector struct{}
+type Collector struct {
+	Runner cmdrunner.CommandRunner
+}
 
 func (c *Collector) Name() string {
 	return "docker"
 }
 
 func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error) {
+	runner := c.Runner
+	if runner == nil {
+		runner = cmdrunner.NewRealRunner()
+	}
 	evidence := []schema.Evidence{}
 
 	// Check binary presence
-	path, err := exec.LookPath("docker")
-	if err != nil {
+	cmdCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	versionRes := runner.Run(cmdCtx, "docker", "--version")
+	cancel()
+	if versionRes.NotFound {
 		applicable := false
 		return schema.CollectorResult{
 			Name:       c.Name(),
@@ -35,23 +43,21 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 			},
 		}, nil
 	}
-	evidence = append(evidence, schema.Evidence{Source: "docker_binary", Value: path})
+	evidence = append(evidence, schema.Evidence{Source: "docker_binary", Value: "present"})
 
 	// Check docker compose plugin presence
 	composePlugin := false
 	legacyCompose := false
-	if _, err := exec.LookPath("docker"); err == nil {
-		cmdCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-		err := exec.CommandContext(cmdCtx, "docker", "compose", "version").Run()
+	cmdCtx, cancel = context.WithTimeout(ctx, 500*time.Millisecond)
+	composeRes := runner.Run(cmdCtx, "docker", "compose", "version")
+	cancel()
+	if composeRes.ExitCode == 0 {
+		composePlugin = true
+	} else {
+		cmdCtx, cancel = context.WithTimeout(ctx, 500*time.Millisecond)
+		legacyRes := runner.Run(cmdCtx, "docker-compose", "--version")
 		cancel()
-		if err == nil {
-			composePlugin = true
-		} else {
-			// Try legacy docker-compose binary
-			if _, err := exec.LookPath("docker-compose"); err == nil {
-				legacyCompose = true
-			}
-		}
+		legacyCompose = legacyRes.ExitCode == 0
 	}
 	if composePlugin {
 		evidence = append(evidence, schema.Evidence{Source: "docker_compose_plugin", Value: "available"})
@@ -62,36 +68,32 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	}
 
 	// docker info --format '{{json .}}' with timeout
-	cmdCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-	out, err := exec.CommandContext(cmdCtx, "docker", "info", "--format", "{{json .}}").Output()
+	cmdCtx, cancel = context.WithTimeout(ctx, 1500*time.Millisecond)
+	infoRes := runner.Run(cmdCtx, "docker", "info", "--format", "{{json .}}")
 	cancel()
-	if err != nil {
-		exitErr, ok := err.(*exec.ExitError)
-		if ok && len(exitErr.Stderr) > 0 {
-			stderr := string(exitErr.Stderr)
-			if strings.Contains(stderr, "permission denied") || strings.Contains(stderr, "dial unix") {
+	if infoRes.ExitCode != 0 {
+		if infoRes.PermissionDenied || strings.Contains(infoRes.Stderr, "permission denied") || strings.Contains(infoRes.Stderr, "dial unix") {
+			evidence = append(evidence, schema.Evidence{
+				Source: "docker_socket_permission_denied",
+				Value:  "true",
+			})
+			if p := socketPath(); p != "" {
 				evidence = append(evidence, schema.Evidence{
-					Source: "docker_socket_permission_denied",
-					Value:  "true",
+					Source: "docker_socket_path",
+					Value:  p,
 				})
-				if p := socketPath(); p != "" {
-					evidence = append(evidence, schema.Evidence{
-						Source: "docker_socket_path",
-						Value:  p,
-					})
-				}
 			}
 		}
 		return schema.CollectorResult{
 			Name:     c.Name(),
 			Status:   schema.CollectorUnavailable,
 			Evidence: evidence,
-			Notes:    []string{fmt.Sprintf("docker info failed: %v", err)},
+			Notes:    []string{fmt.Sprintf("docker info failed: %s", commandFailure(infoRes))},
 		}, nil
 	}
 
 	var info dockerInfo
-	if err := json.Unmarshal(out, &info); err == nil {
+	if err := json.Unmarshal([]byte(infoRes.Stdout), &info); err == nil {
 		if info.ServerVersion != "" {
 			evidence = append(evidence, schema.Evidence{Source: "docker_server_version", Value: info.ServerVersion})
 		}
@@ -114,10 +116,10 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// docker ps -a --format '{{json .}}' only if daemon accessible, filtered by time
 	cmdCtx, cancel = context.WithTimeout(ctx, 1500*time.Millisecond)
-	out, err = exec.CommandContext(cmdCtx, "docker", "ps", "-a", "--format", "{{json .}}").Output()
+	psRes := runner.Run(cmdCtx, "docker", "ps", "-a", "--format", "{{json .}}")
 	cancel()
-	if err == nil {
-		containers := parseDockerPSLines(out)
+	if psRes.ExitCode == 0 {
+		containers := parseDockerPSLines([]byte(psRes.Stdout))
 		for _, ctr := range containers {
 			evidence = append(evidence, schema.Evidence{
 				Source: fmt.Sprintf("docker_container_%s_status", ctr.Names),
@@ -137,6 +139,19 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		Status:   schema.CollectorOK,
 		Evidence: evidence,
 	}, nil
+}
+
+func commandFailure(res cmdrunner.Result) string {
+	if res.Stderr != "" {
+		return strings.TrimSpace(res.Stderr)
+	}
+	if res.Stdout != "" {
+		return strings.TrimSpace(res.Stdout)
+	}
+	if res.TimedOut {
+		return "timed out"
+	}
+	return fmt.Sprintf("exit code %d", res.ExitCode)
 }
 
 func socketPath() string {

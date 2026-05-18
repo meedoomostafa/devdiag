@@ -4,26 +4,34 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
 // Collector checks Podman availability and collects rootless/UID evidence.
-type Collector struct{}
+type Collector struct {
+	Runner cmdrunner.CommandRunner
+}
 
 func (c *Collector) Name() string {
 	return "podman"
 }
 
 func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error) {
+	runner := c.Runner
+	if runner == nil {
+		runner = cmdrunner.NewRealRunner()
+	}
 	evidence := []schema.Evidence{}
 
 	// Check binary presence
-	path, err := exec.LookPath("podman")
-	if err != nil {
+	cmdCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	versionRes := runner.Run(cmdCtx, "podman", "--version")
+	cancel()
+	if versionRes.NotFound {
 		applicable := false
 		return schema.CollectorResult{
 			Name:       c.Name(),
@@ -34,23 +42,23 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 			},
 		}, nil
 	}
-	evidence = append(evidence, schema.Evidence{Source: "podman_binary", Value: path})
+	evidence = append(evidence, schema.Evidence{Source: "podman_binary", Value: "present"})
 
 	// podman info --format json with timeout
-	cmdCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-	out, err := exec.CommandContext(cmdCtx, "podman", "info", "--format", "json").Output()
+	cmdCtx, cancel = context.WithTimeout(ctx, 1500*time.Millisecond)
+	infoRes := runner.Run(cmdCtx, "podman", "info", "--format", "json")
 	cancel()
-	if err != nil {
+	if infoRes.ExitCode != 0 {
 		return schema.CollectorResult{
 			Name:     c.Name(),
 			Status:   schema.CollectorUnavailable,
 			Evidence: evidence,
-			Notes:    []string{fmt.Sprintf("podman info failed: %v", err)},
+			Notes:    []string{fmt.Sprintf("podman info failed: %s", commandFailure(infoRes))},
 		}, nil
 	}
 
 	var info podmanInfo
-	if err := json.Unmarshal(out, &info); err == nil {
+	if err := json.Unmarshal([]byte(infoRes.Stdout), &info); err == nil {
 		if info.Host.RemoteSocket.Path != "" {
 			evidence = append(evidence, schema.Evidence{
 				Source: "podman_socket_path",
@@ -94,10 +102,10 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// podman ps -a --format json only when daemon accessible
 	cmdCtx, cancel = context.WithTimeout(ctx, 1500*time.Millisecond)
-	out, err = exec.CommandContext(cmdCtx, "podman", "ps", "-a", "--format", "json").Output()
+	psRes := runner.Run(cmdCtx, "podman", "ps", "-a", "--format", "json")
 	cancel()
-	if err == nil {
-		containers := parsePodmanPS(out)
+	if psRes.ExitCode == 0 {
+		containers := parsePodmanPS([]byte(psRes.Stdout))
 		for _, ctr := range containers {
 			name := "unknown"
 			if len(ctr.Names) > 0 {
@@ -122,6 +130,19 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		Status:   schema.CollectorOK,
 		Evidence: evidence,
 	}, nil
+}
+
+func commandFailure(res cmdrunner.Result) string {
+	if res.Stderr != "" {
+		return strings.TrimSpace(res.Stderr)
+	}
+	if res.Stdout != "" {
+		return strings.TrimSpace(res.Stdout)
+	}
+	if res.TimedOut {
+		return "timed out"
+	}
+	return fmt.Sprintf("exit code %d", res.ExitCode)
 }
 
 // podmanInfo represents selected fields from `podman info --format json`.

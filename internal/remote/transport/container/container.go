@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
+	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/remote/target"
 	"github.com/meedoomostafa/devdiag/internal/remote/transport"
 )
@@ -15,19 +17,28 @@ import (
 type Transport struct {
 	Target  *target.Target
 	Runtime string // "docker" or "podman"
+	Runner  cmdrunner.CommandRunner
 }
 
 // NewTransport creates a container transport, detecting the runtime if needed.
 func NewTransport(t *target.Target) (*Transport, error) {
+	return NewTransportWithRunner(t, nil)
+}
+
+// NewTransportWithRunner creates a container transport with an injected runner.
+func NewTransportWithRunner(t *target.Target, runner cmdrunner.CommandRunner) (*Transport, error) {
+	if runner == nil {
+		runner = cmdrunner.NewRealRunner()
+	}
 	rt := t.Runtime
 	if rt == "" || rt == "auto" {
 		var err error
-		rt, err = detectRuntime(t.Container)
+		rt, err = detectRuntime(t.Container, runner)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return &Transport{Target: t, Runtime: rt}, nil
+	return &Transport{Target: t, Runtime: rt, Runner: runner}, nil
 }
 
 // Kind returns the transport kind.
@@ -36,8 +47,11 @@ func (t *Transport) Kind() string { return "container" }
 // Close is a no-op for containers.
 func (t *Transport) Close() error { return nil }
 
-func (t *Transport) execCmd(ctx context.Context, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, t.Runtime, append([]string{"exec"}, args...)...)
+func (t *Transport) runner() cmdrunner.CommandRunner {
+	if t.Runner == nil {
+		t.Runner = cmdrunner.NewRealRunner()
+	}
+	return t.Runner
 }
 
 // Probe checks container state and collects environment facts.
@@ -47,13 +61,12 @@ func (t *Transport) Probe(ctx context.Context) (*transport.RemoteProbeResult, er
 	}
 
 	// Check if container exists and is running
-	inspect := exec.CommandContext(ctx, t.Runtime, "inspect", "--format", "{{.State.Running}}", t.Target.Container)
-	out, err := inspect.CombinedOutput()
-	if err != nil {
-		res.Error = fmt.Sprintf("container not found or not running: %s", string(out))
+	inspect := t.runner().Run(ctx, t.Runtime, "inspect", "--format", "{{.State.Running}}", t.Target.Container)
+	if inspect.ExitCode != 0 {
+		res.Error = fmt.Sprintf("container not found or not running: %s", combinedOutput(inspect))
 		return res, nil
 	}
-	if strings.TrimSpace(string(out)) != "true" {
+	if strings.TrimSpace(inspect.Stdout) != "true" {
 		res.Error = "container is not running"
 		return res, nil
 	}
@@ -77,13 +90,12 @@ command -v nvim 2>/dev/null || echo ""
 command -v tar 2>/dev/null || echo ""
 test -w /tmp 2>/dev/null && echo tmp_writable || echo tmp_not_writable
 `
-	execCmd := exec.CommandContext(ctx, t.Runtime, "exec", "-i", t.Target.Container, "sh", "-lc", factScript)
-	out, err = execCmd.CombinedOutput()
-	if err != nil {
-		res.Error = fmt.Sprintf("fact probe failed: %s", string(out))
+	facts := t.runner().Run(ctx, t.Runtime, "exec", "-i", t.Target.Container, "sh", "-lc", factScript)
+	if facts.ExitCode != 0 {
+		res.Error = fmt.Sprintf("fact probe failed: %s", combinedOutput(facts))
 		return res, nil
 	}
-	parseFactOutput(res, string(out))
+	parseFactOutput(res, facts.Stdout)
 	return res, nil
 }
 
@@ -93,36 +105,27 @@ func (t *Transport) Run(ctx context.Context, cmd transport.RemoteCommand) (*tran
 	if cmd.Args != nil {
 		args = append(args, cmd.Args...)
 	}
-	c := exec.CommandContext(ctx, t.Runtime, args...)
-	if cmd.Stdin != nil {
-		c.Stdin = strings.NewReader(string(cmd.Stdin))
-	}
-	out, err := c.CombinedOutput()
-	exitCode := 0
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		exitCode = exitErr.ExitCode()
-	} else if err != nil {
-		exitCode = -1
-	}
+	res := cmdrunner.RunWithOptions(ctx, t.runner(), cmdrunner.RunOptions{Stdin: cmd.Stdin}, t.Runtime, args...)
 	return &transport.RemoteCommandResult{
-		Stdout:   string(out),
-		Stderr:   "",
-		ExitCode: exitCode,
+		Stdout:   res.Stdout,
+		Stderr:   res.Stderr,
+		ExitCode: res.ExitCode,
+		TimedOut: res.TimedOut,
 	}, nil
 }
 
 // Upload copies files into the container.
 func (t *Transport) Upload(ctx context.Context, localDir, remoteDir string) error {
 	// Create remote directory
-	mkdir := exec.CommandContext(ctx, t.Runtime, "exec", t.Target.Container, "mkdir", "-p", remoteDir)
-	if out, err := mkdir.CombinedOutput(); err != nil {
-		return fmt.Errorf("mkdir remote dir: %s", string(out))
+	mkdir := t.runner().Run(ctx, t.Runtime, "exec", t.Target.Container, "mkdir", "-p", remoteDir)
+	if mkdir.ExitCode != 0 {
+		return fmt.Errorf("mkdir remote dir: %s", combinedOutput(mkdir))
 	}
 
 	// Use docker cp / podman cp — copy contents of localDir into remoteDir
-	cp := exec.CommandContext(ctx, t.Runtime, "cp", localDir+"/.", t.Target.Container+":"+remoteDir)
-	if out, err := cp.CombinedOutput(); err != nil {
-		return fmt.Errorf("cp failed: %s", string(out))
+	cp := t.runner().Run(ctx, t.Runtime, "cp", localDir+"/.", t.Target.Container+":"+remoteDir)
+	if cp.ExitCode != 0 {
+		return fmt.Errorf("cp failed: %s", combinedOutput(cp))
 	}
 	return nil
 }
@@ -153,22 +156,40 @@ func (t *Transport) Enter(remoteDir string) error {
 	return cmd.Run()
 }
 
-func detectRuntime(container string) (string, error) {
+func detectRuntime(container string, runner cmdrunner.CommandRunner) (string, error) {
 	// Try docker first
-	if hasContainer("docker", container) {
+	if hasContainer(runner, "docker", container) {
 		return "docker", nil
 	}
 	// Then podman
-	if hasContainer("podman", container) {
+	if hasContainer(runner, "podman", container) {
 		return "podman", nil
 	}
 	return "", fmt.Errorf("container %q not found with docker or podman", container)
 }
 
-func hasContainer(runtime, container string) bool {
-	cmd := exec.Command(runtime, "inspect", "--format", "{{.Id}}", container)
-	out, err := cmd.CombinedOutput()
-	return err == nil && strings.TrimSpace(string(out)) != ""
+func hasContainer(runner cmdrunner.CommandRunner, runtime, container string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	res := runner.Run(ctx, runtime, "inspect", "--format", "{{.Id}}", container)
+	return res.ExitCode == 0 && strings.TrimSpace(res.Stdout) != ""
+}
+
+func combinedOutput(res cmdrunner.Result) string {
+	stdout := strings.TrimSpace(res.Stdout)
+	stderr := strings.TrimSpace(res.Stderr)
+	switch {
+	case stdout != "" && stderr != "":
+		return stdout + "\n" + stderr
+	case stdout != "":
+		return stdout
+	case stderr != "":
+		return stderr
+	case res.TimedOut:
+		return "timed out"
+	default:
+		return fmt.Sprintf("exit code %d", res.ExitCode)
+	}
 }
 
 func parseFactOutput(res *transport.RemoteProbeResult, stdout string) {

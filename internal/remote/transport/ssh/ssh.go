@@ -124,11 +124,13 @@ func (t *Transport) Upload(ctx context.Context, localDir, remoteDir string) erro
 	if t.Target.User != "" {
 		host = fmt.Sprintf("%s@%s", t.Target.User, t.Target.Host)
 	}
+	args := []string{"-r", "-o", "ConnectTimeout=5"}
 	if t.Target.Port != 0 && t.Target.Port != 22 {
-		host = fmt.Sprintf("-P %d %s", t.Target.Port, host)
+		args = append(args, "-P", fmt.Sprintf("%d", t.Target.Port))
 	}
+	args = append(args, localDir, host+":"+remoteDir)
 
-	res := t.Runner.Run(ctx, "scp", "-r", "-o", "ConnectTimeout=5", localDir, host+":"+remoteDir)
+	res := t.Runner.Run(ctx, "scp", args...)
 	if res.ExitCode != 0 {
 		return fmt.Errorf("scp failed: %s", res.Stderr)
 	}

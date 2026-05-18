@@ -72,7 +72,7 @@ Current market and documentation signals confirm that DevDiag should deliberatel
 - **Service readiness and orchestration:** port conflicts, DNS/proxy/VPN drift, service readiness, Testcontainers-style dependency startup, `wait-for` tools, and host-to-container networking.
 - **GPU/AI developer diagnostics:** CUDA, NVIDIA driver, `nvidia-smi`, NVIDIA Container Toolkit, PyTorch, TensorFlow, JAX, CPU-only wheels, container GPU visibility, and cache ownership for ML stacks.
 - **Deep Linux evidence:** `strace`, syscall tracing, seccomp-bpf, eBPF, BTF/CO-RE, ptrace permissions, trace redaction, and opt-in overhead controls.
-- **Policy, safety, and sharing:** OPA/Rego, CUE validation, JSON/NDJSON output, redaction, local-only support capsule, dry-run fixes, guarded fixes, prompt-injection resistance, and AI-agent sandboxing.
+- **Policy, safety, and sharing:** current Go rule engines for milestone delivery, future OPA/Rego and CUE hardening, JSON/NDJSON output, redaction, local-only support capsule, dry-run fixes, guarded fixes, prompt-injection resistance, and AI-agent sandboxing.
 
 Sources checked in May 2026 include Docker Compose environment-variable and Compose Develop documentation, the Dev Container specification, Podman documentation, `act`/`wrkflw` local GitHub Actions projects, devenv and Devbox documentation, CUE documentation, OPA/Rego references, and the Linux `strace(1)` manual.
 
@@ -228,7 +228,8 @@ The product should always answer:
                                  │
                          ┌───────▼───────┐
                          │ Policy Engine  │
-                         │ Rego/CUE based │
+                         │ Go now;        │
+                         │ OPA/CUE later  │
                          │ deterministic  │
                          └───────┬───────┘
                                  │
@@ -334,18 +335,21 @@ Required implementation choices:
 ```text
 Language: Go
 Collector concurrency: goroutines + channels or errgroup-style fan-in
-External commands: exec.CommandContext
-Policy engine: OPA/Rego
-Schema/config validation: CUE or JSON Schema, with CUE preferred for structured constraints
+External commands: cmdrunner.CommandRunner backed by exec.CommandContext
+Current milestone policy engine: Go rule engines for M1, M6, and M8
+Future policy-engine hardening: OPA/Rego
+Current milestone schema validation: Go structs, JSON marshaling tests, and fixture tests
+Future schema/config validation: CUE or JSON Schema, with CUE preferred for structured constraints
 Primary output formats: human, json, ndjson, markdown
 ```
 
 Rationale:
 
 - Go supports single-binary distribution, which avoids Node/Python bootstrap failures.
-- `exec.CommandContext` is the correct baseline for cancellation-aware command execution.
-- Rego is better than a custom YAML DSL for deterministic policy evaluation over normalized JSON state.
-- CUE is suitable for validating structured data and constraints.
+- `cmdrunner.CommandRunner` keeps cancellation-aware `exec.CommandContext` behavior testable and consistent.
+- The current Go rule engines are accepted for milestone delivery because they are deterministic, covered by tests, and avoid adding policy dependencies before the rule surface stabilizes.
+- OPA/Rego remains the preferred future policy backend once rule-pack boundaries are ready.
+- CUE remains the preferred future structured validation layer once schemas and external rule packs are versioned.
 
 Implementation requirements:
 
@@ -369,7 +373,7 @@ Normalized Snapshot
   ↓
 Diagnostic Graph
   ↓
-Policy Engine: OPA/Rego
+Policy Engine: Go rule engines now; OPA/Rego later
   ↓
 Findings
   ↓
@@ -748,8 +752,8 @@ The following submitted points are accurate and already aligned with the plan:
 - Go as the runtime.
 - Fan-Out/Fan-In collectors.
 - `exec.CommandContext` for command timeout/cancellation.
-- OPA/Rego as policy engine.
-- CUE for schema/config validation.
+- Current Go rule engines as the milestone policy engine; OPA/Rego is future hardening work.
+- Current Go struct/fixture validation as the milestone schema contract; CUE or JSON Schema is future hardening work.
 - Stable finding schema.
 - Dry-run-first fix model.
 - Redaction by default.
@@ -1908,17 +1912,20 @@ A YAML DSL with nested `all`, `any`, `not`, `boost`, joins, graph traversal, and
 Recommended approach:
 
 ```text
-Primary policy engine: OPA/Rego
-Schema/config validation: CUE or JSON Schema
+Current milestone policy engine: Go rule engines
+Future policy engine: OPA/Rego
+Current milestone schema/config validation: Go structs, JSON marshaling tests, and fixtures
+Future schema/config validation: CUE or JSON Schema
 Rule metadata: YAML or JSON only for labels, docs, severity defaults, and fix templates
 ```
 
 Rationale:
 
-- Rego is designed for declarative policy over structured JSON-like data.
-- OPA can evaluate collected state deterministically.
-- CUE is strong for validating and constraining structured configuration.
-- Go integration exists for both OPA and CUE.
+- The current Go engines already cover M1, M6, and M8 findings with deterministic tests and are accepted for this milestone.
+- Rego is designed for declarative policy over structured JSON-like data and remains the preferred future backend for external policy packs.
+- OPA can evaluate collected state deterministically once normalized policy input boundaries are stable.
+- CUE is strong for validating and constraining structured configuration and remains preferred for future external schema/config validation.
+- Go integration exists for both OPA and CUE when that future hardening work starts.
 - This avoids inventing a fragile in-house rule language.
 
 ### 10.2 Input Model
@@ -1944,9 +1951,9 @@ The policy engine receives a normalized JSON diagnostic graph:
 }
 ```
 
-OPA/Rego policies must emit finding candidates, not mutate state.
+Future OPA/Rego policies must emit finding candidates, not mutate state. Current Go rule engines must keep the same non-mutating contract.
 
-### 10.3 Rego Policy Shape
+### 10.3 Future Rego Policy Shape
 
 Example:
 
@@ -1994,14 +2001,14 @@ Reason: Rego should decide policy/findings from normalized state. It should not 
 
 ### 10.5 CUE Usage
 
-Use CUE for:
+Future CUE or JSON Schema validation should cover:
 
 - Validating collector output schemas.
 - Validating rule-pack metadata.
 - Validating config files.
 - Defining constraints for policy inputs.
 
-Do not use CUE as the only finding engine unless the rule set proves mostly schema/constraint oriented. For cross-layer diagnostic policies, OPA/Rego is the better default.
+Do not use CUE as the only finding engine unless the rule set proves mostly schema/constraint oriented. For future cross-layer diagnostic policies, OPA/Rego remains the better default. For the current milestone, Go struct validation and fixture tests are the accepted schema contract.
 
 ### 10.6 Policy Quality Requirements
 
@@ -2605,10 +2612,14 @@ Deliverables:
 Commands:
 
 ```bash
+devdiag scan . --save-report
 devdiag fix F-PORT-001 --dry-run
 devdiag fix F-PORT-001 --apply
 devdiag fix --list
 ```
+
+Saved-report-based fix commands require an explicit prior `devdiag scan --save-report`.
+Plain `devdiag scan` remains non-mutating by default.
 
 Supported fixes:
 
