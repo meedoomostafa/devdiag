@@ -113,6 +113,10 @@ var capsuleCreateCmd = &cobra.Command{
 		defer outFile.Close()
 
 		builder := capsule.NewBuilder(string(redactEngine.Level), version.Version)
+		tracePath := filepath.Join(runsDir, "trace-result.json")
+		if traceData, err := os.ReadFile(tracePath); err == nil {
+			builder.SetTraceArtifact(traceData)
+		}
 		if err := builder.Build(outFile, &report, reproResult); err != nil {
 			logger.Error("capsule", fmt.Sprintf("build failed: %v", err))
 			return exitCodeError{code: exitcode.InternalError}

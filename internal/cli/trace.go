@@ -21,12 +21,13 @@ var (
 	flagTraceScope     string
 	flagTraceTimeout   time.Duration
 	flagTraceMaxEvents int
+	flagTraceBackend   string
 )
 
 var traceCmd = &cobra.Command{
 	Use:   "trace [flags] -- <command> [args...]",
-	Short: "Run a command under strace and diagnose syscall failures",
-	Long: `Runs the specified command under strace with configurable syscall scopes,
+	Short: "Run a command under syscall tracing and diagnose failures",
+	Long: `Runs the specified command under syscall tracing with configurable syscall scopes,
 then analyzes the trace output to produce diagnostic findings.`,
 	Example: `  devdiag trace --scope file -- npm run dev
   devdiag trace --scope file,process,network --timeout 60s -- python app.py`,
@@ -45,24 +46,39 @@ then analyzes the trace output to produce diagnostic findings.`,
 			logger.Warn("trace", err.Error())
 			return exitCodeError{code: exitcode.InvalidInput}
 		}
+		backend, err := trace.ParseBackend(flagTraceBackend)
+		if err != nil {
+			logger.Warn("trace", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput}
+		}
 
 		// Check strace availability after validating user input so malformed
 		// flags return the stable invalid-input exit code on every host.
-		if _, err := exec.LookPath("strace"); err != nil {
-			logger.Warn("trace", "strace not found; trace mode unavailable")
-			return exitCodeError{code: exitcode.TraceUnavailable}
+		if backend == trace.BackendStrace {
+			if _, err := exec.LookPath("strace"); err != nil {
+				logger.Warn("trace", "strace not found; trace mode unavailable")
+				return exitCodeError{code: exitcode.TraceUnavailable}
+			}
 		}
 
 		command := args[0]
 		commandArgs := args[1:]
 
-		logger.Info("trace", fmt.Sprintf("tracing command=%s scopes=%v timeout=%s", command, scopes, flagTraceTimeout))
+		logger.Info("trace", fmt.Sprintf("tracing command=%s backend=%s scopes=%v timeout=%s", command, backend, scopes, flagTraceTimeout))
 
-		runner := &trace.Runner{Timeout: flagTraceTimeout, MaxEvents: flagTraceMaxEvents}
-		res, err := runner.Run(cmd.Context(), scopes, command, commandArgs...)
+		var res *trace.Result
+		if backend == trace.BackendEBPF {
+			res, err = trace.RunEBPF(cmd.Context(), scopes, command, commandArgs...)
+		} else {
+			runner := &trace.Runner{Timeout: flagTraceTimeout, MaxEvents: flagTraceMaxEvents}
+			res, err = runner.Run(cmd.Context(), scopes, command, commandArgs...)
+		}
 		if err != nil {
 			logger.Error("trace", err.Error())
 			return exitCodeError{code: exitcode.InternalError}
+		}
+		if res.TraceUnavailable && res.Backend == string(trace.BackendEBPF) {
+			logger.Warn("trace", fmt.Sprintf("ebpf backend unavailable: %s", res.UnavailableReason))
 		}
 
 		// Analyze raw trace events first, then redact report/capsule output.
@@ -74,11 +90,24 @@ then analyzes the trace output to produce diagnostic findings.`,
 			Name:   "trace",
 			Status: schema.CollectorOK,
 			Evidence: []schema.Evidence{
+				{Source: "trace_backend", Value: res.Backend},
 				{Source: "trace_command", Value: command},
 				{Source: "trace_scopes", Value: flagTraceScope},
 				{Source: "trace_event_count", Value: fmt.Sprintf("%d", len(res.Events))},
 			},
 			Notes: res.Notes,
+		}
+		if res.SeccompRequested {
+			collectorResult.Evidence = append(collectorResult.Evidence, schema.Evidence{Source: "seccomp_requested", Value: "true"})
+		}
+		if res.SeccompApplied {
+			collectorResult.Evidence = append(collectorResult.Evidence, schema.Evidence{Source: "seccomp_applied", Value: "true"})
+		}
+		if res.SeccompDegraded {
+			collectorResult.Evidence = append(collectorResult.Evidence, schema.Evidence{Source: "seccomp_degraded", Value: "true"})
+		}
+		if res.UnavailableReason != "" {
+			collectorResult.Evidence = append(collectorResult.Evidence, schema.Evidence{Source: "trace_unavailable_reason", Value: res.UnavailableReason})
 		}
 		if res.TimedOut {
 			collectorResult.Status = schema.CollectorTimeout
@@ -124,10 +153,10 @@ then analyzes the trace output to produce diagnostic findings.`,
 		}
 
 		// Persist redacted trace result artifact for capsule integration.
-		// persistTraceResult writes to `.devdiag/latest/trace-result.json`.
-		// The capsule builder reads this file and includes it as `snapshot/trace.json`.
+		// persistTraceResult writes to the run directory and latest convenience path.
+		// The capsule builder reads the run artifact and includes it as `snapshot/trace.json`.
 		// Use the same base directory as persistReport ("." for trace command).
-		if err := persistTraceResult(".", redactedResult); err != nil {
+		if err := persistTraceResult(".", redacted.RunID, redactedResult); err != nil {
 			logger.Warn("trace", fmt.Sprintf("failed to persist trace result: %v", err))
 		}
 
@@ -155,31 +184,39 @@ then analyzes the trace output to produce diagnostic findings.`,
 	},
 }
 
-// persistTraceResult writes the redacted trace result to .devdiag/latest/trace-result.json
-// for capsule integration. Uses 0700 dir and 0600 file permissions.
+func init() {
+	traceCmd.Flags().StringVar(&flagTraceScope, "scope", "file", "Trace scopes: file, process, network (comma-separated)")
+	traceCmd.Flags().DurationVar(&flagTraceTimeout, "timeout", 30*time.Second, "Maximum trace duration")
+	traceCmd.Flags().IntVar(&flagTraceMaxEvents, "max-events", 10000, "Maximum trace events to parse")
+	traceCmd.Flags().StringVar(&flagTraceBackend, "backend", "strace", "Trace backend: strace or ebpf")
+	rootCmd.AddCommand(traceCmd)
+}
+
+// persistTraceResult writes the redacted trace result to .devdiag/runs/<runID>/trace-result.json
+// and .devdiag/latest/trace-result.json. Uses 0700 dir and 0600 file permissions.
 // Uses the same base directory resolution as persistReport (repo root or current directory).
-func persistTraceResult(base string, res *trace.Result) error {
+func persistTraceResult(base, runID string, res *trace.Result) error {
 	if base == "" {
 		base = "."
-	}
-	dir := filepath.Join(base, ".devdiag", "latest")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create trace dir: %w", err)
 	}
 	data, err := json.MarshalIndent(res, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal trace result: %w", err)
 	}
+	dir := filepath.Join(base, ".devdiag", "runs", runID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create trace dir: %w", err)
+	}
 	path := filepath.Join(dir, "trace-result.json")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write trace result: %w", err)
 	}
+	latestDir := filepath.Join(base, ".devdiag", "latest")
+	if err := os.MkdirAll(latestDir, 0o700); err != nil {
+		return fmt.Errorf("create latest trace dir: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(latestDir, "trace-result.json"), data, 0o600); err != nil {
+		return fmt.Errorf("write latest trace result: %w", err)
+	}
 	return nil
-}
-
-func init() {
-	traceCmd.Flags().StringVar(&flagTraceScope, "scope", "file", "Trace scopes: file, process, network (comma-separated)")
-	traceCmd.Flags().DurationVar(&flagTraceTimeout, "timeout", 30*time.Second, "Maximum trace duration")
-	traceCmd.Flags().IntVar(&flagTraceMaxEvents, "max-events", 10000, "Maximum trace events to parse")
-	rootCmd.AddCommand(traceCmd)
 }

@@ -58,19 +58,39 @@ func Analyze(events []Event) []schema.Finding {
 	fileNotFound := make(map[string][]schema.Evidence)
 	permDenied := make(map[string][]schema.Evidence)
 	connRefused := make(map[string][]schema.Evidence)
+	execFailed := make(map[string][]schema.Evidence)
+	addrInUse := make(map[string][]schema.Evidence)
+	dnsFailures := make(map[string][]schema.Evidence)
 
 	seenFile := make(map[string]bool)
 	seenPerm := make(map[string]bool)
 	seenConn := make(map[string]bool)
+	seenExec := make(map[string]bool)
+	seenBind := make(map[string]bool)
+	seenDNS := make(map[string]bool)
 
 	for _, ev := range events {
 		if ev.Result != "-1" || ev.Error == "" {
 			continue
 		}
+		if collectDNSEvidence(ev, dnsFailures, seenDNS) {
+			continue
+		}
 		switch ev.Error {
 		case "ENOENT":
 			path := extractPath(ev.Args)
-			if path != "" && !isNoisyPath(path) && !seenFile[path] {
+			if ev.Syscall == "execve" || ev.Syscall == "execveat" {
+				key := path + "|" + ev.Error
+				if path != "" && !seenExec[key] {
+					seenExec[key] = true
+					execFailed[path] = append(execFailed[path], schema.Evidence{
+						Source: "trace_exec_path", Value: path,
+					})
+					execFailed[path] = append(execFailed[path], schema.Evidence{
+						Source: "trace_errno", Value: ev.Error,
+					})
+				}
+			} else if path != "" && !isNoisyPath(path) && !seenFile[path] {
 				seenFile[path] = true
 				fileNotFound[path] = append(fileNotFound[path], schema.Evidence{
 					Source: "trace_open_path", Value: path,
@@ -111,6 +131,34 @@ func Analyze(events []Event) []schema.Finding {
 				}
 				connRefused[key] = append(connRefused[key], schema.Evidence{
 					Source: "trace_errno", Value: "ECONNREFUSED",
+				})
+			}
+		case "EADDRINUSE":
+			host, port, raw := extractHostPort(ev.Args)
+			key := host + ":" + port
+			if host == "" && port == "" {
+				key = raw
+			}
+			bindKey := key + "|EADDRINUSE"
+			if key != "" && !seenBind[bindKey] {
+				seenBind[bindKey] = true
+				if host != "" {
+					addrInUse[key] = append(addrInUse[key], schema.Evidence{
+						Source: "trace_bind_host", Value: host,
+					})
+				}
+				if port != "" {
+					addrInUse[key] = append(addrInUse[key], schema.Evidence{
+						Source: "trace_bind_port", Value: port,
+					})
+				}
+				if host == "" && port == "" {
+					addrInUse[key] = append(addrInUse[key], schema.Evidence{
+						Source: "trace_bind_addr", Value: raw,
+					})
+				}
+				addrInUse[key] = append(addrInUse[key], schema.Evidence{
+					Source: "trace_errno", Value: "EADDRINUSE",
 				})
 			}
 		}
@@ -180,6 +228,57 @@ func Analyze(events []Event) []schema.Finding {
 		})
 	}
 
+	if len(execFailed) > 0 {
+		var evidence []schema.Evidence
+		for _, k := range sortedMapKeys(execFailed) {
+			evidence = append(evidence, execFailed[k]...)
+		}
+		findings = append(findings, schema.Finding{
+			ID:           "F-TRACE-EXEC-001",
+			Title:        "Executable not found during trace",
+			Severity:     schema.SeverityMedium,
+			Confidence:   0.75,
+			Symptom:      "Process attempted to execute a binary that was not found",
+			LikelyCauses: []string{"Wrong PATH", "Missing runtime binary", "Incorrect shebang or toolchain path"},
+			FixHints:     []string{"verify-executable-path", "check-path", "install-runtime"},
+			Evidence:     capEvidence(evidence),
+		})
+	}
+
+	if len(addrInUse) > 0 {
+		var evidence []schema.Evidence
+		for _, k := range sortedMapKeys(addrInUse) {
+			evidence = append(evidence, addrInUse[k]...)
+		}
+		findings = append(findings, schema.Finding{
+			ID:           "F-TRACE-NET-002",
+			Title:        "Address already in use during trace",
+			Severity:     schema.SeverityHigh,
+			Confidence:   0.85,
+			Symptom:      "Process attempted to bind a port or socket that is already in use",
+			LikelyCauses: []string{"Another process is already listening", "Port conflict", "Stale local service"},
+			FixHints:     []string{"check-listening-process", "change-port", "stop-conflicting-service"},
+			Evidence:     capEvidence(evidence),
+		})
+	}
+
+	if len(dnsFailures) > 0 {
+		var evidence []schema.Evidence
+		for _, k := range sortedMapKeys(dnsFailures) {
+			evidence = append(evidence, dnsFailures[k]...)
+		}
+		findings = append(findings, schema.Finding{
+			ID:           "F-TRACE-DNS-001",
+			Title:        "DNS resolver dependency failed during trace",
+			Severity:     schema.SeverityMedium,
+			Confidence:   0.75,
+			Symptom:      "Process hit resolver configuration, NSS, or DNS socket failures",
+			LikelyCauses: []string{"Missing resolver configuration", "Blocked DNS server", "NSS resolver module unavailable"},
+			FixHints:     []string{"verify-resolver-config", "check-dns-connectivity", "check-nss-config"},
+			Evidence:     capEvidence(evidence),
+		})
+	}
+
 	return findings
 }
 
@@ -215,4 +314,82 @@ func extractHostPort(args []string) (host, port, raw string) {
 		}
 	}
 	return
+}
+
+func collectDNSEvidence(ev Event, dnsFailures map[string][]schema.Evidence, seenDNS map[string]bool) bool {
+	if !isDNSErrno(ev.Error) {
+		return false
+	}
+	path := extractPath(ev.Args)
+	if isResolverPath(path) || isResolverModule(path) {
+		key := path + "|" + ev.Error
+		if !seenDNS[key] {
+			seenDNS[key] = true
+			dnsFailures[path] = append(dnsFailures[path], schema.Evidence{
+				Source: "trace_dns_path", Value: path,
+			})
+			dnsFailures[path] = append(dnsFailures[path], schema.Evidence{
+				Source: "trace_errno", Value: ev.Error,
+			})
+		}
+		return true
+	}
+	host, port, raw := extractHostPort(ev.Args)
+	if port == "53" && isDNSSocketErrno(ev.Error) {
+		key := host + ":" + port + "|" + ev.Error
+		if key == ":53|"+ev.Error {
+			key = raw + "|" + ev.Error
+		}
+		if !seenDNS[key] {
+			seenDNS[key] = true
+			if host != "" {
+				dnsFailures[key] = append(dnsFailures[key], schema.Evidence{
+					Source: "trace_dns_host", Value: host,
+				})
+			}
+			dnsFailures[key] = append(dnsFailures[key], schema.Evidence{
+				Source: "trace_dns_port", Value: port,
+			})
+			dnsFailures[key] = append(dnsFailures[key], schema.Evidence{
+				Source: "trace_errno", Value: ev.Error,
+			})
+		}
+		return true
+	}
+	return false
+}
+
+func isDNSErrno(errno string) bool {
+	switch errno {
+	case "ENOENT", "EACCES", "EPERM", "ECONNREFUSED", "ENETUNREACH", "ETIMEDOUT", "EHOSTUNREACH":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDNSSocketErrno(errno string) bool {
+	switch errno {
+	case "ECONNREFUSED", "ENETUNREACH", "ETIMEDOUT", "EHOSTUNREACH":
+		return true
+	default:
+		return false
+	}
+}
+
+func isResolverPath(path string) bool {
+	switch path {
+	case "/etc/resolv.conf", "/etc/nsswitch.conf":
+		return true
+	default:
+		return false
+	}
+}
+
+func isResolverModule(path string) bool {
+	base := path
+	if idx := strings.LastIndex(base, "/"); idx != -1 {
+		base = base[idx+1:]
+	}
+	return strings.HasPrefix(base, "libnss_dns.so") || strings.HasPrefix(base, "libnss_resolve.so")
 }

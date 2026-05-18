@@ -112,7 +112,10 @@ func availableRuleFindings() []schema.Finding {
 		{"F-CI-SHELL-001", "CI shell differs from local"},
 		{"F-TRACE-FILE-001", "Trace detected missing file access"},
 		{"F-TRACE-FILE-002", "Trace detected permission-denied file access"},
+		{"F-TRACE-EXEC-001", "Trace detected missing executable"},
 		{"F-TRACE-NET-001", "Trace detected refused network connection"},
+		{"F-TRACE-NET-002", "Trace detected address already in use"},
+		{"F-TRACE-DNS-001", "Trace detected DNS resolver failure"},
 	}
 
 	findings := make([]schema.Finding, 0, len(rules))

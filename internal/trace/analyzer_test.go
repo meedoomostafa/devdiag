@@ -84,6 +84,48 @@ func TestAnalyzeUnixSocketConnectionRefused(t *testing.T) {
 	assertContainsFixHint(t, f, "verify-unix-socket")
 }
 
+func TestAnalyzeExecveENOENT(t *testing.T) {
+	events := []Event{
+		{Syscall: "execve", Args: []string{`"/wrong/node"`, `["node"]`, "0x7fff"}, Result: "-1", Error: "ENOENT"},
+	}
+	findings := Analyze(events)
+	assertFinding(t, findings, "F-TRACE-EXEC-001")
+	f := findingByID(findings, "F-TRACE-EXEC-001")
+	assertEvidence(t, f, "trace_exec_path", "/wrong/node")
+}
+
+func TestAnalyzeBindAddressInUse(t *testing.T) {
+	events := []Event{
+		{Syscall: "bind", Args: []string{"3", `{sa_family=AF_INET, sin_port=htons(5432), sin_addr=inet_addr("127.0.0.1")}`}, Result: "-1", Error: "EADDRINUSE"},
+	}
+	findings := Analyze(events)
+	assertFinding(t, findings, "F-TRACE-NET-002")
+	f := findingByID(findings, "F-TRACE-NET-002")
+	assertEvidence(t, f, "trace_bind_port", "5432")
+}
+
+func TestAnalyzeDNSResolverFileFailure(t *testing.T) {
+	events := []Event{
+		{Syscall: "openat", Args: []string{"AT_FDCWD", `"/etc/resolv.conf"`, "O_RDONLY"}, Result: "-1", Error: "ENOENT"},
+	}
+	findings := Analyze(events)
+	assertFinding(t, findings, "F-TRACE-DNS-001")
+	if f := findingByID(findings, "F-TRACE-FILE-001"); f.ID != "" {
+		t.Fatal("expected resolver failure to prefer F-TRACE-DNS-001 over F-TRACE-FILE-001")
+	}
+}
+
+func TestAnalyzeDNSPort53Failure(t *testing.T) {
+	events := []Event{
+		{Syscall: "sendto", Args: []string{"3", `"query"`, "5", "0", `{sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("127.0.0.53")}`, "16"}, Result: "-1", Error: "ETIMEDOUT"},
+	}
+	findings := Analyze(events)
+	assertFinding(t, findings, "F-TRACE-DNS-001")
+	if f := findingByID(findings, "F-TRACE-NET-001"); f.ID != "" {
+		t.Fatal("expected DNS port 53 failure to avoid generic connection-refused finding")
+	}
+}
+
 func TestAnalyzeEvidenceCap(t *testing.T) {
 	var events []Event
 	for i := 0; i < maxEvidencePerFinding+5; i++ {
@@ -158,4 +200,14 @@ func assertContainsFixHint(t *testing.T, f schema.Finding, hint string) {
 		}
 	}
 	t.Fatalf("missing fix hint %q in finding %s", hint, f.ID)
+}
+
+func assertEvidence(t *testing.T, f schema.Finding, source, value string) {
+	t.Helper()
+	for _, ev := range f.Evidence {
+		if ev.Source == source && ev.Value == value {
+			return
+		}
+	}
+	t.Fatalf("missing evidence %s=%s in finding %s: %#v", source, value, f.ID, f.Evidence)
 }

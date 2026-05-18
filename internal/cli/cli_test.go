@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +14,7 @@ import (
 
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/schema"
+	"github.com/meedoomostafa/devdiag/internal/trace"
 )
 
 // Helper to build the binary once for integration tests.
@@ -378,6 +382,26 @@ func TestValidateRunID(t *testing.T) {
 	}
 }
 
+func TestRulesListIncludesTraceFindings(t *testing.T) {
+	stdout, stderr, code := runBinary("rules", "list", "--format", "json")
+	if code != 0 {
+		t.Fatalf("rules list exit code = %d, want 0, stderr=%s", code, stderr)
+	}
+	var report schema.Report
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("parse rules report: %v\nstdout=%s", err, stdout)
+	}
+	got := make(map[string]bool)
+	for _, f := range report.Findings {
+		got[f.ID] = true
+	}
+	for _, id := range []string{"F-TRACE-EXEC-001", "F-TRACE-NET-002", "F-TRACE-DNS-001"} {
+		if !got[id] {
+			t.Fatalf("expected rules list to include %s", id)
+		}
+	}
+}
+
 func TestCheckGPU_NewFlagsDoNotCrash(t *testing.T) {
 	// Verify the new GPU verification flags are accepted and do not panic.
 	_, _, code := runBinary("check", "gpu", "--gpu-verify")
@@ -426,6 +450,66 @@ func TestTraceCommand_InvalidScope(t *testing.T) {
 	}
 }
 
+func TestTraceCommand_EBPFBackendUnavailableDiagnostic(t *testing.T) {
+	_, stderr, code := runBinary("trace", "--backend", "ebpf", "--scope", "file", "--", "true")
+	if code != int(exitcode.TraceUnavailable) {
+		t.Fatalf("trace --backend ebpf exit code = %d, want %d, stderr=%s", code, exitcode.TraceUnavailable, stderr)
+	}
+	if !strings.Contains(stderr, "ebpf") && !strings.Contains(stderr, "eBPF") {
+		t.Fatalf("expected ebpf unavailable diagnostic in stderr, got %s", stderr)
+	}
+}
+
+func TestPersistTraceResultUsesRunDirectory(t *testing.T) {
+	dir := t.TempDir()
+	runID := "trace-run-test"
+	res := &trace.Result{Backend: "strace", Events: []trace.Event{}}
+	if err := persistTraceResult(dir, runID, res); err != nil {
+		t.Fatalf("persistTraceResult: %v", err)
+	}
+	runTracePath := filepath.Join(dir, ".devdiag", "runs", runID, "trace-result.json")
+	if _, err := os.Stat(runTracePath); err != nil {
+		t.Fatalf("expected run trace artifact at %s: %v", runTracePath, err)
+	}
+}
+
+func TestCapsuleCreateIncludesRunTraceArtifact(t *testing.T) {
+	dir := t.TempDir()
+	runID := "trace-capsule-test"
+	runsDir := filepath.Join(dir, ".devdiag", "runs", runID)
+	if err := os.MkdirAll(runsDir, 0o755); err != nil {
+		t.Fatalf("create run dir: %v", err)
+	}
+	report := schema.Report{
+		SchemaVersion:   schema.SchemaVersion,
+		DevDiagVersion:  "test",
+		RunID:           runID,
+		RedactionStatus: "default",
+	}
+	reportData, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshal report: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runsDir, "report.json"), reportData, 0o644); err != nil {
+		t.Fatalf("write report: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runsDir, "trace-result.json"), []byte(`{"backend":"strace","events":[]}`), 0o600); err != nil {
+		t.Fatalf("write trace artifact: %v", err)
+	}
+	_, stderr, code := runBinaryInDir(dir, "capsule", "create", "--run-id", runID)
+	if code != 0 {
+		t.Fatalf("capsule create exit code = %d, want 0, stderr=%s", code, stderr)
+	}
+	capsulePath := filepath.Join(dir, "support-"+runID+".devdiag.tgz")
+	hasTrace, err := tgzHasFile(capsulePath, "snapshot/trace.json")
+	if err != nil {
+		t.Fatalf("inspect capsule: %v", err)
+	}
+	if !hasTrace {
+		t.Fatal("expected capsule to include snapshot/trace.json")
+	}
+}
+
 func TestCheckCI_Fixture(t *testing.T) {
 	fixture := filepath.Join("..", "..", "fixtures", "ci-local-parity")
 	cmd := exec.Command("go", "run", "../../cmd/devdiag", "check", "ci", fixture)
@@ -440,5 +524,31 @@ func TestCheckCI_Fixture(t *testing.T) {
 	}
 	if !strings.Contains(output, "F-CI-ENV-001") {
 		t.Errorf("expected F-CI-ENV-001 in output")
+	}
+}
+
+func tgzHasFile(path, name string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return false, err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if h.Name == name {
+			return true, nil
+		}
 	}
 }

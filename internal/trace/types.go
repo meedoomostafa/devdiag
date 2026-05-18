@@ -15,6 +15,13 @@ const (
 	ScopeNetwork Scope = "network"
 )
 
+type Backend string
+
+const (
+	BackendStrace Backend = "strace"
+	BackendEBPF   Backend = "ebpf"
+)
+
 // ParseScopes parses a comma-separated list of scope names.
 func ParseScopes(s string) ([]Scope, error) {
 	if s == "" {
@@ -44,6 +51,30 @@ func ParseScopes(s string) ([]Scope, error) {
 	return scopes, nil
 }
 
+func ParseBackend(s string) (Backend, error) {
+	switch strings.TrimSpace(strings.ToLower(s)) {
+	case "", string(BackendStrace):
+		return BackendStrace, nil
+	case string(BackendEBPF):
+		return BackendEBPF, nil
+	default:
+		return "", fmt.Errorf("invalid backend: %q", s)
+	}
+}
+
+func newEBPFUnavailableResult(scopes []Scope, command string, args []string, reason string) *Result {
+	return &Result{
+		Command:           command,
+		Args:              args,
+		Scopes:            scopes,
+		Backend:           string(BackendEBPF),
+		Events:            []Event{},
+		TraceUnavailable:  true,
+		UnavailableReason: reason,
+		Notes:             []string{"ebpf backend unavailable: " + reason},
+	}
+}
+
 // Event is a single parsed strace line.
 type Event struct {
 	Timestamp time.Time     `json:"timestamp,omitempty"`
@@ -57,16 +88,22 @@ type Event struct {
 
 // Result is the output of a trace run.
 type Result struct {
-	Command          string        `json:"command"`
-	Args             []string      `json:"args"`
-	Scopes           []Scope       `json:"scopes"`
-	Events           []Event       `json:"events"`
-	TimedOut         bool          `json:"timed_out"`
-	Partial          bool          `json:"partial"`
-	TraceUnavailable bool          `json:"trace_unavailable"`
-	ProcessFailed    bool          `json:"process_failed"`
-	Canceled         bool          `json:"canceled"`
-	ExitCode         int           `json:"exit_code"`
-	Duration         time.Duration `json:"duration"`
-	Notes            []string      `json:"notes,omitempty"`
+	Command           string        `json:"command"`
+	Args              []string      `json:"args"`
+	Scopes            []Scope       `json:"scopes"`
+	Backend           string        `json:"backend,omitempty"`
+	Events            []Event       `json:"events"`
+	SeccompRequested  bool          `json:"seccomp_requested,omitempty"`
+	SeccompApplied    bool          `json:"seccomp_applied,omitempty"`
+	SeccompDegraded   bool          `json:"seccomp_degraded,omitempty"`
+	TimedOut          bool          `json:"timed_out"`
+	Partial           bool          `json:"partial"`
+	TraceUnavailable  bool          `json:"trace_unavailable"`
+	UnavailableReason string        `json:"unavailable_reason,omitempty"`
+	ProcessFailed     bool          `json:"process_failed"`
+	Canceled          bool          `json:"canceled"`
+	SkippedEvents     int           `json:"skipped_events,omitempty"`
+	ExitCode          int           `json:"exit_code"`
+	Duration          time.Duration `json:"duration"`
+	Notes             []string      `json:"notes,omitempty"`
 }

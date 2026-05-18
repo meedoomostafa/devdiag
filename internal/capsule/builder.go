@@ -89,6 +89,9 @@ func (b *Builder) Build(w io.Writer, report *schema.Report, reproResult *repro.R
 	}
 	// Write collector snapshots (only available ones)
 	for _, c := range report.Collectors {
+		if b.TraceArtifact != nil && c.Name == "trace" {
+			continue
+		}
 		cData, err := json.MarshalIndent(c, "", "  ")
 		if err != nil {
 			manifest.Notes = append(manifest.Notes, fmt.Sprintf("marshal failed for collector %s: %v", c.Name, err))
