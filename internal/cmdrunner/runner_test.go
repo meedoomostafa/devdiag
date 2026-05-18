@@ -72,3 +72,32 @@ func TestFakeRunnerNotFound(t *testing.T) {
 		t.Fatal("expected NotFound=true")
 	}
 }
+
+func TestFakeRunnerRecordsRunOptions(t *testing.T) {
+	f := NewFakeRunner(map[string]Result{
+		"docker compose config --format json": {
+			Command:  "docker",
+			ExitCode: 0,
+			Stdout:   `{"services":{}}`,
+		},
+	})
+
+	res := RunWithOptions(context.Background(), f, RunOptions{
+		Dir:   "/tmp/project",
+		Stdin: []byte("manifest"),
+	}, "docker", "compose", "config", "--format", "json")
+
+	if res.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", res.ExitCode)
+	}
+	if len(f.Calls) != 1 {
+		t.Fatalf("expected 1 recorded call, got %d", len(f.Calls))
+	}
+	call := f.Calls[0]
+	if call.Dir != "/tmp/project" {
+		t.Fatalf("expected dir /tmp/project, got %q", call.Dir)
+	}
+	if string(call.Stdin) != "manifest" {
+		t.Fatalf("expected stdin to be recorded, got %q", string(call.Stdin))
+	}
+}

@@ -27,6 +27,18 @@ type CommandRunner interface {
 	Run(ctx context.Context, name string, args ...string) Result
 }
 
+// RunOptions carries optional execution settings for callers that need a
+// working directory or stdin without bypassing CommandRunner.
+type RunOptions struct {
+	Dir   string
+	Stdin []byte
+}
+
+// OptionRunner is implemented by runners that support RunOptions.
+type OptionRunner interface {
+	RunWithOptions(ctx context.Context, opts RunOptions, name string, args ...string) Result
+}
+
 // maxCaptureBytes limits stdout/stderr capture to prevent OOM from runaway processes.
 const maxCaptureBytes = 10 * 1024 * 1024 // 10 MB
 
@@ -41,6 +53,11 @@ func NewRealRunner() *RealRunner {
 // Run executes the named command with the given arguments.
 // It never uses sh -c. Stdout and stderr are captured separately.
 func (r *RealRunner) Run(ctx context.Context, name string, args ...string) Result {
+	return r.RunWithOptions(ctx, RunOptions{}, name, args...)
+}
+
+// RunWithOptions executes the named command with optional directory/stdin settings.
+func (r *RealRunner) RunWithOptions(ctx context.Context, opts RunOptions, name string, args ...string) Result {
 	start := time.Now()
 	res := Result{
 		Command: name,
@@ -48,6 +65,12 @@ func (r *RealRunner) Run(ctx context.Context, name string, args ...string) Resul
 	}
 
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = opts.Dir
+	if opts.Stdin != nil {
+		cmd.Stdin = bytes.NewReader(opts.Stdin)
+	} else {
+		cmd.Stdin = nil
+	}
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
@@ -92,6 +115,19 @@ func (r *RealRunner) Run(ctx context.Context, name string, args ...string) Resul
 	}
 
 	return res
+}
+
+// RunWithOptions executes through r with options when supported, otherwise it
+// falls back to plain Run. Production callers should pass NewRealRunner, which
+// supports options.
+func RunWithOptions(ctx context.Context, r CommandRunner, opts RunOptions, name string, args ...string) Result {
+	if r == nil {
+		r = NewRealRunner()
+	}
+	if optionRunner, ok := r.(OptionRunner); ok {
+		return optionRunner.RunWithOptions(ctx, opts, name, args...)
+	}
+	return r.Run(ctx, name, args...)
 }
 
 func limitCapture(s string) string {

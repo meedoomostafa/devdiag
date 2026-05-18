@@ -6,17 +6,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
 // Collector checks Compose service status, config validity, bind mounts, and stale containers.
 type Collector struct {
-	Root string // repo root
+	Root   string // repo root
+	Runner cmdrunner.CommandRunner
 }
 
 func (c *Collector) Name() string {
@@ -27,6 +28,10 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	root := c.Root
 	if root == "" {
 		root = "."
+	}
+	runner := c.Runner
+	if runner == nil {
+		runner = cmdrunner.NewRealRunner()
 	}
 
 	evidence := []schema.Evidence{}
@@ -62,12 +67,10 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// docker compose config with strict timeout (only extracted facts, no raw dump)
 	cmdCtx, cancel := context.WithTimeout(ctx, 2000*time.Millisecond)
-	cmd := exec.CommandContext(cmdCtx, "docker", "compose", "config", "--format", "json")
-	cmd.Dir = root
-	out, err := cmd.Output()
+	configRes := cmdrunner.RunWithOptions(cmdCtx, runner, cmdrunner.RunOptions{Dir: root}, "docker", "compose", "config", "--format", "json")
 	cancel()
-	if err != nil {
-		notes = append(notes, fmt.Sprintf("docker compose config failed: %v", err))
+	if configRes.ExitCode != 0 {
+		notes = append(notes, fmt.Sprintf("docker compose config failed: %s", commandFailure(configRes)))
 		return schema.CollectorResult{
 			Name:     c.Name(),
 			Status:   schema.CollectorPartial,
@@ -77,7 +80,7 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	}
 
 	var cfg composeConfig
-	if err := json.Unmarshal(out, &cfg); err != nil {
+	if err := json.Unmarshal([]byte(configRes.Stdout), &cfg); err != nil {
 		notes = append(notes, fmt.Sprintf("compose config parse failed: %v", err))
 		return schema.CollectorResult{
 			Name:     c.Name(),
@@ -142,12 +145,10 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// docker compose ps --format json for service status
 	cmdCtx, cancel = context.WithTimeout(ctx, 2000*time.Millisecond)
-	cmd = exec.CommandContext(cmdCtx, "docker", "compose", "ps", "--format", "json")
-	cmd.Dir = root
-	out, err = cmd.Output()
+	psRes := cmdrunner.RunWithOptions(cmdCtx, runner, cmdrunner.RunOptions{Dir: root}, "docker", "compose", "ps", "--format", "json")
 	cancel()
-	if err == nil {
-		services := parseComposePS(out)
+	if psRes.ExitCode == 0 {
+		services := parseComposePS([]byte(psRes.Stdout))
 		for _, s := range services {
 			evidence = append(evidence, schema.Evidence{
 				Source: fmt.Sprintf("compose_service_%s_status", s.Service),
@@ -161,7 +162,7 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 			}
 		}
 	} else {
-		notes = append(notes, fmt.Sprintf("docker compose ps failed: %v", err))
+		notes = append(notes, fmt.Sprintf("docker compose ps failed: %s", commandFailure(psRes)))
 	}
 
 	status := schema.CollectorOK
@@ -175,6 +176,19 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		Evidence: evidence,
 		Notes:    notes,
 	}, nil
+}
+
+func commandFailure(res cmdrunner.Result) string {
+	if res.Stderr != "" {
+		return strings.TrimSpace(res.Stderr)
+	}
+	if res.Stdout != "" {
+		return strings.TrimSpace(res.Stdout)
+	}
+	if res.TimedOut {
+		return "timed out"
+	}
+	return fmt.Sprintf("exit code %d", res.ExitCode)
 }
 
 // resolveProjectName determines the Compose project name with Docker Compose precedence.

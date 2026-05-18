@@ -178,7 +178,7 @@ func resolveReport() (*schema.Report, schema.FixSource, string, time.Duration, e
 	if runID == "" {
 		latest, err := findLatestRunID()
 		if err != nil {
-			return nil, "", "", 0, fmt.Errorf("no saved report found; run 'devdiag scan' first")
+			return nil, "", "", 0, fmt.Errorf("no saved report found; run 'devdiag scan --save-report' first")
 		}
 		runID = latest
 	}

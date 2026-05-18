@@ -38,6 +38,8 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/version"
 )
 
+var scanSaveReport bool
+
 var scanCmd = &cobra.Command{
 	Use:   "scan [path]",
 	Short: "Run a diagnostic scan on the given path",
@@ -175,9 +177,11 @@ var scanCmd = &cobra.Command{
 			return err
 		}
 
-		// Persist report for fix command
-		if err := persistReport(report); err != nil {
-			logger.Warn("scan", fmt.Sprintf("failed to persist report: %v", err))
+		// Persist reports only when explicitly requested. By default scan is read-only.
+		if scanSaveReport {
+			if err := persistReport(report); err != nil {
+				logger.Warn("scan", fmt.Sprintf("failed to persist report: %v", err))
+			}
 		}
 
 		code := exitCodeFromResults(sortedFindings, collectorResults, false)
@@ -220,5 +224,6 @@ func severityHigher(a, b schema.Severity) bool {
 }
 
 func init() {
+	scanCmd.Flags().BoolVar(&scanSaveReport, "save-report", false, "Persist report under .devdiag/runs for fix and capsule commands")
 	rootCmd.AddCommand(scanCmd)
 }

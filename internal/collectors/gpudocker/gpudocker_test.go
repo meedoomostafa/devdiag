@@ -306,6 +306,120 @@ func TestCollectorDockerDaemonDown(t *testing.T) {
 	assertEvidence(t, res.Evidence, "docker_daemon_accessible", "false")
 }
 
+func TestCollectorNvidiaCtkTimeoutMarksCollectorTimeout(t *testing.T) {
+	c := &Collector{
+		Runner: cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+			"nvidia-ctk --version": {
+				Command:  "nvidia-ctk",
+				ExitCode: -1,
+				TimedOut: true,
+			},
+			"nvidia-container-cli --version": {
+				Command:  "nvidia-container-cli",
+				NotFound: true,
+				ExitCode: -1,
+			},
+			"nvidia-container-runtime --version": {
+				Command:  "nvidia-container-runtime",
+				NotFound: true,
+				ExitCode: -1,
+			},
+			"docker info --format {{json .}}": {
+				Command:  "docker",
+				NotFound: true,
+				ExitCode: -1,
+			},
+		}),
+	}
+
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertTimeoutResult(t, res, 1000, "nvidia-ctk --version timed out")
+	assertEvidence(t, res.Evidence, "gpudocker_probe_timeout", "nvidia-ctk --version")
+}
+
+func TestCollectorDockerInfoTimeoutMarksCollectorTimeout(t *testing.T) {
+	c := &Collector{
+		Runner: cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+			"nvidia-ctk --version": {
+				Command:  "nvidia-ctk",
+				NotFound: true,
+				ExitCode: -1,
+			},
+			"nvidia-container-cli --version": {
+				Command:  "nvidia-container-cli",
+				NotFound: true,
+				ExitCode: -1,
+			},
+			"nvidia-container-runtime --version": {
+				Command:  "nvidia-container-runtime",
+				NotFound: true,
+				ExitCode: -1,
+			},
+			"docker info --format {{json .}}": {
+				Command:  "docker",
+				ExitCode: -1,
+				TimedOut: true,
+			},
+		}),
+	}
+
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertTimeoutResult(t, res, 1500, "docker info --format {{json .}} timed out")
+	assertEvidence(t, res.Evidence, "gpudocker_probe_timeout", "docker info --format {{json .}}")
+}
+
+func TestCollectorGPUVerifyTimeoutMarksCollectorTimeout(t *testing.T) {
+	c := &Collector{
+		Runner: cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+			"nvidia-ctk --version": {
+				Command:  "nvidia-ctk",
+				NotFound: true,
+				ExitCode: -1,
+			},
+			"nvidia-container-cli --version": {
+				Command:  "nvidia-container-cli",
+				NotFound: true,
+				ExitCode: -1,
+			},
+			"nvidia-container-runtime --version": {
+				Command:  "nvidia-container-runtime",
+				NotFound: true,
+				ExitCode: -1,
+			},
+			"docker info --format {{json .}}": {
+				Command:  "docker",
+				ExitCode: 0,
+				Stdout:   `{"Runtimes":{}}`,
+			},
+			"docker image inspect nvidia/cuda:12.2.0-base-ubuntu22.04": {
+				Command:  "docker",
+				ExitCode: 0,
+				Stdout:   "[{\"Id\":\"sha256:...\"}]",
+			},
+			"docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi": {
+				Command:  "docker",
+				ExitCode: -1,
+				TimedOut: true,
+			},
+		}),
+		GPUVerify: true,
+	}
+
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertTimeoutResult(t, res, 5000, "docker run --gpus all timed out")
+	assertEvidence(t, res.Evidence, "docker_gpu_verify_result", "timeout")
+	assertEvidence(t, res.Evidence, "gpudocker_probe_timeout", "docker run --gpus all")
+}
+
 func TestExtractDockerGPURuntime(t *testing.T) {
 	tests := []struct {
 		input string
@@ -361,4 +475,23 @@ func assertEvidence(t *testing.T, evidence []schema.Evidence, source, want strin
 		}
 	}
 	t.Fatalf("missing evidence %q (want %q)", source, want)
+}
+
+func assertTimeoutResult(t *testing.T, res schema.CollectorResult, timeoutMs int, note string) {
+	t.Helper()
+	if res.Status != schema.CollectorTimeout {
+		t.Fatalf("status = %s, want timeout", res.Status)
+	}
+	if !res.Partial {
+		t.Fatal("expected Partial=true")
+	}
+	if res.TimeoutMs != timeoutMs {
+		t.Fatalf("TimeoutMs = %d, want %d", res.TimeoutMs, timeoutMs)
+	}
+	for _, got := range res.Notes {
+		if got == note {
+			return
+		}
+	}
+	t.Fatalf("missing timeout note %q in %v", note, res.Notes)
 }

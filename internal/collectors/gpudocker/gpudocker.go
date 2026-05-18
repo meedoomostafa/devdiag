@@ -31,6 +31,13 @@ type Collector struct {
 
 const defaultVerifyImage = "nvidia/cuda:12.2.0-base-ubuntu22.04"
 
+const (
+	toolProbeTimeout    = 1 * time.Second
+	dockerInfoTimeout   = 1500 * time.Millisecond
+	imageInspectTimeout = 2 * time.Second
+	gpuVerifyRunTimeout = 5 * time.Second
+)
+
 func (c *Collector) Name() string {
 	return "gpudocker"
 }
@@ -49,36 +56,53 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	notes := []string{}
 	status := schema.CollectorOK
 	partial := false
+	timeoutMs := 0
+
+	markTimeout := func(probe string, timeout time.Duration) {
+		status = schema.CollectorTimeout
+		partial = true
+		if ms := int(timeout.Milliseconds()); ms > timeoutMs {
+			timeoutMs = ms
+		}
+		notes = append(notes, probe+" timed out")
+		evidence = append(evidence, schema.Evidence{Source: "gpudocker_probe_timeout", Value: probe})
+	}
 
 	// Signal 1: nvidia-ctk --version
-	cmdCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	cmdCtx, cancel := context.WithTimeout(ctx, toolProbeTimeout)
 	res := c.Runner.Run(cmdCtx, "nvidia-ctk", "--version")
 	cancel()
-	if res.ExitCode == 0 && res.Stdout != "" {
+	if res.TimedOut {
+		markTimeout("nvidia-ctk --version", toolProbeTimeout)
+	} else if res.ExitCode == 0 && res.Stdout != "" {
 		info.ToolkitVersion = firstLine(res.Stdout)
 		evidence = append(evidence, schema.Evidence{Source: "nvidia_container_toolkit_version", Value: info.ToolkitVersion})
 	}
 
 	// Signal 2: nvidia-container-cli --version
-	cmdCtx, cancel = context.WithTimeout(ctx, 1*time.Second)
+	cmdCtx, cancel = context.WithTimeout(ctx, toolProbeTimeout)
 	res = c.Runner.Run(cmdCtx, "nvidia-container-cli", "--version")
 	cancel()
-	if res.ExitCode == 0 && res.Stdout != "" {
+	if res.TimedOut {
+		markTimeout("nvidia-container-cli --version", toolProbeTimeout)
+	} else if res.ExitCode == 0 && res.Stdout != "" {
 		info.ContainerCLIVersion = firstLine(res.Stdout)
 		evidence = append(evidence, schema.Evidence{Source: "nvidia_container_cli_version", Value: info.ContainerCLIVersion})
 	}
 
 	// Signal 3: nvidia-container-runtime --version
-	cmdCtx, cancel = context.WithTimeout(ctx, 1*time.Second)
+	cmdCtx, cancel = context.WithTimeout(ctx, toolProbeTimeout)
 	res = c.Runner.Run(cmdCtx, "nvidia-container-runtime", "--version")
 	cancel()
-	if res.ExitCode == 0 && res.Stdout != "" {
+	if res.TimedOut {
+		markTimeout("nvidia-container-runtime --version", toolProbeTimeout)
+	} else if res.ExitCode == 0 && res.Stdout != "" {
 		info.ContainerRuntimeVersion = firstLine(res.Stdout)
 		evidence = append(evidence, schema.Evidence{Source: "nvidia_container_runtime_version", Value: info.ContainerRuntimeVersion})
 	}
 
 	// Signal 4: docker info --format '{{json .}}'
-	cmdCtx, cancel = context.WithTimeout(ctx, 1500*time.Millisecond)
+	cmdCtx, cancel = context.WithTimeout(ctx, dockerInfoTimeout)
 	res = c.Runner.Run(cmdCtx, "docker", "info", "--format", "{{json .}}")
 	cancel()
 
@@ -88,7 +112,10 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	} else {
 		// Docker binary is present
 		evidence = append(evidence, schema.Evidence{Source: "docker_binary_present", Value: "true"})
-		if res.ExitCode == 0 {
+		if res.TimedOut {
+			markTimeout("docker info --format {{json .}}", dockerInfoTimeout)
+			evidence = append(evidence, schema.Evidence{Source: "docker_daemon_accessible", Value: "false"})
+		} else if res.ExitCode == 0 {
 			// Docker daemon is accessible
 			evidence = append(evidence, schema.Evidence{Source: "docker_daemon_accessible", Value: "true"})
 			evidence = append(evidence, schema.Evidence{Source: "docker_installed", Value: "true"})
@@ -119,12 +146,15 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// Signal 6: opt-in GPU verification
 	if c.GPUVerify {
-		result, stdout := c.runGPUVerification(ctx)
+		result, stdout, timeoutProbe, timeout := c.runGPUVerification(ctx)
 		info.VerifyResult = result
 		info.VerifyStdout = stdout
 		evidence = append(evidence, schema.Evidence{Source: "docker_gpu_verify_result", Value: info.VerifyResult})
 		if info.VerifyStdout != "" {
 			evidence = append(evidence, schema.Evidence{Source: "docker_gpu_verify_stdout", Value: info.VerifyStdout})
+		}
+		if timeoutProbe != "" {
+			markTimeout(timeoutProbe, timeout)
 		}
 	}
 
@@ -139,36 +169,40 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		Name:       c.Name(),
 		Status:     status,
 		Applicable: &applicable,
+		TimeoutMs:  timeoutMs,
 		Partial:    partial,
 		Evidence:   evidence,
 		Notes:      notes,
 	}, nil
 }
 
-func (c *Collector) runGPUVerification(ctx context.Context) (string, string) {
+func (c *Collector) runGPUVerification(ctx context.Context) (string, string, string, time.Duration) {
 	// Check if image exists locally using docker image inspect
-	cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	cmdCtx, cancel := context.WithTimeout(ctx, imageInspectTimeout)
 	res := c.Runner.Run(cmdCtx, "docker", "image", "inspect", c.GPUVerifyImage)
 	cancel()
 
+	if res.TimedOut {
+		return "timeout", res.Stdout, "docker image inspect", imageInspectTimeout
+	}
 	if res.ExitCode != 0 {
 		if !c.AllowPull {
-			return "image_missing", ""
+			return "image_missing", "", "", 0
 		}
 	}
 
 	// Run verification container
-	cmdCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
+	cmdCtx, cancel = context.WithTimeout(ctx, gpuVerifyRunTimeout)
 	res = c.Runner.Run(cmdCtx, "docker", "run", "--rm", "--gpus", "all", c.GPUVerifyImage, "nvidia-smi")
 	cancel()
 
 	if res.TimedOut {
-		return "timeout", res.Stdout
+		return "timeout", res.Stdout, "docker run --gpus all", gpuVerifyRunTimeout
 	}
 	if res.ExitCode == 0 {
-		return "success", res.Stdout
+		return "success", res.Stdout, "", 0
 	}
-	return "failed", res.Stdout
+	return "failed", res.Stdout, "", 0
 }
 
 func firstLine(s string) string {
