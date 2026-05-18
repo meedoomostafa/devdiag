@@ -1,7 +1,10 @@
 package capsule
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
+	"io"
 	"testing"
 
 	"github.com/meedoomostafa/devdiag/internal/repro"
@@ -131,6 +134,38 @@ func TestBuilder_TraceArtifactWithoutCollectors(t *testing.T) {
 	}
 }
 
+func TestBuilder_TraceArtifactDoesNotDuplicateTraceSnapshot(t *testing.T) {
+	b := NewBuilder("default", "0.1.0")
+	tracePayload := []byte(`{"backend":"strace","events":[]}`)
+	b.SetTraceArtifact(tracePayload)
+	report := &schema.Report{
+		RunID: "test-run-trace-collector",
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "trace",
+				Status: schema.CollectorOK,
+				Evidence: []schema.Evidence{
+					{Source: "trace_summary", Value: "collector snapshot"},
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := b.Build(&buf, report, nil); err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	count, content, err := readTarFileOccurrences(buf.Bytes(), "snapshot/trace.json")
+	if err != nil {
+		t.Fatalf("read trace artifact: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one snapshot/trace.json entry, got %d", count)
+	}
+	if !bytes.Equal(content, tracePayload) {
+		t.Fatalf("expected trace artifact content %s, got %s", tracePayload, content)
+	}
+}
+
 func TestBuilder_ManifestNotes_FieldAvailable(t *testing.T) {
 	b := NewBuilder("default", "0.1.0")
 	report := &schema.Report{
@@ -170,5 +205,32 @@ func TestBuilder_ManifestNotes_FieldAvailable(t *testing.T) {
 	}
 	if !hasSnapshot {
 		t.Error("expected snapshot/ok.json to be present")
+	}
+}
+
+func readTarFileOccurrences(data []byte, name string) (int, []byte, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return 0, nil, err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	count := 0
+	var content []byte
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return count, content, nil
+		}
+		if err != nil {
+			return 0, nil, err
+		}
+		if h.Name == name {
+			count++
+			content, err = io.ReadAll(tr)
+			if err != nil {
+				return 0, nil, err
+			}
+		}
 	}
 }

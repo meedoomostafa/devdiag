@@ -45,17 +45,15 @@ func (r *Runner) Run(ctx context.Context, scopes []Scope, command string, args .
 	traceFile.Close()
 	defer os.Remove(tracePath)
 
-	// Build strace args (use -tt for HH:MM:SS.us to match parser)
-	straceArgs := []string{"-f", "-tt", "-T", "-yy", "-o", tracePath}
-	straceArgs = append(straceArgs, buildStraceFilters(scopes)...)
-	straceArgs = append(straceArgs, "--", command)
-	straceArgs = append(straceArgs, args...)
+	straceArgs := buildStraceArgs(scopes, tracePath, command, args)
 
 	res := &Result{
-		Command: command,
-		Args:    args,
-		Scopes:  scopes,
-		Events:  make([]Event, 0, r.MaxEvents),
+		Command:          command,
+		Args:             args,
+		Scopes:           scopes,
+		Backend:          "strace",
+		Events:           make([]Event, 0, r.MaxEvents),
+		SeccompRequested: true,
 	}
 
 	start := time.Now()
@@ -68,6 +66,11 @@ func (r *Runner) Run(ctx context.Context, scopes []Scope, command string, args .
 
 	err = cmd.Run()
 	res.Duration = time.Since(start)
+	stderr := stderrBuf.String()
+
+	if isSeccompBPFDegraded(stderr) {
+		markSeccompBPFDegraded(res)
+	}
 
 	if cmdCtx.Err() != nil {
 		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
@@ -94,19 +97,23 @@ func (r *Runner) Run(ctx context.Context, scopes []Scope, command string, args .
 	}
 
 	if err != nil && !res.TimedOut && !res.Canceled {
-		stderr := stderrBuf.String()
 		if stderr != "" {
 			res.Notes = append(res.Notes, fmt.Sprintf("strace stderr: %s", strings.TrimSpace(stderr)))
 		}
 		// Detect ptrace/permission failures that make tracing unavailable
 		if isTraceUnavailable(stderr) {
 			res.TraceUnavailable = true
+			res.UnavailableReason = "ptrace_permission_denied"
 			res.Notes = append(res.Notes, "trace unavailable: ptrace/permission denied")
 		} else if _, ok := err.(*exec.ExitError); ok {
 			res.Notes = append(res.Notes, "strace or traced command exited non-zero")
 		} else {
 			res.Notes = append(res.Notes, fmt.Sprintf("strace could not start: %v", err))
 		}
+	}
+
+	if res.SeccompRequested && !res.SeccompDegraded && !res.TraceUnavailable && (err == nil || cmd.ProcessState != nil) {
+		res.SeccompApplied = true
 	}
 
 	// Read and parse trace file
@@ -133,6 +140,25 @@ func isTraceUnavailable(stderr string) bool {
 		}
 	}
 	return false
+}
+
+func isSeccompBPFDegraded(stderr string) bool {
+	return strings.Contains(stderr, "strace: seccomp-bpf requested but not enabled")
+}
+
+func markSeccompBPFDegraded(res *Result) {
+	res.SeccompRequested = true
+	res.SeccompApplied = false
+	res.SeccompDegraded = true
+	res.Notes = append(res.Notes, "seccomp-bpf degraded: tracing fell back to full ptrace syscall stops; heavy commands such as npm install, cargo build, or large test suites can become dramatically slower")
+}
+
+func buildStraceArgs(scopes []Scope, tracePath, command string, args []string) []string {
+	straceArgs := []string{"-f", "-tt", "-T", "-yy", "-o", tracePath, "--seccomp-bpf"}
+	straceArgs = append(straceArgs, buildStraceFilters(scopes)...)
+	straceArgs = append(straceArgs, "--", command)
+	straceArgs = append(straceArgs, args...)
+	return straceArgs
 }
 
 func buildStraceFilters(scopes []Scope) []string {
@@ -174,6 +200,8 @@ func (r *Runner) readTraceFile(path string, res *Result) error {
 	scanner := bufio.NewScanner(reader)
 	// Increase max token size to 1MB
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	pending := make(map[pendingSyscall]string)
+	notedSkippedPair := false
 
 	for scanner.Scan() {
 		if len(res.Events) >= r.MaxEvents {
@@ -185,12 +213,37 @@ func (r *Runner) readTraceFile(path string, res *Result) error {
 		if line == "" {
 			continue
 		}
+		if key, partial, ok := parseUnfinishedTraceLine(line); ok {
+			pending[key] = partial
+			continue
+		}
+		if strings.Contains(line, "<... ") {
+			merged, key, ok := mergeResumedTraceLine(line, pending)
+			if !ok {
+				res.Partial = true
+				res.SkippedEvents++
+				if !notedSkippedPair {
+					res.Notes = append(res.Notes, "skipped unfinished/resumed syscall pair")
+					notedSkippedPair = true
+				}
+				continue
+			}
+			delete(pending, key)
+			line = merged
+		}
 		ev, err := ParseLine(line)
 		if err != nil {
 			// Skip non-event lines
 			continue
 		}
 		res.Events = append(res.Events, *ev)
+	}
+	if len(pending) > 0 {
+		res.Partial = true
+		res.SkippedEvents += len(pending)
+		if !notedSkippedPair {
+			res.Notes = append(res.Notes, "skipped unfinished/resumed syscall pair")
+		}
 	}
 	return scanner.Err()
 }

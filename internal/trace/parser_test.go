@@ -1,8 +1,10 @@
 package trace
 
 import (
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseOpenat(t *testing.T) {
@@ -64,6 +66,28 @@ func TestParsePIDPrefix(t *testing.T) {
 	}
 	if ev.PID != 1234 {
 		t.Fatalf("expected pid 1234, got %d", ev.PID)
+	}
+}
+
+func TestParseBarePIDPrefix(t *testing.T) {
+	line := `1234 06:01:23.456789 openat(AT_FDCWD, "/tmp/test", O_RDONLY) = 3`
+	ev, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ev.PID != 1234 {
+		t.Fatalf("expected pid 1234, got %d", ev.PID)
+	}
+}
+
+func TestParseDuration(t *testing.T) {
+	line := `06:01:23.456789 openat(AT_FDCWD, "/tmp/test", O_RDONLY) = 3 <0.000123>`
+	ev, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ev.Duration != 123*time.Microsecond {
+		t.Fatalf("expected duration 123µs, got %s", ev.Duration)
 	}
 }
 
@@ -132,5 +156,53 @@ func TestParseEscapedQuote(t *testing.T) {
 	}
 	if len(ev.Args) < 2 || ev.Args[1] != `"file\"name"` {
 		t.Fatalf("expected escaped quote preserved, got %v", ev.Args)
+	}
+}
+
+func TestParseQuotedParenInPath(t *testing.T) {
+	line := `06:01:23.456789 openat(AT_FDCWD, "/tmp/a)b", O_RDONLY) = -1 ENOENT (No such file or directory)`
+	ev, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ev.Result != "-1" {
+		t.Fatalf("expected result -1, got %s", ev.Result)
+	}
+	if ev.Error != "ENOENT" {
+		t.Fatalf("expected ENOENT, got %q", ev.Error)
+	}
+	if len(ev.Args) < 2 || ev.Args[1] != `"/tmp/a)b"` {
+		t.Fatalf("expected quoted path with paren preserved, got %v", ev.Args)
+	}
+}
+
+func TestReadTraceFileMergesUnfinishedResumed(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "trace-*.log")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	_, err = f.WriteString("[pid 28772] 06:01:23.000001 select(4, [3], NULL, NULL, NULL <unfinished ...>\n[pid 28779] 06:01:23.000002 clock_gettime(CLOCK_REALTIME, {tv_sec=1, tv_nsec=2}) = 0 <0.000003>\n[pid 28772] 06:01:23.000004 <... select resumed> ) = 1 (in [3]) <0.000123>\n")
+	if err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close temp file: %v", err)
+	}
+	res := &Result{Events: make([]Event, 0)}
+	r := &Runner{MaxEvents: 10}
+	if err := r.readTraceFile(f.Name(), res); err != nil {
+		t.Fatalf("readTraceFile: %v", err)
+	}
+	if len(res.Events) != 2 {
+		t.Fatalf("expected 2 events, got %d: %#v", len(res.Events), res.Events)
+	}
+	if res.Events[1].Syscall != "select" {
+		t.Fatalf("expected merged select event, got %s", res.Events[1].Syscall)
+	}
+	if res.Events[1].PID != 28772 {
+		t.Fatalf("expected pid 28772, got %d", res.Events[1].PID)
+	}
+	if res.Events[1].Duration != 123*time.Microsecond {
+		t.Fatalf("expected merged duration 123µs, got %s", res.Events[1].Duration)
 	}
 }
