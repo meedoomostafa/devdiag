@@ -15,3 +15,6 @@ Thumbs.db
 # Build artifacts
 /devdiag
 *.exe
+
+# Local DevDiag run artifacts
+.devdiag/
