@@ -120,6 +120,9 @@ then analyzes the trace output to produce diagnostic findings.`,
 		if res.UnavailableReason != "" {
 			collectorResult.Evidence = append(collectorResult.Evidence, schema.Evidence{Source: "trace_unavailable_reason", Value: res.UnavailableReason})
 		}
+		for _, ev := range res.CapabilityEvidence {
+			collectorResult.Evidence = append(collectorResult.Evidence, schema.Evidence{Source: ev.Source, Value: ev.Value})
+		}
 		if res.TimedOut {
 			collectorResult.Status = schema.CollectorTimeout
 			collectorResult.Partial = true

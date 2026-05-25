@@ -9,6 +9,9 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-require golang.org/x/sys v0.44.0
+require (
+	github.com/cilium/ebpf v0.21.0
+	golang.org/x/sys v0.44.0
+)
 
 require github.com/inconshreveable/mousetrap v1.1.0 // indirect

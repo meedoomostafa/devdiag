@@ -86,24 +86,31 @@ type Event struct {
 	Duration  time.Duration `json:"duration,omitempty"`
 }
 
+// TraceEvidence records backend-specific machine-readable trace evidence.
+type TraceEvidence struct {
+	Source string `json:"source"`
+	Value  string `json:"value"`
+}
+
 // Result is the output of a trace run.
 type Result struct {
-	Command           string        `json:"command"`
-	Args              []string      `json:"args"`
-	Scopes            []Scope       `json:"scopes"`
-	Backend           string        `json:"backend,omitempty"`
-	Events            []Event       `json:"events"`
-	SeccompRequested  bool          `json:"seccomp_requested,omitempty"`
-	SeccompApplied    bool          `json:"seccomp_applied,omitempty"`
-	SeccompDegraded   bool          `json:"seccomp_degraded,omitempty"`
-	TimedOut          bool          `json:"timed_out"`
-	Partial           bool          `json:"partial"`
-	TraceUnavailable  bool          `json:"trace_unavailable"`
-	UnavailableReason string        `json:"unavailable_reason,omitempty"`
-	ProcessFailed     bool          `json:"process_failed"`
-	Canceled          bool          `json:"canceled"`
-	SkippedEvents     int           `json:"skipped_events,omitempty"`
-	ExitCode          int           `json:"exit_code"`
-	Duration          time.Duration `json:"duration"`
-	Notes             []string      `json:"notes,omitempty"`
+	Command            string          `json:"command"`
+	Args               []string        `json:"args"`
+	Scopes             []Scope         `json:"scopes"`
+	Backend            string          `json:"backend,omitempty"`
+	Events             []Event         `json:"events"`
+	CapabilityEvidence []TraceEvidence `json:"capability_evidence,omitempty"`
+	SeccompRequested   bool            `json:"seccomp_requested,omitempty"`
+	SeccompApplied     bool            `json:"seccomp_applied,omitempty"`
+	SeccompDegraded    bool            `json:"seccomp_degraded,omitempty"`
+	TimedOut           bool            `json:"timed_out"`
+	Partial            bool            `json:"partial"`
+	TraceUnavailable   bool            `json:"trace_unavailable"`
+	UnavailableReason  string          `json:"unavailable_reason,omitempty"`
+	ProcessFailed      bool            `json:"process_failed"`
+	Canceled           bool            `json:"canceled"`
+	SkippedEvents      int             `json:"skipped_events,omitempty"`
+	ExitCode           int             `json:"exit_code"`
+	Duration           time.Duration   `json:"duration"`
+	Notes              []string        `json:"notes,omitempty"`
 }
