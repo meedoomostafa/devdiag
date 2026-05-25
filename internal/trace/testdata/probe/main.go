@@ -3,15 +3,14 @@ package main
 import (
 	"net"
 	"os"
-	"os/exec"
-	"time"
+	"syscall"
 )
 
 func main() {
 	_, _ = os.Open("/tmp/devdiag-ebpf-missing-file")
-	_ = exec.Command("/tmp/devdiag-ebpf-missing-exec").Run()
 	triggerConnectRefused()
 	triggerAddressInUse()
+	_ = syscall.Exec("/tmp/devdiag-ebpf-missing-exec", []string{"devdiag-ebpf-missing-exec"}, os.Environ())
 }
 
 func triggerConnectRefused() {
@@ -19,12 +18,18 @@ func triggerConnectRefused() {
 	if err != nil {
 		return
 	}
-	addr := listener.Addr().String()
-	_ = listener.Close()
-	conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
-	if err == nil {
-		_ = conn.Close()
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		_ = listener.Close()
+		return
 	}
+	_ = listener.Close()
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return
+	}
+	defer syscall.Close(fd)
+	_ = syscall.Connect(fd, &syscall.SockaddrInet4{Port: addr.Port, Addr: [4]byte{127, 0, 0, 1}})
 }
 
 func triggerAddressInUse() {

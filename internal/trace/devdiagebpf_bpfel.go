@@ -87,6 +87,8 @@ type devdiagEbpfSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type devdiagEbpfProgramSpecs struct {
+	RawTracepointSysEnter      *ebpf.ProgramSpec `ebpf:"raw_tracepoint_sys_enter"`
+	RawTracepointSysExit       *ebpf.ProgramSpec `ebpf:"raw_tracepoint_sys_exit"`
 	TracepointSchedProcessFork *ebpf.ProgramSpec `ebpf:"tracepoint_sched_process_fork"`
 	TracepointSysEnterBind     *ebpf.ProgramSpec `ebpf:"tracepoint_sys_enter_bind"`
 	TracepointSysEnterConnect  *ebpf.ProgramSpec `ebpf:"tracepoint_sys_enter_connect"`
@@ -156,6 +158,8 @@ type devdiagEbpfVariables struct {
 //
 // It can be passed to loadDevdiagEbpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type devdiagEbpfPrograms struct {
+	RawTracepointSysEnter      *ebpf.Program `ebpf:"raw_tracepoint_sys_enter"`
+	RawTracepointSysExit       *ebpf.Program `ebpf:"raw_tracepoint_sys_exit"`
 	TracepointSchedProcessFork *ebpf.Program `ebpf:"tracepoint_sched_process_fork"`
 	TracepointSysEnterBind     *ebpf.Program `ebpf:"tracepoint_sys_enter_bind"`
 	TracepointSysEnterConnect  *ebpf.Program `ebpf:"tracepoint_sys_enter_connect"`
@@ -169,6 +173,8 @@ type devdiagEbpfPrograms struct {
 
 func (p *devdiagEbpfPrograms) Close() error {
 	return _DevdiagEbpfClose(
+		p.RawTracepointSysEnter,
+		p.RawTracepointSysExit,
 		p.TracepointSchedProcessFork,
 		p.TracepointSysEnterBind,
 		p.TracepointSysEnterConnect,

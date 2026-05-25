@@ -29,6 +29,7 @@ static long (*bpf_map_delete_elem)(void *map, const void *key) = (void *)3;
 static __u64 (*bpf_ktime_get_ns)(void) = (void *)5;
 static __u64 (*bpf_get_current_pid_tgid)(void) = (void *)14;
 static long (*bpf_probe_read_user)(void *dst, __u32 size, const void *unsafe_ptr) = (void *)112;
+static long (*bpf_probe_read_kernel)(void *dst, __u32 size, const void *unsafe_ptr) = (void *)113;
 static long (*bpf_probe_read_user_str)(void *dst, __u32 size, const void *unsafe_ptr) = (void *)114;
 static void *(*bpf_ringbuf_reserve)(void *ringbuf, __u64 size, __u64 flags) = (void *)131;
 static void (*bpf_ringbuf_submit)(void *data, __u64 flags) = (void *)132;
@@ -87,6 +88,39 @@ struct sockaddr_in_lite {
 	__u16 port;
 	__u32 addr;
 };
+
+struct bpf_raw_tracepoint_args {
+	__u64 args[0];
+};
+
+struct pt_regs_x86_64 {
+	unsigned long r15;
+	unsigned long r14;
+	unsigned long r13;
+	unsigned long r12;
+	unsigned long rbp;
+	unsigned long rbx;
+	unsigned long r11;
+	unsigned long r10;
+	unsigned long r9;
+	unsigned long r8;
+	unsigned long rax;
+	unsigned long rcx;
+	unsigned long rdx;
+	unsigned long rsi;
+	unsigned long rdi;
+	unsigned long orig_rax;
+	unsigned long rip;
+	unsigned long cs;
+	unsigned long eflags;
+	unsigned long rsp;
+	unsigned long ss;
+};
+
+#define SYS_X86_64_EXECVE 59
+#define SYS_X86_64_CONNECT 42
+#define SYS_X86_64_BIND 49
+#define SYS_X86_64_OPENAT 257
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -206,6 +240,51 @@ static __always_inline int emit_pending(__u32 event_type, __s64 ret) {
 	return 0;
 }
 
+static __always_inline int read_x86_regs(__u64 regs_ptr, struct pt_regs_x86_64 *regs) {
+	if (regs_ptr == 0) {
+		return -1;
+	}
+	return bpf_probe_read_kernel(regs, sizeof(*regs), (void *)regs_ptr);
+}
+
+static __always_inline int raw_syscall_enter_x86(__u64 regs_ptr) {
+	struct pt_regs_x86_64 regs = {};
+	if (read_x86_regs(regs_ptr, &regs) != 0) {
+		return 0;
+	}
+	switch (regs.orig_rax) {
+	case SYS_X86_64_OPENAT:
+		return store_path_pending(EVENT_OPENAT, regs.rsi);
+	case SYS_X86_64_EXECVE:
+		return store_path_pending(EVENT_EXECVE, regs.rdi);
+	case SYS_X86_64_CONNECT:
+		return store_sockaddr_pending(EVENT_CONNECT, regs.rsi);
+	case SYS_X86_64_BIND:
+		return store_sockaddr_pending(EVENT_BIND, regs.rsi);
+	default:
+		return 0;
+	}
+}
+
+static __always_inline int raw_syscall_exit_x86(__u64 regs_ptr, __s64 ret) {
+	struct pt_regs_x86_64 regs = {};
+	if (read_x86_regs(regs_ptr, &regs) != 0) {
+		return 0;
+	}
+	switch (regs.orig_rax) {
+	case SYS_X86_64_OPENAT:
+		return emit_pending(EVENT_OPENAT, ret);
+	case SYS_X86_64_EXECVE:
+		return emit_pending(EVENT_EXECVE, ret);
+	case SYS_X86_64_CONNECT:
+		return emit_pending(EVENT_CONNECT, ret);
+	case SYS_X86_64_BIND:
+		return emit_pending(EVENT_BIND, ret);
+	default:
+		return 0;
+	}
+}
+
 SEC("tracepoint/syscalls/sys_enter_openat")
 int tracepoint_sys_enter_openat(struct sys_enter_ctx *ctx) {
 	return store_path_pending(EVENT_OPENAT, ctx->args[1]);
@@ -270,4 +349,14 @@ int tracepoint_sched_process_fork(struct sched_process_fork_ctx *ctx) {
 	__builtin_memset(event->arg1, 0, sizeof(event->arg1));
 	bpf_ringbuf_submit(event, 0);
 	return 0;
+}
+
+SEC("raw_tracepoint/sys_enter")
+int raw_tracepoint_sys_enter(struct bpf_raw_tracepoint_args *ctx) {
+	return raw_syscall_enter_x86(ctx->args[0]);
+}
+
+SEC("raw_tracepoint/sys_exit")
+int raw_tracepoint_sys_exit(struct bpf_raw_tracepoint_args *ctx) {
+	return raw_syscall_exit_x86(ctx->args[0], (__s64)ctx->args[1]);
 }
