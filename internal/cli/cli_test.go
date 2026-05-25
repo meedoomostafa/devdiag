@@ -506,6 +506,84 @@ func TestReleaseSignoffScriptContract(t *testing.T) {
 	}
 }
 
+func TestInstallScriptContract(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "scripts", "install.sh"))
+	if err != nil {
+		t.Fatalf("read install script: %v", err)
+	}
+	script := string(data)
+	for _, want := range []string{
+		"DEVDIAG_INSTALL_VERSION",
+		"v0.1.0",
+		"linux",
+		"go version",
+		"go build",
+		"-X github.com/meedoomostafa/devdiag/internal/version.Version",
+		"--bin-dir",
+		"--dry-run",
+		"https://github.com/%s/archive",
+		"~/.local/bin",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("install script missing %q:\n%s", want, script)
+		}
+	}
+}
+
+func TestContributingGuideCoversSetupArchitectureAndPlatforms(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "CONTRIBUTING.md"))
+	if err != nil {
+		t.Fatalf("read CONTRIBUTING.md: %v", err)
+	}
+	guide := string(data)
+	for _, want := range []string{
+		"DevDiag architecture",
+		"Linux setup",
+		"Windows setup",
+		"WSL2",
+		"go test ./...",
+		"go vet ./...",
+		"go build -o /tmp/devdiag-plan-check ./cmd/devdiag",
+		"git diff --check",
+		"non-mutating by default",
+		"redaction",
+		"remote",
+		"trace",
+		"GitHub Action",
+	} {
+		if !strings.Contains(guide, want) {
+			t.Fatalf("CONTRIBUTING.md missing %q:\n%s", want, guide)
+		}
+	}
+}
+
+func TestGitIgnoreExcludesLocalDevDiagArtifacts(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if !strings.Contains(string(data), ".devdiag/") {
+		t.Fatalf(".gitignore should exclude local .devdiag artifacts:\n%s", data)
+	}
+}
+
+func TestReadmeAdvertisesCurlInstall(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	readme := string(data)
+	for _, want := range []string{
+		"curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | bash",
+		"DEVDIAG_INSTALL_VERSION",
+		"scripts/install.sh",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Fatalf("README missing %q:\n%s", want, readme)
+		}
+	}
+}
+
 func TestCIWorkflowRunsMinimumAndCurrentGoCompatibilityMatrix(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
 	if err != nil {
