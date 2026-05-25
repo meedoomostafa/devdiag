@@ -1,0 +1,114 @@
+name: action live signoff
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  signoff:
+    name: action signoff go ${{ matrix.go-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: ['1.25', '1.26']
+    env:
+      DEVDIAG_ACTION_FIXTURE: ${{ runner.temp }}/devdiag-action-fixture
+      DEVDIAG_ACTION_DOWNLOAD: ${{ runner.temp }}/devdiag-action-download
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: Build devdiag
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          go build -o "$RUNNER_TEMP/bin/devdiag" ./cmd/devdiag
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Create signoff fixture
+        shell: bash
+        run: |
+          mkdir -p "$DEVDIAG_ACTION_FIXTURE/.github/workflows"
+          cat > "$DEVDIAG_ACTION_FIXTURE/.github/workflows/ci.yml" <<'YAML'
+          name: fixture
+          on: [push]
+          jobs:
+            scan:
+              runs-on: ubuntu-latest
+              env:
+                SECRET_URL: https://devdiag:secret123@example.invalid/resource
+              steps:
+                - uses: actions/setup-node@v4
+                  with:
+                    node-version: '20'
+                - run: npm test
+          YAML
+          printf '18\n' > "$DEVDIAG_ACTION_FIXTURE/.nvmrc"
+          printf 'LOCAL_ONLY=1\n' > "$DEVDIAG_ACTION_FIXTURE/.env"
+      - id: allow
+        name: Run DevDiag action without failing on findings
+        uses: ./
+        with:
+          path: ${{ env.DEVDIAG_ACTION_FIXTURE }}
+          format: github
+          ci: 'true'
+          summary: 'true'
+          fail-on-findings: 'false'
+          fail-severity: critical
+          redact: default
+          mask-values: secret123
+          artifact-name: devdiag-report-${{ matrix.go-version }}
+      - name: Verify action output, summary, and local report
+        shell: bash
+        run: |
+          report_path='${{ steps.allow.outputs.report-path }}'
+          test -n "$report_path"
+          test -f "$report_path"
+          grep -q '### DevDiag scan' "$GITHUB_STEP_SUMMARY"
+          grep -q '<redacted>' "$report_path"
+          ! grep -q 'secret123' "$report_path"
+          jq -e '.schema_version and .collectors and .findings' "$report_path"
+          sha256sum "$report_path" | tee "$RUNNER_TEMP/devdiag-report.sha256"
+      - name: Download uploaded report artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: devdiag-report-${{ matrix.go-version }}
+          path: ${{ env.DEVDIAG_ACTION_DOWNLOAD }}
+      - name: Verify downloaded report artifact
+        shell: bash
+        run: |
+          downloaded="$DEVDIAG_ACTION_DOWNLOAD/devdiag-report.json"
+          test -f "$downloaded"
+          jq -e '.schema_version and .collectors and .findings' "$downloaded"
+          grep -q '<redacted>' "$downloaded"
+          ! grep -q 'secret123' "$downloaded"
+          sha256sum "$downloaded"
+      - id: threshold
+        name: Run DevDiag action with medium fail threshold
+        uses: ./
+        continue-on-error: true
+        with:
+          path: ${{ env.DEVDIAG_ACTION_FIXTURE }}
+          format: github
+          ci: 'true'
+          summary: 'false'
+          fail-on-findings: 'true'
+          fail-severity: medium
+          redact: default
+          mask-values: secret123
+          artifact-name: devdiag-report-threshold-${{ matrix.go-version }}
+      - name: Verify fail threshold behavior
+        shell: bash
+        run: |
+          if [ '${{ steps.threshold.outcome }}' != 'failure' ]; then
+            echo "expected threshold action step to fail, got ${{ steps.threshold.outcome }}"
+            exit 1
+          fi
+          threshold_report='${{ steps.threshold.outputs.report-path }}'
+          test -n "$threshold_report"
+          test -f "$threshold_report"
+          jq -e '.findings | length > 0' "$threshold_report"

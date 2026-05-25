@@ -384,6 +384,7 @@ func TestGitHubActionMetadataSupportsArtifactsSummaryAndConfigurableFindings(t *
 		"fail-on-findings": "true",
 		"fail-severity":    "high",
 		"mask-values":      "",
+		"artifact-name":    "devdiag-report",
 	} {
 		got, ok := action.Inputs[input]
 		if !ok {
@@ -411,8 +412,8 @@ func TestGitHubActionMetadataSupportsArtifactsSummaryAndConfigurableFindings(t *
 			if step.If != "always()" {
 				t.Fatalf("upload-artifact if = %q, want always()", step.If)
 			}
-			if step.With["name"] != "devdiag-report" {
-				t.Fatalf("artifact name = %q, want devdiag-report", step.With["name"])
+			if step.With["name"] != "${{ inputs.artifact-name }}" {
+				t.Fatalf("artifact name = %q, want artifact-name input", step.With["name"])
 			}
 			if !strings.Contains(step.With["path"], "devdiag-artifacts/devdiag-report.json") {
 				t.Fatalf("artifact path should include devdiag JSON report, got %q", step.With["path"])
@@ -428,6 +429,7 @@ func TestGitHubActionMetadataSupportsArtifactsSummaryAndConfigurableFindings(t *
 		"FAIL_ON_FINDINGS",
 		"FAIL_SEVERITY",
 		"MASK_VALUES",
+		"ARTIFACT_NAME",
 		"::add-mask::",
 		"--fail-severity",
 		"--ci",
@@ -440,6 +442,38 @@ func TestGitHubActionMetadataSupportsArtifactsSummaryAndConfigurableFindings(t *
 	}
 	if !artifactStepFound {
 		t.Fatal("action.yml missing actions/upload-artifact@v4 step")
+	}
+}
+
+func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "action-live-signoff.yml"))
+	if err != nil {
+		t.Fatalf("read action live signoff workflow: %v", err)
+	}
+	workflow := string(data)
+	for _, want := range []string{
+		"workflow_dispatch:",
+		"go-version: ['1.25', '1.26']",
+		"go build -o \"$RUNNER_TEMP/bin/devdiag\" ./cmd/devdiag",
+		"uses: ./",
+		"format: github",
+		"fail-on-findings: 'false'",
+		"fail-severity: critical",
+		"mask-values: secret123",
+		"artifact-name: devdiag-report-${{ matrix.go-version }}",
+		"actions/download-artifact@v5",
+		"jq -e '.schema_version and .collectors and .findings'",
+		"grep -q '<redacted>'",
+		"! grep -q 'secret123'",
+		"continue-on-error: true",
+		"fail-on-findings: 'true'",
+		"fail-severity: medium",
+		"artifact-name: devdiag-report-threshold-${{ matrix.go-version }}",
+		"steps.threshold.outcome",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("action live signoff workflow missing %q:\n%s", want, workflow)
+		}
 	}
 }
 
@@ -492,6 +526,7 @@ func TestGitHubActionRunScriptAllowsFindingsAndWritesArtifactSummary(t *testing.
 		"FAIL_ON_FINDINGS=false",
 		"FAIL_SEVERITY=high",
 		"MASK_VALUES=",
+		"ARTIFACT_NAME=devdiag-report",
 		"DEV_DIAG_EXIT=1",
 	)
 	out, err := cmd.CombinedOutput()
@@ -558,6 +593,7 @@ func TestGitHubActionRunScriptForwardsSeverityThresholdAndMasksValues(t *testing
 		"FAIL_ON_FINDINGS=true",
 		"FAIL_SEVERITY=critical",
 		"MASK_VALUES=TOKEN123",
+		"ARTIFACT_NAME=devdiag-report",
 		"DEV_DIAG_SECRET=TOKEN123",
 		"DEV_DIAG_EXIT=0",
 	)
@@ -615,6 +651,7 @@ func TestGitHubActionRunScriptPreservesNonFindingFailureWhenFindingsAllowed(t *t
 		"FAIL_ON_FINDINGS=false",
 		"FAIL_SEVERITY=high",
 		"MASK_VALUES=",
+		"ARTIFACT_NAME=devdiag-report",
 		"DEV_DIAG_EXIT=3",
 	)
 	err := cmd.Run()
