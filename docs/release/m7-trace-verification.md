@@ -6,7 +6,10 @@ Date: 2026-05-24
 
 This note records verification for trace mode. M7 counts complete for the
 current `strace` backend implementation. The eBPF backend is explicitly
-unavailable until a later hardening milestone.
+deferred to the M13 hardening milestone.
+
+Note: this is the M7 historical signoff record. Current eBPF hardening is
+tracked in `docs/release/m13-trace-ebpf-verification.md`.
 
 ## Implemented Contract
 
@@ -28,8 +31,8 @@ The current trace command now has local CLI-level coverage for these behaviors:
 - Fake trace evidence now proves the CLI path from parsed syscall event to
   analyzer finding. A traced `EADDRINUSE` bind event produces
   `F-TRACE-NET-002` with `trace_bind_port` and `trace_errno` evidence.
-- `--backend ebpf` returns machine-readable trace-unavailable diagnostics and
-  does not pretend eBPF is implemented.
+- Historical `--backend ebpf` behavior returned machine-readable
+  trace-unavailable diagnostics and did not pretend eBPF was implemented.
 
 ## Targeted Commands
 
@@ -59,8 +62,7 @@ Observed on 2026-05-24:
 - Deterministic fake-strace acceptance covers unavailable, ptrace-denied,
   successful artifact persistence, timeout, and trace-to-finding paths.
 
-## Future Hardening
+## Later Hardening
 
 Run the live-gated real-strace acceptance on a host where `strace` is installed
-and ptrace is allowed. This is release evidence, not a blocker for counting M7's
-implemented backend surface.
+and ptrace is allowed. eBPF backend hardening is owned by M13.
