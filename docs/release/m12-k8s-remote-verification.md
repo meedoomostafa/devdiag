@@ -71,7 +71,27 @@ Expected:
 
 ## Live Gate
 
-Run against an explicit pod:
+For release signoff, run the disposable kind harness:
+
+```bash
+PATH=/tmp/devdiag-live-tools/bin:$PATH \
+GOCACHE=/tmp/devdiag-go-build \
+GOMODCACHE=/tmp/devdiag-go-mod \
+XDG_CACHE_HOME=/tmp/devdiag-cache \
+scripts/live/k8s-kind-signoff.sh
+```
+
+The harness requires `docker`, `kind`, `kubectl`, and the Go toolchain. It
+creates a disposable `kind` cluster named `devdiag-live`, starts a pod with
+`sh` and `tar`, runs the live Go verification, runs direct CLI smokes for
+`doctor`, `sync`, `status`, `enter --dry-run`, and `clean`, records sanitized
+evidence, and deletes the cluster unless `DEVDIAG_KEEP_KIND=1` is set.
+
+Recorded evidence:
+
+- [evidence/m12-k8s-kind-signoff.md](evidence/m12-k8s-kind-signoff.md)
+
+To run against an explicit existing pod instead:
 
 ```bash
 PATH=/usr/local/go/bin:$PATH \
@@ -95,9 +115,8 @@ The live gate verifies:
 - partial cleanup;
 - final cleanup.
 
-## Current Blockers
+## Live Signoff Recorded
 
-This repository now has automated K8s transport coverage and an opt-in live
-gate. M12 release signoff still requires recording the output from a real
-cluster by setting `DEVDIAG_LIVE_K8S_TARGET` in an environment with `kubectl`
-configured for the target pod.
+The disposable kind signoff passed on 2026-05-25. The evidence file records the
+tool versions, target, command exits, selected JSON snippets, live test output,
+and cluster cleanup result.
