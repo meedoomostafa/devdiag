@@ -974,6 +974,94 @@ func TestIssueTemplateJSONIncludesCapsuleMetadata(t *testing.T) {
 	}
 }
 
+func TestTeamBundleJSONIncludesReportCapsuleRulePacksAndIssueTemplate(t *testing.T) {
+	dir := t.TempDir()
+	runID := "team-bundle-run"
+	report := schema.Report{
+		SchemaVersion:   schema.SchemaVersion,
+		DevDiagVersion:  "test",
+		RunID:           runID,
+		RedactionStatus: "default",
+		Findings: []schema.Finding{
+			{
+				ID:              "F-CI-ENV-001",
+				Title:           "CI env var missing locally",
+				Severity:        schema.SeverityMedium,
+				Confidence:      0.9,
+				Symptom:         "CI expects API_KEY=secret123 locally",
+				RedactionStatus: "safe",
+			},
+		},
+	}
+	writeSavedReport(t, dir, runID, report)
+
+	capsulePath := filepath.Join(dir, "support-"+runID+".devdiag.tgz")
+	capsuleFile, err := os.Create(capsulePath)
+	if err != nil {
+		t.Fatalf("create capsule fixture: %v", err)
+	}
+	if err := capsule.NewBuilder("default", "test").Build(capsuleFile, &report, nil); err != nil {
+		_ = capsuleFile.Close()
+		t.Fatalf("build capsule fixture: %v", err)
+	}
+	if err := capsuleFile.Close(); err != nil {
+		t.Fatalf("close capsule fixture: %v", err)
+	}
+
+	stdout, stderr, code := runBinaryInDir(dir, "team", "bundle", "--run-id", runID, "--format", "json")
+	if code != 0 {
+		t.Fatalf("team bundle exit code = %d, want 0; stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	if strings.Contains(stdout, "secret123") {
+		t.Fatalf("team bundle leaked raw secret: %s", stdout)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("team bundle stdout is not valid JSON: %v; stdout=%s", err, stdout)
+	}
+	if result["run_id"] != runID {
+		t.Fatalf("team bundle run_id = %v, want %s", result["run_id"], runID)
+	}
+	reportMeta, ok := result["report"].(map[string]any)
+	if !ok {
+		t.Fatalf("team bundle missing report metadata: %v", result)
+	}
+	if reportMeta["finding_count"] != float64(1) || reportMeta["redaction_status"] != "default" {
+		t.Fatalf("team bundle report metadata = %v", reportMeta)
+	}
+	capsuleMeta, ok := result["capsule"].(map[string]any)
+	if !ok || capsuleMeta["valid"] != true || capsuleMeta["run_id"] != runID {
+		t.Fatalf("team bundle capsule metadata = %v", result["capsule"])
+	}
+	packs, ok := result["rule_packs"].([]any)
+	if !ok || len(packs) == 0 {
+		t.Fatalf("team bundle rule_packs = %v, want non-empty", result["rule_packs"])
+	}
+	firstPack, _ := packs[0].(map[string]any)
+	if firstPack["schema_version"] == "" || firstPack["engine"] == "" {
+		t.Fatalf("team bundle rule pack metadata missing schema_version/engine: %v", firstPack)
+	}
+	issueTemplate, ok := result["issue_template"].(map[string]any)
+	if !ok {
+		t.Fatalf("team bundle missing issue_template: %v", result)
+	}
+	body, _ := issueTemplate["body"].(string)
+	if !strings.Contains(body, "<redacted>") || !strings.Contains(body, "F-CI-ENV-001") {
+		t.Fatalf("team bundle issue body missing redacted finding details: %s", body)
+	}
+	stableOutputs, ok := result["stable_outputs"].([]any)
+	if !ok || len(stableOutputs) == 0 {
+		t.Fatalf("team bundle stable_outputs = %v, want entries", result["stable_outputs"])
+	}
+}
+
+func TestTeamBundleRequiresRunID(t *testing.T) {
+	stdout, stderr, code := runBinary("team", "bundle", "--format", "json")
+	if code != exitcode.InvalidInput.Int() {
+		t.Fatalf("team bundle without run id exit code = %d, want %d; stderr=%s stdout=%s", code, exitcode.InvalidInput.Int(), stderr, stdout)
+	}
+}
+
 func TestNDJSON_OneObjectPerLine(t *testing.T) {
 	stdout, _, code := runBinary("scan", "../..", "--format", "ndjson")
 	if code != 0 {
