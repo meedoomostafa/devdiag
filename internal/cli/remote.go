@@ -20,6 +20,7 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/remote/target"
 	"github.com/meedoomostafa/devdiag/internal/remote/transport"
 	containertransport "github.com/meedoomostafa/devdiag/internal/remote/transport/container"
+	k8stransport "github.com/meedoomostafa/devdiag/internal/remote/transport/k8s"
 	sshtransport "github.com/meedoomostafa/devdiag/internal/remote/transport/ssh"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 	"github.com/meedoomostafa/devdiag/internal/version"
@@ -35,6 +36,7 @@ var (
 	flagRemoteSSHIdentityFile          string
 	flagRemoteSSHKnownHostsFile        string
 	flagRemoteSSHStrictHostKeyChecking string
+	flagRemoteK8sContainer             string
 )
 
 var remoteCmd = &cobra.Command{
@@ -92,6 +94,7 @@ func init() {
 	remoteCmd.PersistentFlags().StringVar(&flagRemoteSSHIdentityFile, "ssh-identity-file", "", "SSH identity file for remote SSH targets")
 	remoteCmd.PersistentFlags().StringVar(&flagRemoteSSHKnownHostsFile, "ssh-known-hosts-file", "", "SSH known_hosts file for remote SSH targets")
 	remoteCmd.PersistentFlags().StringVar(&flagRemoteSSHStrictHostKeyChecking, "ssh-strict-host-key-checking", "", "SSH StrictHostKeyChecking value: yes, no, accept-new, ask")
+	remoteCmd.PersistentFlags().StringVar(&flagRemoteK8sContainer, "k8s-container", "", "Kubernetes container name for multi-container pods")
 
 	remoteCmd.AddCommand(remoteDoctorCmd)
 	remoteCmd.AddCommand(remoteSyncCmd)
@@ -114,6 +117,23 @@ func buildRemoteSSHOptions() (sshtransport.Options, error) {
 	}, nil
 }
 
+func applyRemoteK8sOptions(t *target.Target) {
+	if t.Kind == target.KindK8s && flagRemoteK8sContainer != "" {
+		t.ContainerName = flagRemoteK8sContainer
+	}
+}
+
+func remoteRootDir(t *target.Target, sessionID string) string {
+	switch t.Kind {
+	case target.KindContainer:
+		return session.ContainerRootDir(sessionID)
+	case target.KindK8s:
+		return session.K8sRootDir(sessionID)
+	default:
+		return session.SSHRootDir(sessionID)
+	}
+}
+
 func runRemoteDoctor(cmd *cobra.Command, args []string) error {
 	logger := buildLogger()
 	redactEngine := buildRedactEngine()
@@ -122,10 +142,8 @@ func runRemoteDoctor(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return exitCodeError{code: exitcode.InvalidInput}
 	}
+	applyRemoteK8sOptions(t)
 
-	if t.Kind == target.KindK8s {
-		return outputUnsupportedK8s(cmd, t, redactEngine, "doctor")
-	}
 	sshOptions, err := buildRemoteSSHOptions()
 	if err != nil {
 		return err
@@ -172,7 +190,14 @@ func runRemoteDoctor(cmd *cobra.Command, args []string) error {
 			probeResult = buildContainerProbeFindings(result, probe)
 		}
 	case target.KindK8s:
-		result.Notes = append(result.Notes, "kubernetes doctor not yet implemented")
+		tr := k8stransport.NewTransport(t, t.ContainerName)
+		ctx, cancel := contextWithTimeout(cmd.Context(), 15)
+		defer cancel()
+		probe, err := tr.Probe(ctx)
+		if err != nil {
+			return exitCodeError{code: exitcode.InternalError}
+		}
+		probeResult = buildK8sProbeFindings(result, probe)
 	}
 
 	result.Profile = flagRemoteProfile
@@ -192,10 +217,8 @@ func runRemoteSync(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return exitCodeError{code: exitcode.InvalidInput}
 	}
+	applyRemoteK8sOptions(t)
 
-	if t.Kind == target.KindK8s {
-		return outputUnsupportedK8s(cmd, t, redactEngine, "sync")
-	}
 	sshOptions, err := buildRemoteSSHOptions()
 	if err != nil {
 		return err
@@ -213,12 +236,7 @@ func runRemoteSync(cmd *cobra.Command, args []string) error {
 	sessionID := session.GenerateID()
 	p.SubstituteSessionID(sessionID)
 
-	var remoteDir string
-	if t.Kind == target.KindContainer {
-		remoteDir = session.ContainerRootDir(sessionID)
-	} else {
-		remoteDir = session.SSHRootDir(sessionID)
-	}
+	remoteDir := remoteRootDir(t, sessionID)
 
 	logger.Info("remote.sync", fmt.Sprintf("session=%s target=%s profile=%s", sessionID, t.String(), flagRemoteProfile))
 
@@ -281,13 +299,21 @@ func runRemoteSync(cmd *cobra.Command, args []string) error {
 			logger.Warn("remote.sync", fmt.Sprintf("manifest write failed: %v", err))
 			result.Notes = append(result.Notes, fmt.Sprintf("manifest write failed: %v", err))
 		}
-	} else if t.Kind == target.KindContainer {
-		tr, err := containertransport.NewTransport(t)
+	} else if t.Kind == target.KindContainer || t.Kind == target.KindK8s {
+		var tr transport.Transport
+		var err error
+		transportName := "container"
+		if t.Kind == target.KindContainer {
+			tr, err = containertransport.NewTransport(t)
+		} else {
+			transportName = "kubernetes transport"
+			tr = k8stransport.NewTransport(t, t.ContainerName)
+		}
 		if err != nil {
-			logger.Error("remote.sync", fmt.Sprintf("container transport failed: %v", err))
+			logger.Error("remote.sync", fmt.Sprintf("%s failed: %v", transportName, err))
 			result.Status = "failed"
 			manifest.Status = "failed"
-			result.Notes = append(result.Notes, fmt.Sprintf("container transport failed: %v", err))
+			result.Notes = append(result.Notes, fmt.Sprintf("%s failed: %v", transportName, err))
 			return outputRemoteResultWithExit(result, redactEngine, cmd, exitcode.ReproFailed)
 		}
 		ctx, cancel := contextWithTimeout(cmd.Context(), 30)
@@ -331,10 +357,8 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return exitCodeError{code: exitcode.InvalidInput}
 	}
+	applyRemoteK8sOptions(t)
 
-	if t.Kind == target.KindK8s {
-		return outputUnsupportedK8s(cmd, t, redactEngine, "enter")
-	}
 	sshOptions, err := buildRemoteSSHOptions()
 	if err != nil {
 		return err
@@ -351,12 +375,7 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 	sessionID := session.GenerateID()
 	p.SubstituteSessionID(sessionID)
 
-	var remoteDir string
-	if t.Kind == target.KindContainer {
-		remoteDir = session.ContainerRootDir(sessionID)
-	} else {
-		remoteDir = session.SSHRootDir(sessionID)
-	}
+	remoteDir := remoteRootDir(t, sessionID)
 
 	logger.Info("remote.enter", fmt.Sprintf("session=%s target=%s profile=%s", sessionID, t.String(), flagRemoteProfile))
 
@@ -405,10 +424,16 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 		if err := writeRemoteManifest(ctx, t, manifest, sshOptions); err != nil {
 			logger.Warn("remote.enter", fmt.Sprintf("manifest write failed: %v", err))
 		}
-	} else if t.Kind == target.KindContainer {
-		tr, err := containertransport.NewTransport(t)
+	} else if t.Kind == target.KindContainer || t.Kind == target.KindK8s {
+		var tr transport.Transport
+		var err error
+		if t.Kind == target.KindContainer {
+			tr, err = containertransport.NewTransport(t)
+		} else {
+			tr = k8stransport.NewTransport(t, t.ContainerName)
+		}
 		if err != nil {
-			logger.Error("remote.enter", fmt.Sprintf("container transport failed: %v", err))
+			logger.Error("remote.enter", fmt.Sprintf("transport failed: %v", err))
 			return exitCodeError{code: exitcode.ReproFailed}
 		}
 		ctx, cancel := contextWithTimeout(cmd.Context(), 30)
@@ -452,6 +477,9 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 		} else {
 			enterErr = tr.Enter(remoteDir)
 		}
+	case target.KindK8s:
+		tr := k8stransport.NewTransport(t, t.ContainerName)
+		enterErr = tr.Enter(remoteDir)
 	default:
 		enterErr = fmt.Errorf("enter not supported for target kind %s", t.Kind)
 	}
@@ -472,6 +500,8 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 			tr = sshtransport.NewTransportWithOptions(t, nil, sshOptions)
 		} else if t.Kind == target.KindContainer {
 			tr, _ = containertransport.NewTransport(t)
+		} else if t.Kind == target.KindK8s {
+			tr = k8stransport.NewTransport(t, t.ContainerName)
 		}
 		if tr != nil {
 			if err := cleanManifest(ctx, tr, manifest); err != nil {
@@ -503,10 +533,8 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return exitCodeError{code: exitcode.InvalidInput}
 	}
+	applyRemoteK8sOptions(t)
 
-	if t.Kind == target.KindK8s {
-		return outputUnsupportedK8s(cmd, t, redactEngine, "clean")
-	}
 	sshOptions, err := buildRemoteSSHOptions()
 	if err != nil {
 		return err
@@ -568,6 +596,11 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 			defer cancel()
 			cleanErr = cleanManifest(ctx, tr, cached)
 		}
+	case target.KindK8s:
+		tr := k8stransport.NewTransport(t, t.ContainerName)
+		ctx, cancel := contextWithTimeout(context.Background(), 30)
+		defer cancel()
+		cleanErr = cleanManifest(ctx, tr, cached)
 	}
 
 	if cleanErr != nil {
@@ -598,10 +631,7 @@ func runRemoteStatus(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return exitCodeError{code: exitcode.InvalidInput}
 	}
-
-	if t.Kind == target.KindK8s {
-		return outputUnsupportedK8s(cmd, t, redactEngine, "status")
-	}
+	applyRemoteK8sOptions(t)
 
 	logger.Info("remote.status", fmt.Sprintf("target=%s", t.String()))
 
@@ -811,6 +841,43 @@ func buildContainerProbeFindings(result *render.RemoteResult, probe *transport.R
 			Title:    "Required upload method unavailable",
 			Severity: "medium",
 			Message:  "tar not available in container; upload will use fallback methods",
+		}
+	}
+	return nil
+}
+
+func buildK8sProbeFindings(result *render.RemoteResult, probe *transport.RemoteProbeResult) *render.Finding {
+	if !probe.Reachable {
+		return &render.Finding{
+			ID:       "F-REMOTE-K8S-002",
+			Title:    "Kubernetes pod unreachable",
+			Severity: "high",
+			Message:  probe.Error,
+		}
+	}
+	if !probe.HomeWritable {
+		return &render.Finding{
+			ID:       "F-REMOTE-K8S-003",
+			Title:    "Kubernetes pod filesystem is read-only",
+			Severity: "high",
+			Message:  "pod /tmp is not writable; temporary remote sync cannot inject profile",
+		}
+	}
+	hasShell := probe.Shell != "" || probe.Tools["sh"] || probe.Tools["bash"] || probe.Tools["zsh"] || probe.Tools["fish"]
+	if !hasShell {
+		return &render.Finding{
+			ID:       "F-REMOTE-003",
+			Title:    "No supported remote shell found",
+			Severity: "high",
+			Message:  "no supported shell detected in Kubernetes pod",
+		}
+	}
+	if !probe.HasTar {
+		return &render.Finding{
+			ID:       "F-REMOTE-004",
+			Title:    "Required upload method unavailable",
+			Severity: "medium",
+			Message:  "tar not available in Kubernetes pod; upload cannot stream profile archive",
 		}
 	}
 	return nil

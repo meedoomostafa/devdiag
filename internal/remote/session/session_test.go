@@ -70,6 +70,7 @@ func TestValidateRootDir(t *testing.T) {
 	}{
 		{"~/.devdiag/remote/s1", target.KindSSH, true},
 		{"/tmp/devdiag-remote/s1", target.KindContainer, true},
+		{"/tmp/devdiag-remote/s1", target.KindK8s, true},
 		{"/", target.KindSSH, false},
 		{"/home", target.KindSSH, false},
 		{"/tmp", target.KindContainer, false},
@@ -79,6 +80,7 @@ func TestValidateRootDir(t *testing.T) {
 		{"", target.KindSSH, false},
 		{"~/foo/..", target.KindSSH, false},
 		{"/tmp/devdiag-remote/s1", target.KindSSH, false}, // ssh must contain .devdiag/remote
+		{"~/.devdiag/remote/s1", target.KindK8s, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.dir, func(t *testing.T) {
