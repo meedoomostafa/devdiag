@@ -22,6 +22,9 @@ var (
 	jwtPattern = regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*\b`)
 	// strictTokenPattern matches long hex/base64 strings; used only in strict mode.
 	strictTokenPattern = regexp.MustCompile(`\b([a-fA-F0-9]{40,}|[A-Za-z0-9+/]{40,}=*)\b`)
+	// quotedKeyMaterialPattern matches long base64-like material echoed by tools
+	// in quoted diagnostics, such as malformed multiline .env key material.
+	quotedKeyMaterialPattern = regexp.MustCompile(`"([A-Za-z0-9+/]{32,}=*)"`)
 	// envValuePattern matches KEY=VALUE style assignments and redacts the value.
 	envValuePattern = regexp.MustCompile(`(?m)(^|\s)([A-Z_][A-Z0-9_]*=)([^\s]*)`)
 	// cliSecretPattern matches common CLI flag patterns that carry secrets.
@@ -56,6 +59,12 @@ func redactJWT(input string) string {
 // redactStrictTokens replaces long hex/base64 strings in strict mode.
 func redactStrictTokens(input string) string {
 	return strictTokenPattern.ReplaceAllString(input, "<token>")
+}
+
+// redactQuotedKeyMaterial replaces long quoted base64-like tokens that often
+// come from PEM/JWK/key material echoed in tool error messages.
+func redactQuotedKeyMaterial(input string) string {
+	return quotedKeyMaterialPattern.ReplaceAllString(input, `"<token>"`)
 }
 
 // redactHome replaces home directory paths.
