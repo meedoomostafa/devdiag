@@ -3,17 +3,22 @@
 package trace
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/asm"
 	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/ringbuf"
+	"github.com/cilium/ebpf/rlimit"
 )
 
 func RunEBPF(ctx context.Context, scopes []Scope, command string, args ...string) (*Result, error) {
@@ -42,8 +47,45 @@ func RunEBPF(ctx context.Context, scopes []Scope, command string, args ...string
 		return res, nil
 	}
 
+	if err := rlimit.RemoveMemlock(); err != nil {
+		res.CapabilityEvidence = append(res.CapabilityEvidence,
+			TraceEvidence{Source: "ebpf_memlock", Value: "unavailable"},
+			TraceEvidence{Source: "ebpf_memlock_error", Value: err.Error()},
+		)
+		res.TraceUnavailable = true
+		res.UnavailableReason = "ebpf_memlock_unavailable"
+		res.Notes = append(res.Notes, "ebpf backend unavailable: memlock limit could not be removed")
+		return res, nil
+	}
+
+	objs := devdiagEbpfObjects{}
+	if err := loadDevdiagEbpfObjects(&objs, nil); err != nil {
+		res.CapabilityEvidence = append(res.CapabilityEvidence,
+			TraceEvidence{Source: "ebpf_load", Value: "failed"},
+			TraceEvidence{Source: "ebpf_load_error", Value: err.Error()},
+		)
+		res.TraceUnavailable = true
+		res.UnavailableReason = "ebpf_load_failed"
+		res.Notes = append(res.Notes, "ebpf backend unavailable: object load failed")
+		return res, nil
+	}
+	defer objs.Close()
+
+	reader, err := ringbuf.NewReader(objs.Events)
+	if err != nil {
+		res.CapabilityEvidence = append(res.CapabilityEvidence,
+			TraceEvidence{Source: "ebpf_ringbuf", Value: "failed"},
+			TraceEvidence{Source: "ebpf_ringbuf_error", Value: err.Error()},
+		)
+		res.TraceUnavailable = true
+		res.UnavailableReason = "ebpf_ringbuf_failed"
+		res.Notes = append(res.Notes, "ebpf backend unavailable: ring buffer reader failed")
+		return res, nil
+	}
+	defer reader.Close()
+
 	tracepoints := ebpfTracepointsForScopes(scopes)
-	links, cleanup, err := attachEBPFTracepoints(tracepoints)
+	links, cleanup, err := attachDevdiagEBPFTracepoints(&objs, tracepoints)
 	if err != nil {
 		res.CapabilityEvidence = append(res.CapabilityEvidence,
 			TraceEvidence{Source: "ebpf_tracepoint_attach", Value: "failed"},
@@ -61,8 +103,53 @@ func RunEBPF(ctx context.Context, scopes []Scope, command string, args ...string
 	)
 
 	start := time.Now()
-	cmd := exec.CommandContext(ctx, command, args...)
-	err = cmd.Run()
+	wrapperArgs := append([]string{"-c", `kill -STOP $$; exec "$@"`, "devdiag-ebpf-wrapper", command}, args...)
+	cmd := exec.CommandContext(ctx, "sh", wrapperArgs...)
+	err = cmd.Start()
+	if err != nil {
+		res.Duration = time.Since(start)
+		res.ExitCode = -1
+		res.ProcessFailed = true
+		res.Notes = append(res.Notes, fmt.Sprintf("traced command failed to start: %v", err))
+		return res, nil
+	}
+
+	rootPID := uint32(cmd.Process.Pid)
+	if err := waitForProcessStop(ctx, int(rootPID), 2*time.Second); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		res.Duration = time.Since(start)
+		res.ProcessFailed = true
+		res.Notes = append(res.Notes, fmt.Sprintf("traced command did not pause for eBPF setup: %v", err))
+		return res, nil
+	}
+	tracked := uint8(1)
+	if err := objs.TrackedPids.Put(rootPID, tracked); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		res.Duration = time.Since(start)
+		res.TraceUnavailable = true
+		res.UnavailableReason = "ebpf_pid_seed_failed"
+		res.CapabilityEvidence = append(res.CapabilityEvidence,
+			TraceEvidence{Source: "ebpf_pid_seed", Value: "failed"},
+			TraceEvidence{Source: "ebpf_pid_seed_error", Value: err.Error()},
+		)
+		res.Notes = append(res.Notes, "ebpf backend unavailable: root pid could not be seeded")
+		return res, nil
+	}
+	res.CapabilityEvidence = append(res.CapabilityEvidence, TraceEvidence{Source: "ebpf_root_pid", Value: fmt.Sprintf("%d", rootPID)})
+
+	events := readEBPFEvents(reader)
+	if err := syscall.Kill(int(rootPID), syscall.SIGCONT); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		res.Duration = time.Since(start)
+		res.ProcessFailed = true
+		res.Notes = append(res.Notes, fmt.Sprintf("traced command could not resume after eBPF setup: %v", err))
+		return res, nil
+	}
+
+	err = cmd.Wait()
 	res.Duration = time.Since(start)
 	if cmd.ProcessState != nil {
 		res.ExitCode = cmd.ProcessState.ExitCode()
@@ -87,30 +174,116 @@ func RunEBPF(ctx context.Context, scopes []Scope, command string, args ...string
 			res.Notes = append(res.Notes, fmt.Sprintf("traced command failed: %v", err))
 		}
 	}
+	_ = reader.Close()
+
+	var rawEvents []devdiagEbpfTraceEvent
+	notedDecodeError := false
+	for item := range events {
+		if item.err != nil {
+			res.SkippedEvents++
+			if !notedDecodeError {
+				res.Notes = append(res.Notes, fmt.Sprintf("skipped undecodable ebpf event: %v", item.err))
+				notedDecodeError = true
+			}
+			continue
+		}
+		rawEvents = append(rawEvents, item.event)
+	}
+	res.Events = eventsFromEBPFKernelEvents(rawEvents, scopes)
+	res.CapabilityEvidence = append(res.CapabilityEvidence,
+		TraceEvidence{Source: "ebpf_raw_event_count", Value: fmt.Sprintf("%d", len(rawEvents))},
+		TraceEvidence{Source: "ebpf_event_count", Value: fmt.Sprintf("%d", len(res.Events))},
+	)
 	return res, nil
 }
 
-func attachEBPFTracepoints(tracepoints []string) ([]link.Link, func(), error) {
-	prog, err := ebpf.NewProgram(&ebpf.ProgramSpec{
-		Name:    "devdiag_trace_probe",
-		Type:    ebpf.TracePoint,
-		License: "MIT",
-		Instructions: asm.Instructions{
-			asm.Mov.Imm(asm.R0, 0),
-			asm.Return(),
-		},
-	})
+type ebpfReadItem struct {
+	event devdiagEbpfTraceEvent
+	err   error
+}
+
+func readEBPFEvents(reader *ringbuf.Reader) <-chan ebpfReadItem {
+	items := make(chan ebpfReadItem, 1024)
+	go func() {
+		defer close(items)
+		for {
+			record, err := reader.Read()
+			if err != nil {
+				if errors.Is(err, ringbuf.ErrClosed) {
+					return
+				}
+				items <- ebpfReadItem{err: err}
+				continue
+			}
+			var event devdiagEbpfTraceEvent
+			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &event); err != nil {
+				items <- ebpfReadItem{err: err}
+				continue
+			}
+			items <- ebpfReadItem{event: event}
+		}
+	}()
+	return items
+}
+
+func waitForProcessStop(ctx context.Context, pid int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		state, err := readLinuxProcessState(pid)
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(state, "T") || strings.HasPrefix(state, "t") {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("process state %q did not become stopped before timeout", state)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func readLinuxProcessState(pid int) (string, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
 	if err != nil {
-		return nil, func() {}, err
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "State:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "State:")), nil
+		}
+	}
+	return "", fmt.Errorf("State not found in /proc/%d/status", pid)
+}
+
+func attachDevdiagEBPFTracepoints(objs *devdiagEbpfObjects, tracepoints []string) ([]link.Link, func(), error) {
+	programs := map[string]*ebpf.Program{
+		"sched/sched_process_fork":   objs.TracepointSchedProcessFork,
+		"syscalls/sys_enter_openat":  objs.TracepointSysEnterOpenat,
+		"syscalls/sys_exit_openat":   objs.TracepointSysExitOpenat,
+		"syscalls/sys_enter_execve":  objs.TracepointSysEnterExecve,
+		"syscalls/sys_exit_execve":   objs.TracepointSysExitExecve,
+		"syscalls/sys_enter_connect": objs.TracepointSysEnterConnect,
+		"syscalls/sys_exit_connect":  objs.TracepointSysExitConnect,
+		"syscalls/sys_enter_bind":    objs.TracepointSysEnterBind,
+		"syscalls/sys_exit_bind":     objs.TracepointSysExitBind,
 	}
 	var links []link.Link
 	cleanup := func() {
 		for _, lnk := range links {
 			_ = lnk.Close()
 		}
-		_ = prog.Close()
 	}
 	for _, tracepoint := range tracepoints {
+		prog := programs[tracepoint]
+		if prog == nil {
+			cleanup()
+			return nil, func() {}, fmt.Errorf("missing ebpf program for tracepoint %q", tracepoint)
+		}
 		group, name, ok := strings.Cut(tracepoint, "/")
 		if !ok {
 			cleanup()
