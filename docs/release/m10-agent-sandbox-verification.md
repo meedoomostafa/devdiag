@@ -6,6 +6,7 @@ Date: 2026-05-24
 
 This note records local verification for the deterministic Milestone 10 agent
 interceptor and sandbox. No provider-backed LLM is required for M10 completion.
+Provider-backed explanations are tracked separately by M15.
 
 ## Implemented Contract
 
@@ -36,7 +37,6 @@ env PATH=/usr/local/go/bin:$PATH \
 
 ## Remaining M10 Gaps
 
-Provider-backed model integration remains intentionally out of scope. Future
-hardening can add richer classifiers and LLM adapters, but those adapters must
-consume the same untrusted-context schema and must not treat repository text or
-model output as instructions.
+Provider-backed model integration remained intentionally out of scope for M10.
+M15 adds optional provider-backed explanations while preserving the same
+untrusted-context schema and non-execution safety contract.
