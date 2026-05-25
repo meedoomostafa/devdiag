@@ -14,7 +14,7 @@ Deferred and not required for M11:
 - SaaS dashboard.
 - Paid rule-pack registry.
 - Editor extensions.
-- OPA/Rego or CUE policy execution.
+- OPA/Rego or CUE policy execution. These are now tracked by M14.
 - Provider-backed LLM or local model integration.
 
 ## Implemented Contract
@@ -49,8 +49,8 @@ env PATH=/usr/local/go/bin:$PATH \
 
 ## Acceptance Notes
 
-- Rule-pack validation is metadata validation only. Existing Go rule engines
-  remain the accepted deterministic implementation for M11.
+- Rule-pack validation was metadata-only for M11. M14 owns CUE schema
+  validation and optional Rego policy-pack execution.
 - Issue templates use the default redaction engine unless the operator
   explicitly disables redaction with `--redact off`.
 - Capsule inspect never extracts raw logs; it reads archive metadata and the

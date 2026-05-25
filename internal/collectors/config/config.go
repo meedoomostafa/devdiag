@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/meedoomostafa/devdiag/internal/configschema"
 	"github.com/meedoomostafa/devdiag/internal/schema"
-	"gopkg.in/yaml.v3"
 )
 
 // Collector reads DevDiag project configuration without exposing secret values.
@@ -43,14 +43,17 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 			Notes:  []string{fmt.Sprintf("failed to read %s: %v", name, err)},
 		}, nil
 	}
-	var cfg projectConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	validation := configschema.ValidateYAML(data)
+	if !validation.Valid {
 		return schema.CollectorResult{
-			Name:   c.Name(),
-			Status: schema.CollectorPartial,
-			Notes:  []string{fmt.Sprintf("failed to parse %s: %v", name, err)},
+			Name:     c.Name(),
+			Status:   schema.CollectorPartial,
+			Partial:  true,
+			Evidence: []schema.Evidence{{Source: "devdiag_config_path", Value: name}},
+			Notes:    validation.Errors,
 		}, nil
 	}
+	cfg := validation.Config
 
 	evidence := []schema.Evidence{{Source: "devdiag_config_path", Value: name}}
 	for _, key := range cleanKeys(cfg.CI.Env.IgnoreMissingLocal) {
@@ -72,18 +75,6 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		evidence = append(evidence, schema.Evidence{Source: "devdiag_policy_fail_severity", Value: failSeverity})
 	}
 	return schema.CollectorResult{Name: c.Name(), Status: schema.CollectorOK, Evidence: evidence}, nil
-}
-
-type projectConfig struct {
-	CI struct {
-		Env struct {
-			IgnoreMissingLocal []string `yaml:"ignore_missing_local"`
-			IgnoreMissingCI    []string `yaml:"ignore_missing_ci"`
-		} `yaml:"env"`
-	} `yaml:"ci"`
-	Policy struct {
-		FailSeverity string `yaml:"fail_severity"`
-	} `yaml:"policy"`
 }
 
 func findConfigFile(root string) (path, name string, ok bool) {
