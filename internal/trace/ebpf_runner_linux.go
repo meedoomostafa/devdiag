@@ -85,7 +85,7 @@ func RunEBPF(ctx context.Context, scopes []Scope, command string, args ...string
 	defer reader.Close()
 
 	tracepoints := ebpfTracepointsForScopes(scopes)
-	links, cleanup, err := attachDevdiagEBPFTracepoints(&objs, tracepoints)
+	attached, err := attachDevdiagEBPFTracepoints(&objs, tracepoints)
 	if err != nil {
 		res.CapabilityEvidence = append(res.CapabilityEvidence,
 			TraceEvidence{Source: "ebpf_tracepoint_attach", Value: "failed"},
@@ -96,10 +96,11 @@ func RunEBPF(ctx context.Context, scopes []Scope, command string, args ...string
 		res.Notes = append(res.Notes, "ebpf backend unavailable: tracepoint attach failed")
 		return res, nil
 	}
-	defer cleanup()
+	defer attached.cleanup()
 	res.CapabilityEvidence = append(res.CapabilityEvidence,
-		TraceEvidence{Source: "ebpf_tracepoints_attached", Value: strings.Join(tracepoints, ",")},
-		TraceEvidence{Source: "ebpf_tracepoint_link_count", Value: fmt.Sprintf("%d", len(links))},
+		TraceEvidence{Source: "ebpf_attach_mode", Value: attached.mode},
+		TraceEvidence{Source: "ebpf_tracepoints_attached", Value: strings.Join(attached.names, ",")},
+		TraceEvidence{Source: "ebpf_tracepoint_link_count", Value: fmt.Sprintf("%d", len(attached.links))},
 	)
 
 	start := time.Now()
@@ -260,7 +261,26 @@ func readLinuxProcessState(pid int) (string, error) {
 	return "", fmt.Errorf("State not found in /proc/%d/status", pid)
 }
 
-func attachDevdiagEBPFTracepoints(objs *devdiagEbpfObjects, tracepoints []string) ([]link.Link, func(), error) {
+type ebpfAttachResult struct {
+	links   []link.Link
+	names   []string
+	mode    string
+	cleanup func()
+}
+
+func attachDevdiagEBPFTracepoints(objs *devdiagEbpfObjects, tracepoints []string) (*ebpfAttachResult, error) {
+	result, err := attachDevdiagPerfTracepoints(objs, tracepoints)
+	if err == nil {
+		return result, nil
+	}
+	rawResult, rawErr := attachDevdiagRawTracepoints(objs, tracepoints)
+	if rawErr == nil {
+		return rawResult, nil
+	}
+	return nil, fmt.Errorf("%w; raw_tracepoint fallback failed: %v", err, rawErr)
+}
+
+func attachDevdiagPerfTracepoints(objs *devdiagEbpfObjects, tracepoints []string) (*ebpfAttachResult, error) {
 	programs := map[string]*ebpf.Program{
 		"sched/sched_process_fork":   objs.TracepointSchedProcessFork,
 		"syscalls/sys_enter_openat":  objs.TracepointSysEnterOpenat,
@@ -282,19 +302,51 @@ func attachDevdiagEBPFTracepoints(objs *devdiagEbpfObjects, tracepoints []string
 		prog := programs[tracepoint]
 		if prog == nil {
 			cleanup()
-			return nil, func() {}, fmt.Errorf("missing ebpf program for tracepoint %q", tracepoint)
+			return nil, fmt.Errorf("missing ebpf program for tracepoint %q", tracepoint)
 		}
 		group, name, ok := strings.Cut(tracepoint, "/")
 		if !ok {
 			cleanup()
-			return nil, func() {}, fmt.Errorf("invalid tracepoint %q", tracepoint)
+			return nil, fmt.Errorf("invalid tracepoint %q", tracepoint)
 		}
 		lnk, err := link.Tracepoint(group, name, prog, nil)
 		if err != nil {
 			cleanup()
-			return nil, func() {}, fmt.Errorf("attach %s: %w", tracepoint, err)
+			return nil, fmt.Errorf("attach %s: %w", tracepoint, err)
 		}
 		links = append(links, lnk)
 	}
-	return links, cleanup, nil
+	return &ebpfAttachResult{links: links, names: tracepoints, mode: "tracepoint", cleanup: cleanup}, nil
+}
+
+func attachDevdiagRawTracepoints(objs *devdiagEbpfObjects, tracepoints []string) (*ebpfAttachResult, error) {
+	if len(tracepoints) == 0 {
+		return &ebpfAttachResult{cleanup: func() {}, mode: "raw_tracepoint"}, nil
+	}
+	programs := map[string]*ebpf.Program{
+		"raw_tracepoint/sys_enter": objs.RawTracepointSysEnter,
+		"raw_tracepoint/sys_exit":  objs.RawTracepointSysExit,
+	}
+	rawTracepoints := []string{"raw_tracepoint/sys_enter", "raw_tracepoint/sys_exit"}
+	var links []link.Link
+	cleanup := func() {
+		for _, lnk := range links {
+			_ = lnk.Close()
+		}
+	}
+	for _, tracepoint := range rawTracepoints {
+		prog := programs[tracepoint]
+		if prog == nil {
+			cleanup()
+			return nil, fmt.Errorf("missing ebpf program for tracepoint %q", tracepoint)
+		}
+		_, name, _ := strings.Cut(tracepoint, "/")
+		lnk, err := link.AttachRawTracepoint(link.RawTracepointOptions{Name: name, Program: prog})
+		if err != nil {
+			cleanup()
+			return nil, fmt.Errorf("attach %s: %w", tracepoint, err)
+		}
+		links = append(links, lnk)
+	}
+	return &ebpfAttachResult{links: links, names: rawTracepoints, mode: "raw_tracepoint", cleanup: cleanup}, nil
 }
