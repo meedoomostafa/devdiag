@@ -477,6 +477,35 @@ func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 	}
 }
 
+func TestReleaseSignoffScriptContract(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "scripts", "live", "release-signoff.sh"))
+	if err != nil {
+		t.Fatalf("read release signoff script: %v", err)
+	}
+	script := string(data)
+	for _, want := range []string{
+		"run_command \"go-test\"",
+		"test ./... -count=1",
+		"run_command \"go-vet\"",
+		"vet ./...",
+		"run_command \"go-build\"",
+		"build -o /tmp/devdiag-plan-check ./cmd/devdiag",
+		"git diff --check",
+		"scripts/live/k8s-kind-signoff.sh",
+		"scripts/live/trace-signoff.sh",
+		"gh workflow run",
+		"gh run watch",
+		"devdiag-report-1.25",
+		"devdiag-report-1.26",
+		"secret123",
+		"docs/release/final-live-signoff.md",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("release signoff script missing %q:\n%s", want, script)
+		}
+	}
+}
+
 func TestCIWorkflowRunsMinimumAndCurrentGoCompatibilityMatrix(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
 	if err != nil {
