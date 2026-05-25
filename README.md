@@ -114,7 +114,13 @@ Saved runs can generate issue-ready handoff text and optional capsule metadata:
 devdiag scan . --save-report
 devdiag capsule create --run-id <run-id>
 devdiag issue template --run-id <run-id> --capsule support-<run-id>.devdiag.tgz --format json
+devdiag team bundle --run-id <run-id> --format json
 ```
+
+`team bundle` is a local export surface for future hosted dashboards or editor
+extensions. It includes saved report metadata, optional capsule metadata,
+built-in rule-pack metadata, stable output names, documented exit codes, and a
+redacted issue-template body.
 
 Remote dry-run examples:
 
