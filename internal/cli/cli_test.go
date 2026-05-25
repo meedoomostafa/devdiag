@@ -1974,30 +1974,212 @@ exit 0
 	assertFindingEvidence(t, got, "trace_errno", "EADDRINUSE")
 }
 
-func TestRemoteKubernetesTargetsReportUnsupported(t *testing.T) {
+func TestRemoteKubernetesTargetsDryRunAndStatusJSON(t *testing.T) {
 	for _, subcmd := range []string{"doctor", "sync", "enter", "clean", "status"} {
 		t.Run(subcmd, func(t *testing.T) {
 			stdout, _, code := runBinary("remote", subcmd, "k8s:default/api-pod", "--dry-run", "--format", "json")
-			if code != exitcode.InvalidInput.Int() {
-				t.Fatalf("remote %s k8s exit code = %d, want %d; stdout=%s", subcmd, code, exitcode.InvalidInput.Int(), stdout)
+			if code != 0 {
+				t.Fatalf("remote %s k8s dry-run exit code = %d, want 0; stdout=%s", subcmd, code, stdout)
 			}
 			var result map[string]any
 			if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 				t.Fatalf("remote %s k8s stdout is not valid JSON: %v; stdout=%s", subcmd, err, stdout)
 			}
-			if result["status"] != "unsupported" {
-				t.Fatalf("remote %s k8s status = %v, want unsupported", subcmd, result["status"])
+			if result["target"].(map[string]any)["kind"] != "k8s" {
+				t.Fatalf("remote %s k8s target = %v, want k8s", subcmd, result["target"])
 			}
-			findings, ok := result["findings"].([]any)
-			if !ok || len(findings) == 0 {
-				t.Fatalf("remote %s k8s missing findings: %v", subcmd, result["findings"])
+			if subcmd == "enter" && result["status"] != "planned" {
+				t.Fatalf("remote enter k8s status = %v, want planned", result["status"])
 			}
-			first, ok := findings[0].(map[string]any)
-			if !ok || first["id"] != "F-REMOTE-K8S-001" {
-				t.Fatalf("remote %s k8s finding = %v", subcmd, result["findings"])
+			if subcmd == "sync" && result["remote_dir"] == "" {
+				t.Fatalf("remote sync k8s missing remote_dir: %v", result)
 			}
 		})
 	}
+}
+
+func TestRemoteKubernetesDoctorUsesKubectlAndContainerFlag(t *testing.T) {
+	binDir := t.TempDir()
+	callsPath := filepath.Join(t.TempDir(), "kubectl-calls.log")
+	writeExecutable(t, filepath.Join(binDir, "kubectl"), `#!/bin/sh
+printf '%s\n' "$*" >> "$KUBECTL_CALLS"
+case "$*" in
+  *"printf ok"*)
+    printf 'ok'
+    exit 0
+    ;;
+  *"sh -lc"*)
+    printf '/bin/sh\nLinux\nx86_64\n1000\n1000\n/work\n/home/app\n/bin/sh\n/bin/bash\n\n\n\n\n\n/bin/tar\ntmp_writable\n'
+    exit 0
+    ;;
+esac
+exit 1
+`)
+	env := prependPath(os.Environ(), binDir)
+	env = append(env, "KUBECTL_CALLS="+callsPath)
+
+	stdout, stderr, code := runBinaryWithEnv(env, "remote", "doctor", "k8s:prod/default/api-pod", "--k8s-container", "app", "--format", "json")
+	if code != 0 {
+		t.Fatalf("remote doctor k8s exit code = %d, want 0; stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("remote doctor k8s stdout is not valid JSON: %v; stdout=%s", err, stdout)
+	}
+	if result["status"] != "doctor" {
+		t.Fatalf("remote doctor k8s status = %v, want doctor", result["status"])
+	}
+	data, err := os.ReadFile(callsPath)
+	if err != nil {
+		t.Fatalf("read kubectl calls: %v", err)
+	}
+	calls := string(data)
+	for _, want := range []string{"--context prod", "-n default", "exec api-pod", "-c app"} {
+		if !strings.Contains(calls, want) {
+			t.Fatalf("kubectl calls missing %q:\n%s", want, calls)
+		}
+	}
+}
+
+func TestRemoteKubernetesSyncUploadFailureReturnsJSON(t *testing.T) {
+	binDir := t.TempDir()
+	cacheDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "kubectl"), "#!/bin/sh\nprintf '%s\n' 'simulated kubectl upload failure' >&2\nexit 9\n")
+	env := append(prependPath(os.Environ(), binDir), "XDG_CACHE_HOME="+cacheDir)
+
+	stdout, stderr, code := runBinaryWithEnv(env, "remote", "sync", "k8s:default/api-pod", "--format", "json")
+	if code != exitcode.ReproFailed.Int() {
+		t.Fatalf("remote sync k8s upload failure exit code = %d, want %d; stderr=%s stdout=%s", code, exitcode.ReproFailed.Int(), stderr, stdout)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("remote sync k8s stdout is not valid JSON: %v; stdout=%s", err, stdout)
+	}
+	if result["status"] != "failed" {
+		t.Fatalf("remote sync k8s status = %v, want failed; stdout=%s", result["status"], stdout)
+	}
+	if result["target"].(map[string]any)["kind"] != "k8s" {
+		t.Fatalf("remote sync k8s target kind = %v, want k8s", result["target"])
+	}
+}
+
+func TestRemoteKubernetesStatusUsesCache(t *testing.T) {
+	cacheDir := t.TempDir()
+	writeRemoteSessionCache(t, cacheDir, session.Manifest{
+		SchemaVersion: "0.1",
+		SessionID:     "k8s-status",
+		CreatedAt:     "2026-05-25T00:00:00Z",
+		Target:        target.Target{Kind: target.KindK8s, Raw: "k8s:default/api-pod", Namespace: "default", Pod: "api-pod"},
+		Profile:       "minimal",
+		Mode:          "temporary",
+		RootDir:       "/tmp/devdiag-remote/k8s-status",
+		Status:        "active",
+	})
+	env := append(os.Environ(), "XDG_CACHE_HOME="+cacheDir)
+
+	stdout, stderr, code := runBinaryWithEnv(env, "remote", "status", "k8s:default/api-pod", "--format", "json")
+	if code != 0 {
+		t.Fatalf("remote status k8s exit code = %d, want 0; stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("remote status k8s stdout is not valid JSON: %v; stdout=%s", err, stdout)
+	}
+	if result["session_id"] != "k8s-status" {
+		t.Fatalf("remote status k8s session_id = %v, want k8s-status; result=%v", result["session_id"], result)
+	}
+	if result["remote_dir"] != "/tmp/devdiag-remote/k8s-status" {
+		t.Fatalf("remote status k8s remote_dir = %v, want /tmp/devdiag-remote/k8s-status; result=%v", result["remote_dir"], result)
+	}
+}
+
+func TestRemoteKubernetesCleanExitPaths(t *testing.T) {
+	t.Run("refused unsafe root", func(t *testing.T) {
+		cacheDir := t.TempDir()
+		writeRemoteSessionCache(t, cacheDir, session.Manifest{
+			SchemaVersion: "0.1",
+			SessionID:     "k8s-unsafe-clean",
+			CreatedAt:     "2026-05-25T00:00:00Z",
+			Target:        target.Target{Kind: target.KindK8s, Raw: "k8s:default/api-pod", Namespace: "default", Pod: "api-pod"},
+			Profile:       "minimal",
+			Mode:          "temporary",
+			RootDir:       "~/.devdiag/remote/k8s-unsafe-clean",
+			Status:        "active",
+		})
+		env := append(os.Environ(), "XDG_CACHE_HOME="+cacheDir)
+
+		stdout, stderr, code := runBinaryWithEnv(env, "remote", "clean", "k8s:default/api-pod", "--session", "k8s-unsafe-clean", "--format", "json")
+		if code != exitcode.UnsafeRefused.Int() {
+			t.Fatalf("remote clean k8s unsafe exit code = %d, want %d; stderr=%s stdout=%s", code, exitcode.UnsafeRefused.Int(), stderr, stdout)
+		}
+		assertRemoteFinding(t, stdout, "refused", "F-REMOTE-005")
+	})
+
+	t.Run("partial cleanup", func(t *testing.T) {
+		binDir := t.TempDir()
+		cacheDir := t.TempDir()
+		writeExecutable(t, filepath.Join(binDir, "kubectl"), "#!/bin/sh\nprintf '%s\n' 'rm failed' >&2\nexit 7\n")
+		writeRemoteSessionCache(t, cacheDir, session.Manifest{
+			SchemaVersion: "0.1",
+			SessionID:     "k8s-partial-clean",
+			CreatedAt:     "2026-05-25T00:00:00Z",
+			Target:        target.Target{Kind: target.KindK8s, Raw: "k8s:default/api-pod", Namespace: "default", Pod: "api-pod"},
+			Profile:       "minimal",
+			Mode:          "temporary",
+			RootDir:       "/tmp/devdiag-remote/k8s-partial-clean",
+			Files: []session.ManagedFile{
+				{Path: "/tmp/devdiag-remote/k8s-partial-clean/env.sh", Created: true},
+			},
+			Status: "active",
+		})
+		env := append(prependPath(os.Environ(), binDir), "XDG_CACHE_HOME="+cacheDir)
+
+		stdout, stderr, code := runBinaryWithEnv(env, "remote", "clean", "k8s:default/api-pod", "--session", "k8s-partial-clean", "--format", "json")
+		if code != exitcode.CollectorPartial.Int() {
+			t.Fatalf("remote clean k8s partial exit code = %d, want %d; stderr=%s stdout=%s", code, exitcode.CollectorPartial.Int(), stderr, stdout)
+		}
+		assertRemoteFinding(t, stdout, "partial", "F-REMOTE-010")
+	})
+
+	t.Run("success", func(t *testing.T) {
+		binDir := t.TempDir()
+		cacheDir := t.TempDir()
+		callsPath := filepath.Join(t.TempDir(), "kubectl-clean-calls.log")
+		writeExecutable(t, filepath.Join(binDir, "kubectl"), "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$KUBECTL_CALLS\"\nexit 0\n")
+		writeRemoteSessionCache(t, cacheDir, session.Manifest{
+			SchemaVersion: "0.1",
+			SessionID:     "k8s-success-clean",
+			CreatedAt:     "2026-05-25T00:00:00Z",
+			Target:        target.Target{Kind: target.KindK8s, Raw: "k8s:default/api-pod", Namespace: "default", Pod: "api-pod"},
+			Profile:       "minimal",
+			Mode:          "temporary",
+			RootDir:       "/tmp/devdiag-remote/k8s-success-clean",
+			Files: []session.ManagedFile{
+				{Path: "/tmp/devdiag-remote/k8s-success-clean/env.sh", Created: true},
+			},
+			Status: "active",
+		})
+		env := append(prependPath(os.Environ(), binDir), "XDG_CACHE_HOME="+cacheDir, "KUBECTL_CALLS="+callsPath)
+
+		stdout, stderr, code := runBinaryWithEnv(env, "remote", "clean", "k8s:default/api-pod", "--session", "k8s-success-clean", "--format", "json")
+		if code != 0 {
+			t.Fatalf("remote clean k8s success exit code = %d, want 0; stderr=%s stdout=%s", code, stderr, stdout)
+		}
+		var result map[string]any
+		if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+			t.Fatalf("remote clean k8s stdout is not valid JSON: %v; stdout=%s", err, stdout)
+		}
+		if result["status"] != "cleaned" {
+			t.Fatalf("remote clean k8s status = %v, want cleaned; result=%v", result["status"], result)
+		}
+		data, err := os.ReadFile(callsPath)
+		if err != nil {
+			t.Fatalf("read kubectl calls: %v", err)
+		}
+		if !strings.Contains(string(data), "rm -f /tmp/devdiag-remote/k8s-success-clean/env.sh") {
+			t.Fatalf("kubectl clean calls missing rm command:\n%s", data)
+		}
+	})
 }
 
 func TestRemoteDoctorHighFindingsReturnFindingsExit(t *testing.T) {
@@ -2140,6 +2322,18 @@ func TestRemoteLiveContainerVerification(t *testing.T) {
 		t.Skip("set DEVDIAG_LIVE_CONTAINER_TARGET to run live container remote verification")
 	}
 	runRemoteLiveVerification(t, targetRaw, target.KindContainer, nil)
+}
+
+func TestRemoteLiveKubernetesVerification(t *testing.T) {
+	targetRaw := os.Getenv("DEVDIAG_LIVE_K8S_TARGET")
+	if targetRaw == "" {
+		t.Skip("set DEVDIAG_LIVE_K8S_TARGET to run live Kubernetes remote verification")
+	}
+	var args []string
+	if containerName := os.Getenv("DEVDIAG_LIVE_K8S_CONTAINER"); containerName != "" {
+		args = append(args, "--k8s-container", containerName)
+	}
+	runRemoteLiveVerification(t, targetRaw, target.KindK8s, args)
 }
 
 func TestAgentExplainJSONMarksFileUntrustedAndReportsInjection(t *testing.T) {
@@ -2335,7 +2529,7 @@ func runRemoteLiveVerification(t *testing.T, targetRaw string, wantKind target.K
 	partialSessionID := "live-partial-clean"
 	partialRoot := "~/.devdiag/remote/" + partialSessionID
 	partialBadPath := partialRoot + "/../outside"
-	if wantKind == target.KindContainer {
+	if wantKind == target.KindContainer || wantKind == target.KindK8s {
 		partialRoot = "/tmp/devdiag-remote/" + partialSessionID
 		partialBadPath = partialRoot + "/../outside"
 	}

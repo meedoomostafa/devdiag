@@ -6,14 +6,15 @@ This document records executable evidence for Milestone 9 remote environment syn
 It is intentionally conservative: target parsing and dry-run rendering do not count
 as live remote support.
 
+Note: this is the M9 historical signoff record. Kubernetes transport support was
+deferred from M9 and is tracked in `docs/release/m12-k8s-remote-verification.md`.
+
 ## Current Status
 
 M9 counts complete for SSH and container remote sync acceptance.
 
-Kubernetes does not count as part of M9. K8s target parsing may remain, but
-`doctor`, `sync`, `enter`, `clean`, and `status` must clearly return
-unsupported until a later Kubernetes transport slice implements `kubectl`
-operations.
+Kubernetes did not count as part of M9. K8s target parsing was accepted in M9,
+but `kubectl` transport implementation was intentionally deferred to M12.
 
 Implemented and verified:
 
@@ -29,8 +30,8 @@ Implemented and verified:
 - Unsafe `remote clean` manifests render JSON with `status: "refused"` and return
   exit code `5`; partial cleanup renders JSON with `status: "partial"` and
   returns exit code `3`.
-- Explicit unsupported status for Kubernetes remote targets across `doctor`, `sync`,
-  `enter`, `clean`, and `status`.
+- Historical M9 unsupported status for Kubernetes remote targets across
+  `doctor`, `sync`, `enter`, `clean`, and `status`.
 - `remote` SSH targets support explicit `--ssh-identity-file`,
   `--ssh-known-hosts-file`, and `--ssh-strict-host-key-checking` options for
   isolated or CI-provisioned SSH acceptance environments.
@@ -39,9 +40,9 @@ Implemented and verified:
 - Live-gated Docker container verification covers doctor, dry-run sync, sync,
   status, enter planning, partial cleanup, and cleanup.
 
-Not yet proven or not implemented:
+Deferred from M9:
 
-- Kubernetes remote doctor/sync/enter/clean/status implementation.
+- Kubernetes remote doctor/sync/enter/clean/status implementation. See M12.
 
 ## Verification Commands
 
@@ -61,7 +62,9 @@ Observed result:
 - Dry-run commands did not upload files or open shells.
 - Status/clean reported no cached session when no session existed.
 
-Kubernetes unsupported behavior is covered by automated CLI tests:
+The historical Kubernetes unsupported behavior was covered by automated CLI
+tests during M9. Current K8s transport behavior is covered by the M12 release
+verification document.
 
 ```bash
 PATH=/usr/local/go/bin:$PATH GOCACHE=/tmp/devdiag-go-build GOMODCACHE=/tmp/devdiag-go-mod XDG_CACHE_HOME=/tmp/devdiag-cache /usr/local/go/bin/go test ./internal/cli
@@ -84,10 +87,8 @@ Expected behavior:
 - `remote clean user@example.invalid --session <partial> --format json` with a
   failing cleanup command returns exit code `3`, keeps stdout as valid JSON, and
   reports `F-REMOTE-010`.
-- `remote <doctor|sync|enter|clean|status> k8s:default/api-pod --dry-run --format json`
-  returns exit code `2`.
-- Stdout contains valid JSON with `status: "unsupported"`.
-- Findings include `F-REMOTE-K8S-001`.
+- For current behavior, run the K8s tests and live gate documented in
+  `docs/release/m12-k8s-remote-verification.md`.
 
 Live-gated SSH verification is available when an SSH target is explicitly
 provided:
@@ -144,5 +145,5 @@ temporary targets. Remaining live gaps:
   this verification pass.
 - No Kubernetes cluster/context was provided.
 
-Do not mark Kubernetes remote support complete until a later K8s slice
-implements and live-verifies `kubectl` transport behavior.
+Kubernetes remote support is no longer tracked against M9. M12 owns `kubectl`
+transport implementation and live signoff.

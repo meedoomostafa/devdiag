@@ -116,6 +116,8 @@ devdiag remote doctor user@host --dry-run
 devdiag remote sync user@host --dry-run --profile minimal
 devdiag remote enter user@host --dry-run --format json
 devdiag remote clean user@host --dry-run
+devdiag remote doctor k8s:default/api-pod --dry-run --format json
+devdiag remote sync k8s:prod/default/api-pod --k8s-container app --dry-run --format json
 devdiag agent explain F-PORT-001 --format json
 devdiag agent run -- npm test
 devdiag agent sandbox --patch fix.patch -- npm test
@@ -130,6 +132,12 @@ devdiag remote doctor user@host \
   --ssh-known-hosts-file /path/to/known_hosts \
   --ssh-strict-host-key-checking yes
 ```
+
+Kubernetes remote commands use `kubectl exec` with targets in
+`k8s:namespace/pod` or `k8s:context/namespace/pod` form. Multi-container pods
+can be selected with `--k8s-container <name>`. Remote files are staged under
+`/tmp/devdiag-remote/<session>` and remain manifest-cleanable through
+`devdiag remote clean`.
 
 ## Output and Exit Codes
 
