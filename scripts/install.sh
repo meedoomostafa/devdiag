@@ -19,6 +19,7 @@ Environment:
   DEVDIAG_INSTALL_VERSION  Git ref to install. Default: v0.1.0
   DEVDIAG_BIN_DIR          Install directory. Default: /usr/local/bin if writable, else ~/.local/bin
   DEVDIAG_REPO             GitHub repo owner/name. Default: meedoomostafa/devdiag
+  GITHUB_TOKEN or GH_TOKEN GitHub token for private repository archive downloads
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | bash
@@ -118,10 +119,19 @@ archive_url() {
 download() {
 	local url="$1"
 	local out="$2"
+	local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 	if command -v curl >/dev/null 2>&1; then
-		curl -fsSL "${url}" -o "${out}"
+		if [[ -n "${token}" ]]; then
+			curl -fsSL -H "Authorization: Bearer ${token}" "${url}" -o "${out}"
+		else
+			curl -fsSL "${url}" -o "${out}"
+		fi
 	elif command -v wget >/dev/null 2>&1; then
-		wget -qO "${out}" "${url}"
+		if [[ -n "${token}" ]]; then
+			wget --header="Authorization: Bearer ${token}" -qO "${out}" "${url}"
+		else
+			wget -qO "${out}" "${url}"
+		fi
 	else
 		echo "missing required command: curl or wget" >&2
 		exit 127

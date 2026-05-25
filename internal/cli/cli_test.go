@@ -514,6 +514,7 @@ func TestInstallScriptContract(t *testing.T) {
 	script := string(data)
 	for _, want := range []string{
 		"DEVDIAG_INSTALL_VERSION",
+		"GITHUB_TOKEN or GH_TOKEN",
 		"v0.1.0",
 		"linux",
 		"go version",
@@ -521,6 +522,7 @@ func TestInstallScriptContract(t *testing.T) {
 		"-X github.com/meedoomostafa/devdiag/internal/version.Version",
 		"--bin-dir",
 		"--dry-run",
+		"Authorization: Bearer",
 		"https://github.com/%s/archive",
 		"~/.local/bin",
 	} {
