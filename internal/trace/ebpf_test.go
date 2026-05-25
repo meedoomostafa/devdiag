@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
@@ -90,6 +91,79 @@ func TestEBPFRecordsMapToExistingFindingsAndFilterProcessTree(t *testing.T) {
 	}
 	assertEvidenceValue(t, findings[0].Evidence, "trace_connect_port", "5432")
 	assertEvidenceValueAbsent(t, findings[0].Evidence, "trace_connect_port", "9999")
+}
+
+func TestEBPFKernelEventsDecodeToExistingTraceFindings(t *testing.T) {
+	events := eventsFromEBPFKernelEvents([]devdiagEbpfTraceEvent{
+		{
+			TimestampNs: uint64(time.Second),
+			Pid:         100,
+			EventType:   ebpfEventOpenat,
+			Ret:         -2,
+			Arg0:        ebpfTestString("/tmp/devdiag-ebpf-missing"),
+		},
+		{
+			TimestampNs: uint64(2 * time.Second),
+			Pid:         100,
+			EventType:   ebpfEventExecve,
+			Ret:         -2,
+			Arg0:        ebpfTestString("/tmp/devdiag-ebpf-missing-exec"),
+		},
+		{
+			TimestampNs: uint64(3 * time.Second),
+			Pid:         100,
+			EventType:   ebpfEventConnect,
+			Ret:         -111,
+			Family:      2,
+			Port:        5432,
+			Addr4:       0x0100007f,
+		},
+		{
+			TimestampNs: uint64(4 * time.Second),
+			Pid:         100,
+			EventType:   ebpfEventBind,
+			Ret:         -98,
+			Family:      2,
+			Port:        8080,
+			Addr4:       0x0100007f,
+		},
+	}, []Scope{ScopeFile, ScopeProcess, ScopeNetwork})
+
+	findings := Analyze(events)
+	for _, want := range []string{"F-TRACE-FILE-001", "F-TRACE-EXEC-001", "F-TRACE-NET-001", "F-TRACE-NET-002"} {
+		if !hasFinding(findings, want) {
+			t.Fatalf("missing finding %s from decoded eBPF events: %+v", want, findings)
+		}
+	}
+}
+
+func TestEBPFKernelEventsRespectRequestedScopes(t *testing.T) {
+	events := eventsFromEBPFKernelEvents([]devdiagEbpfTraceEvent{
+		{Pid: 100, EventType: ebpfEventOpenat, Ret: -2, Arg0: ebpfTestString("/tmp/devdiag-ebpf-missing")},
+		{Pid: 100, EventType: ebpfEventConnect, Ret: -111, Family: 2, Port: 5432, Addr4: 0x0100007f},
+	}, []Scope{ScopeNetwork})
+
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want only network event", events)
+	}
+	if events[0].Syscall != "connect" {
+		t.Fatalf("syscall = %s, want connect", events[0].Syscall)
+	}
+}
+
+func ebpfTestString(value string) [96]uint8 {
+	var out [96]uint8
+	copy(out[:], value)
+	return out
+}
+
+func hasFinding(findings []schema.Finding, id string) bool {
+	for _, finding := range findings {
+		if finding.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func assertTraceEvidence(t *testing.T, evidence []TraceEvidence, source, value string) {
