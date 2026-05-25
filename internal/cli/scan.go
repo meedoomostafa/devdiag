@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -35,6 +36,7 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/findings"
 	"github.com/meedoomostafa/devdiag/internal/graph"
+	"github.com/meedoomostafa/devdiag/internal/rulepack"
 	"github.com/meedoomostafa/devdiag/internal/rules"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 	"github.com/meedoomostafa/devdiag/internal/version"
@@ -42,6 +44,7 @@ import (
 
 var scanSaveReport bool
 var scanCI bool
+var scanRulePackPath string
 
 var scanCmd = &cobra.Command{
 	Use:   "scan [path]",
@@ -162,6 +165,23 @@ var scanCmd = &cobra.Command{
 				rawFindings = append(rawFindings, m8Findings...)
 			}
 		}
+		if scanRulePackPath != "" {
+			eval := rulepack.EvaluateRegoFile(ctx, scanRulePackPath, snapshot)
+			if !eval.Valid {
+				logger.Error("rule-pack", strings.Join(eval.Errors, "; "))
+				return exitCodeError{code: exitcode.InvalidInput}
+			}
+			rawFindings = append(rawFindings, eval.Findings...)
+			collectorResults = append(collectorResults, schema.CollectorResult{
+				Name:   "rulepack",
+				Status: schema.CollectorOK,
+				Evidence: []schema.Evidence{
+					{Source: "rulepack_id", Value: eval.Pack.ID},
+					{Source: "rulepack_engine", Value: eval.Pack.Engine},
+					{Source: "rulepack_findings", Value: fmt.Sprintf("%d", len(eval.Findings))},
+				},
+			})
+		}
 
 		// Aggregate findings for stable ordering
 		aggregator := findings.NewAggregator()
@@ -222,5 +242,6 @@ func persistReport(report *schema.Report) error {
 func init() {
 	scanCmd.Flags().BoolVar(&scanSaveReport, "save-report", false, "Persist report under .devdiag/runs for fix and capsule commands")
 	scanCmd.Flags().BoolVar(&scanCI, "ci", false, "Force CI/local parity collection and evaluation")
+	scanCmd.Flags().StringVar(&scanRulePackPath, "rule-pack", "", "Evaluate an external deterministic rule pack")
 	rootCmd.AddCommand(scanCmd)
 }
