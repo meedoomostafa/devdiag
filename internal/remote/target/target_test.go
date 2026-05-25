@@ -97,6 +97,11 @@ func TestParse(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "k8s shell metacharacters",
+			raw:     "k8s:default/api-pod;rm",
+			wantErr: true,
+		},
+		{
 			name:    "empty target",
 			raw:     "",
 			wantErr: true,

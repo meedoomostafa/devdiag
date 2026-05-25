@@ -141,6 +141,9 @@ func parseK8s(raw string) (*Target, error) {
 	if t.Namespace == "" || t.Pod == "" {
 		return nil, fmt.Errorf("kubernetes target namespace and pod must not be empty")
 	}
+	if containsShellMetachar(t.Context) || containsShellMetachar(t.Namespace) || containsShellMetachar(t.Pod) {
+		return nil, fmt.Errorf("kubernetes target contains shell metacharacters")
+	}
 
 	return t, nil
 }
@@ -206,11 +209,15 @@ func parseSSH(raw string) (*Target, error) {
 	}
 
 	// Reject shell metacharacters in host
-	if strings.ContainsAny(hostPart, "|&;<>$\\") {
+	if containsShellMetachar(hostPart) {
 		return nil, fmt.Errorf("host contains shell metacharacters")
 	}
 
 	t.Host = hostPart
 
 	return t, nil
+}
+
+func containsShellMetachar(value string) bool {
+	return strings.ContainsAny(value, "|&;<>$\\")
 }

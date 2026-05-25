@@ -377,12 +377,14 @@ func TestValidateRootDir_Hardening(t *testing.T) {
 	}{
 		{"~/.devdiag/remote/s1", target.KindSSH, true},
 		{"/tmp/devdiag-remote/s1", target.KindContainer, true},
+		{"/tmp/devdiag-remote/s1", target.KindK8s, true},
 		{"/", target.KindSSH, false},
 		{"/home", target.KindSSH, false},
 		{"/tmp", target.KindSSH, false},
 		{"", target.KindSSH, false},
 		{"~/foo/..", target.KindSSH, false},
 		{"~/.devdiag/remote/s1/../../../etc", target.KindSSH, false},
+		{"~/.devdiag/remote/s1", target.KindK8s, false},
 	}
 	for _, c := range cases {
 		err := session.ValidateRootDir(c.path, c.kind)
