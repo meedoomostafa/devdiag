@@ -15,7 +15,7 @@ Deferred and not required for M11:
 - Paid rule-pack registry.
 - Editor extensions.
 - OPA/Rego or CUE policy execution. These are now tracked by M14.
-- Provider-backed LLM or local model integration.
+- External model integration.
 
 ## Implemented Contract
 
