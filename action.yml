@@ -33,6 +33,10 @@ inputs:
     description: 'Newline-separated literal values to register with GitHub add-mask before running DevDiag'
     required: false
     default: ''
+  artifact-name:
+    description: 'Name for the uploaded JSON report artifact'
+    required: false
+    default: 'devdiag-report'
   format:
     description: 'Output format: github, json, markdown'
     required: false
@@ -115,7 +119,7 @@ runs:
           {
             echo "### DevDiag scan"
             echo ""
-            echo "- Report artifact: \`devdiag-report\`"
+            echo "- Report artifact: \`$ARTIFACT_NAME\`"
             echo "- Report path: \`$REPORT_PATH\`"
             echo "- Annotation scan exit: \`$SCAN_EXIT\`"
             echo "- JSON report exit: \`$JSON_EXIT\`"
@@ -147,8 +151,9 @@ runs:
         FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
         FAIL_SEVERITY: ${{ inputs.fail-severity }}
         MASK_VALUES: ${{ inputs.mask-values }}
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
     - uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: devdiag-report
+        name: ${{ inputs.artifact-name }}
         path: ${{ runner.temp }}/devdiag-artifacts/devdiag-report.json
