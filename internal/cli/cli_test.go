@@ -2019,6 +2019,7 @@ func TestTraceCommand_LiveStraceJSONAcceptance(t *testing.T) {
 		t.Fatalf("trace live collector status = %s, want ok; collector=%+v", collector.Status, collector)
 	}
 	assertCollectorEvidence(t, collector, "trace_backend", "strace")
+	logTraceCollectorEvidence(t, "strace_live", collector)
 	if _, err := os.Stat(filepath.Join(workDir, ".devdiag", "runs", report.RunID, "trace-result.json")); err != nil {
 		t.Fatalf("missing live trace artifact: %v", err)
 	}
@@ -2045,8 +2046,24 @@ func TestTraceCommand_LiveEBPFJSONAcceptance(t *testing.T) {
 	assertCollectorEvidence(t, collector, "trace_backend", "ebpf")
 	assertCollectorEvidenceSource(t, collector, "ebpf_tracepoints_attached")
 	assertCollectorEvidenceSource(t, collector, "ebpf_event_count")
+	logTraceCollectorEvidence(t, "ebpf_live", collector)
+	var findingIDs []string
+	for _, finding := range report.Findings {
+		findingIDs = append(findingIDs, finding.ID)
+	}
+	t.Logf("ebpf_live_findings=%s", strings.Join(findingIDs, ","))
 	for _, findingID := range []string{"F-TRACE-FILE-001", "F-TRACE-EXEC-001", "F-TRACE-NET-001", "F-TRACE-NET-002"} {
 		assertReportFinding(t, report, findingID)
+	}
+}
+
+func logTraceCollectorEvidence(t *testing.T, prefix string, collector schema.CollectorResult) {
+	t.Helper()
+	for _, ev := range collector.Evidence {
+		switch ev.Source {
+		case "trace_backend", "trace_event_count", "ebpf_attach_mode", "ebpf_tracepoints_attached", "ebpf_tracepoint_link_count", "ebpf_raw_event_count", "ebpf_event_count":
+			t.Logf("%s_%s=%s", prefix, ev.Source, ev.Value)
+		}
 	}
 }
 
