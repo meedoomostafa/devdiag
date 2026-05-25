@@ -61,6 +61,15 @@ curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/script
 DEVDIAG_INSTALL_VERSION=main bash scripts/install.sh --dry-run
 ```
 
+For private repository installs, pass an authenticated GitHub token so the
+installer can fetch the source archive:
+
+```bash
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | \
+  GITHUB_TOKEN="$GITHUB_TOKEN" bash
+```
+
 ## Common Commands
 
 ```bash
