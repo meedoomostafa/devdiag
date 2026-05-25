@@ -34,6 +34,33 @@ DevDiag is built for problems such as:
 The module targets Go 1.25 as the minimum supported baseline. CI also gates Go
 1.26 compatibility before release.
 
+## Install
+
+Install the current release from source on Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | bash
+```
+
+The installer supports Linux distributions with Bash, `tar`, `curl` or `wget`,
+and Go 1.25 or newer. It installs to `/usr/local/bin` when writable and falls
+back to `~/.local/bin` otherwise.
+
+Useful installer options:
+
+```bash
+# Install to a user-local directory.
+curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | \
+  bash -s -- --bin-dir "$HOME/.local/bin"
+
+# Preview the detected archive, Go version, and install directory.
+curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | \
+  bash -s -- --dry-run
+
+# Install another Git ref for testing.
+DEVDIAG_INSTALL_VERSION=main bash scripts/install.sh --dry-run
+```
+
 ## Common Commands
 
 ```bash
