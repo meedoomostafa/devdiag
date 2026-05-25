@@ -15,9 +15,6 @@ jobs:
       fail-fast: false
       matrix:
         go-version: ['1.25', '1.26']
-    env:
-      DEVDIAG_ACTION_FIXTURE: ${{ runner.temp }}/devdiag-action-fixture
-      DEVDIAG_ACTION_DOWNLOAD: ${{ runner.temp }}/devdiag-action-download
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -32,8 +29,9 @@ jobs:
       - name: Create signoff fixture
         shell: bash
         run: |
-          mkdir -p "$DEVDIAG_ACTION_FIXTURE/.github/workflows"
-          cat > "$DEVDIAG_ACTION_FIXTURE/.github/workflows/ci.yml" <<'YAML'
+          fixture="$RUNNER_TEMP/devdiag-action-fixture"
+          mkdir -p "$fixture/.github/workflows"
+          cat > "$fixture/.github/workflows/ci.yml" <<'YAML'
           name: fixture
           on: [push]
           jobs:
@@ -47,13 +45,13 @@ jobs:
                     node-version: '20'
                 - run: npm test
           YAML
-          printf '18\n' > "$DEVDIAG_ACTION_FIXTURE/.nvmrc"
-          printf 'LOCAL_ONLY=1\n' > "$DEVDIAG_ACTION_FIXTURE/.env"
+          printf '18\n' > "$fixture/.nvmrc"
+          printf 'LOCAL_ONLY=1\n' > "$fixture/.env"
       - id: allow
         name: Run DevDiag action without failing on findings
         uses: ./
         with:
-          path: ${{ env.DEVDIAG_ACTION_FIXTURE }}
+          path: ${{ runner.temp }}/devdiag-action-fixture
           format: github
           ci: 'true'
           summary: 'true'
@@ -77,11 +75,11 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           name: devdiag-report-${{ matrix.go-version }}
-          path: ${{ env.DEVDIAG_ACTION_DOWNLOAD }}
+          path: ${{ runner.temp }}/devdiag-action-download
       - name: Verify downloaded report artifact
         shell: bash
         run: |
-          downloaded="$DEVDIAG_ACTION_DOWNLOAD/devdiag-report.json"
+          downloaded="$RUNNER_TEMP/devdiag-action-download/devdiag-report.json"
           test -f "$downloaded"
           jq -e '.schema_version and .collectors and .findings' "$downloaded"
           grep -q '<redacted>' "$downloaded"
@@ -92,7 +90,7 @@ jobs:
         uses: ./
         continue-on-error: true
         with:
-          path: ${{ env.DEVDIAG_ACTION_FIXTURE }}
+          path: ${{ runner.temp }}/devdiag-action-fixture
           format: github
           ci: 'true'
           summary: 'false'
