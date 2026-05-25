@@ -99,6 +99,18 @@ func TestRedactString_DefaultDoesNotRedactHexTokens(t *testing.T) {
 	}
 }
 
+func TestRedactString_DefaultRedactsQuotedKeyMaterialFromToolErrors(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	input := `docker compose config failed: failed to read .env: line 65: unexpected character "/" in variable name "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoXLZ1K/ecjzUBJyQ41WD"`
+	got := e.RedactString(input, "collector_note")
+	if got == input {
+		t.Fatalf("default mode did not redact quoted key material: %q", got)
+	}
+	if got != `docker compose config failed: failed to read .env: line 65: unexpected character "/" in variable name "<token>"` {
+		t.Fatalf("RedactString() = %q", got)
+	}
+}
+
 func TestRedactReport_DoesNotMutateOriginal(t *testing.T) {
 	e := NewEngine(LevelDefault)
 	original := &schema.Report{
