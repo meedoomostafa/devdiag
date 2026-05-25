@@ -89,6 +89,9 @@ func ebpfTracepointsForScopes(scopes []Scope) []string {
 			tracepoints = append(tracepoints, value)
 		}
 	}
+	if len(scopes) > 0 {
+		add("sched", "sched_process_fork")
+	}
 	for _, scope := range scopes {
 		switch scope {
 		case ScopeFile:

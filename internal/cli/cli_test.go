@@ -1959,6 +1959,16 @@ func assertReportFindingEvidenceValue(t *testing.T, report schema.Report, findin
 	t.Fatalf("report missing finding %s: %+v", findingID, report.Findings)
 }
 
+func assertReportFinding(t *testing.T, report schema.Report, findingID string) {
+	t.Helper()
+	for _, finding := range report.Findings {
+		if finding.ID == findingID {
+			return
+		}
+	}
+	t.Fatalf("report missing finding %s: %+v", findingID, report.Findings)
+}
+
 func assertReportFindingEvidenceAbsent(t *testing.T, report schema.Report, findingID, value string) {
 	t.Helper()
 	for _, finding := range report.Findings {
@@ -2019,9 +2029,10 @@ func TestTraceCommand_LiveEBPFJSONAcceptance(t *testing.T) {
 		t.Skip("set DEVDIAG_LIVE_EBPF=1 to run live eBPF JSON acceptance")
 	}
 	workDir := t.TempDir()
-	stdout, stderr, code := runBinaryInDir(workDir, "trace", "--backend", "ebpf", "--scope", "file,process,network", "--format", "json", "--", "true")
-	if code != 0 {
-		t.Fatalf("trace live ebpf exit code = %d, want 0; stderr=%s stdout=%s", code, stderr, stdout)
+	probe := buildTraceLiveProbe(t)
+	stdout, stderr, code := runBinaryInDir(workDir, "trace", "--backend", "ebpf", "--scope", "file,process,network", "--format", "json", "--", probe)
+	if code != exitcode.FindingsExist.Int() {
+		t.Fatalf("trace live ebpf exit code = %d, want %d; stderr=%s stdout=%s", code, exitcode.FindingsExist.Int(), stderr, stdout)
 	}
 	var report schema.Report
 	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
@@ -2033,6 +2044,22 @@ func TestTraceCommand_LiveEBPFJSONAcceptance(t *testing.T) {
 	}
 	assertCollectorEvidence(t, collector, "trace_backend", "ebpf")
 	assertCollectorEvidenceSource(t, collector, "ebpf_tracepoints_attached")
+	assertCollectorEvidenceSource(t, collector, "ebpf_event_count")
+	for _, findingID := range []string{"F-TRACE-FILE-001", "F-TRACE-EXEC-001", "F-TRACE-NET-001", "F-TRACE-NET-002"} {
+		assertReportFinding(t, report, findingID)
+	}
+}
+
+func buildTraceLiveProbe(t *testing.T) string {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "devdiag-trace-live-probe")
+	build := exec.Command("go", "build", "-o", out, "./internal/trace/testdata/probe")
+	build.Dir = filepath.Join("..", "..")
+	build.Env = os.Environ()
+	if data, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build trace live probe: %v\n%s", err, string(data))
+	}
+	return out
 }
 
 func TestTraceCommand_InvalidScope(t *testing.T) {
