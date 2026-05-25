@@ -54,6 +54,7 @@ devdiag check cache .
 devdiag repro -- npm test
 devdiag repro --format ndjson -- npm test
 devdiag trace --scope file,process,network -- npm test
+devdiag trace --backend ebpf --scope file,process,network -- npm test
 devdiag fix --templates
 devdiag fix --list
 devdiag capsule create

@@ -5,5 +5,7 @@ package trace
 import "context"
 
 func RunEBPF(ctx context.Context, scopes []Scope, command string, args ...string) (*Result, error) {
-	return newEBPFUnavailableResult(scopes, command, args, "unsupported_platform"), nil
+	res := newEBPFUnavailableResult(scopes, command, args, "unsupported_platform")
+	res.CapabilityEvidence = append(res.CapabilityEvidence, TraceEvidence{Source: "ebpf_platform", Value: "unsupported"})
+	return res, nil
 }
