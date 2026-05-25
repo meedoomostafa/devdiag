@@ -743,6 +743,135 @@ rules:
 	}
 }
 
+func TestConfigValidateJSONAcceptsDevDiagConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "devdiag.yaml")
+	if err := os.WriteFile(configPath, []byte("policy:\n  fail_severity: medium\n"), 0o644); err != nil {
+		t.Fatalf("write config fixture: %v", err)
+	}
+	stdout, stderr, code := runBinary("config", "validate", configPath, "--format", "json")
+	if code != 0 {
+		t.Fatalf("config validate exit code = %d, want 0; stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("config validate stdout is not valid JSON: %v; stdout=%s", err, stdout)
+	}
+	if result["valid"] != true {
+		t.Fatalf("config validate valid = %v, want true; result=%v", result["valid"], result)
+	}
+}
+
+func TestConfigValidateJSONRejectsInvalidConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "devdiag.yaml")
+	if err := os.WriteFile(configPath, []byte("policy:\n  fail_severity: urgent\n"), 0o644); err != nil {
+		t.Fatalf("write config fixture: %v", err)
+	}
+	stdout, stderr, code := runBinary("config", "validate", configPath, "--format", "json")
+	if code != exitcode.InvalidInput.Int() {
+		t.Fatalf("config validate invalid exit code = %d, want %d; stderr=%s stdout=%s", code, exitcode.InvalidInput.Int(), stderr, stdout)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("config validate invalid stdout is not valid JSON: %v; stdout=%s", err, stdout)
+	}
+	if result["valid"] != false {
+		t.Fatalf("config validate valid = %v, want false; result=%v", result["valid"], result)
+	}
+}
+
+func TestConfigValidateJSONRejectsMissingConfigWithJSON(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "missing.yaml")
+	stdout, stderr, code := runBinary("config", "validate", configPath, "--format", "json")
+	if code != exitcode.InvalidInput.Int() {
+		t.Fatalf("config validate missing exit code = %d, want %d; stderr=%s stdout=%s", code, exitcode.InvalidInput.Int(), stderr, stdout)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("config validate missing stdout is not valid JSON: %v; stdout=%s", err, stdout)
+	}
+	if result["valid"] != false {
+		t.Fatalf("config validate valid = %v, want false; result=%v", result["valid"], result)
+	}
+}
+
+func TestScanRulePackRegoEmitsDeterministicFinding(t *testing.T) {
+	dir := t.TempDir()
+	packPath := filepath.Join(dir, "pack.yaml")
+	if err := os.WriteFile(packPath, []byte(`id: team-rego
+version: "0.1"
+engine: rego
+entrypoint: data.devdiag.findings
+policy_files: [policy.rego]
+rules:
+  - id: F-TEAM-001
+    severity: high
+`), 0o644); err != nil {
+		t.Fatalf("write pack: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "policy.rego"), []byte(`package devdiag
+
+findings contains {
+  "id": "F-TEAM-001",
+  "title": "Team policy matched repo collector",
+  "severity": "high",
+  "confidence": 0.9,
+  "symptom": "Repo collector is present"
+} if {
+  some c in input.collectors
+  c.collector == "repo"
+}
+`), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	stdout, stderr, code := runBinaryInDir(dir, "scan", ".", "--rule-pack", packPath, "--fail-severity", "critical", "--format", "json")
+	if code != 0 {
+		t.Fatalf("scan --rule-pack exit code = %d, want 0; stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	var report schema.Report
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("scan --rule-pack stdout is not valid JSON: %v; stdout=%s", err, stdout)
+	}
+	var found bool
+	for _, finding := range report.Findings {
+		if finding.ID == "F-TEAM-001" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("scan --rule-pack missing F-TEAM-001: %+v", report.Findings)
+	}
+	collector := findReportCollector(t, report, "rulepack")
+	assertCollectorEvidence(t, collector, "rulepack_engine", "rego")
+}
+
+func TestScanRulePackRejectsInvalidRegoOutput(t *testing.T) {
+	dir := t.TempDir()
+	packPath := filepath.Join(dir, "pack.yaml")
+	if err := os.WriteFile(packPath, []byte(`id: team-rego
+version: "0.1"
+engine: rego
+entrypoint: data.devdiag.findings
+policy_files: [policy.rego]
+rules:
+  - id: F-TEAM-001
+    severity: high
+`), 0o644); err != nil {
+		t.Fatalf("write pack: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "policy.rego"), []byte(`package devdiag
+findings := ["not-a-finding"]
+`), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	stdout, stderr, code := runBinaryInDir(dir, "scan", ".", "--rule-pack", packPath, "--format", "json")
+	if code != exitcode.InvalidInput.Int() {
+		t.Fatalf("scan invalid --rule-pack exit code = %d, want %d; stderr=%s stdout=%s", code, exitcode.InvalidInput.Int(), stderr, stdout)
+	}
+}
+
 func TestIssueTemplateMarkdownFromSavedReport(t *testing.T) {
 	dir := t.TempDir()
 	runID := "issue-template-run"

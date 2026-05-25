@@ -98,9 +98,15 @@ results.
 Team rule-pack metadata can be inspected locally before it is shared:
 
 ```bash
+devdiag config validate devdiag.yaml --format json
 devdiag rules packs --format json
 devdiag rules validate team-rules.yaml --format json
+devdiag scan . --rule-pack team-rules.yaml --format json
 ```
+
+Rule packs default to `engine: go` for built-in metadata. External
+`engine: rego` packs must declare `entrypoint` and `policy_files`; policies
+receive the normalized scan snapshot and may only return finding candidates.
 
 Saved runs can generate issue-ready handoff text and optional capsule metadata:
 

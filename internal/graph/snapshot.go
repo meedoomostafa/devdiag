@@ -6,7 +6,7 @@ import (
 
 // NormalizedSnapshot is the normalized diagnostic graph.
 type NormalizedSnapshot struct {
-	Collectors []schema.CollectorResult
+	Collectors []schema.CollectorResult `json:"collectors"`
 }
 
 // SnapshotBuilder builds a NormalizedSnapshot from collector results.
