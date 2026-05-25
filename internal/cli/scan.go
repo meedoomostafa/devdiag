@@ -13,6 +13,7 @@ import (
 	cicollector "github.com/meedoomostafa/devdiag/internal/collectors/ci"
 	composecollector "github.com/meedoomostafa/devdiag/internal/collectors/compose"
 	composestatuscollector "github.com/meedoomostafa/devdiag/internal/collectors/composestatus"
+	configcollector "github.com/meedoomostafa/devdiag/internal/collectors/config"
 	cudacollector "github.com/meedoomostafa/devdiag/internal/collectors/cuda"
 	diskcollector "github.com/meedoomostafa/devdiag/internal/collectors/disk"
 	dockercollector "github.com/meedoomostafa/devdiag/internal/collectors/docker"
@@ -29,6 +30,7 @@ import (
 	pythonmlcollector "github.com/meedoomostafa/devdiag/internal/collectors/pythonml"
 	repocollector "github.com/meedoomostafa/devdiag/internal/collectors/repo"
 	runtimecollector "github.com/meedoomostafa/devdiag/internal/collectors/runtime"
+	securitycollector "github.com/meedoomostafa/devdiag/internal/collectors/security"
 	systemdcollector "github.com/meedoomostafa/devdiag/internal/collectors/systemd"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/findings"
@@ -39,6 +41,7 @@ import (
 )
 
 var scanSaveReport bool
+var scanCI bool
 
 var scanCmd = &cobra.Command{
 	Use:   "scan [path]",
@@ -74,6 +77,7 @@ var scanCmd = &cobra.Command{
 		repoHasContainers := repoHasDocker || repoHasPodman
 
 		allCollectors := []collectors.Collector{
+			&configcollector.Collector{Root: absPath},
 			&repocollector.Collector{Root: absPath},
 			&envcollector.Collector{Root: absPath},
 			&composecollector.Collector{Root: absPath},
@@ -85,6 +89,7 @@ var scanCmd = &cobra.Command{
 			&portcollector.Collector{},
 			&networkcollector.Collector{},
 			&systemdcollector.Collector{RepoExpectsDocker: repoHasDocker},
+			&securitycollector.Collector{Root: absPath},
 			&permissioncollector.Collector{Root: absPath},
 			&collectors.SelfCollector{},
 		}
@@ -98,8 +103,10 @@ var scanCmd = &cobra.Command{
 			)
 		}
 
-		// Conditionally include CI collector when workflows exist
-		if repocollector.HasCISignal(absPath) {
+		repoHasCI := repocollector.HasCISignal(absPath)
+
+		// Conditionally include CI collector when workflows exist or --ci forces CI evaluation.
+		if repoHasCI || scanCI {
 			allCollectors = append(allCollectors, &cicollector.Collector{Root: absPath})
 		}
 
@@ -146,7 +153,7 @@ var scanCmd = &cobra.Command{
 		}
 
 		// Evaluate M8 policies when CI workflows exist
-		if repocollector.HasCISignal(absPath) {
+		if repoHasCI || scanCI {
 			m8Engine := rules.NewM8Engine()
 			m8Findings, err := m8Engine.Evaluate(snapshot)
 			if err != nil {
@@ -184,7 +191,7 @@ var scanCmd = &cobra.Command{
 			}
 		}
 
-		code := exitCodeFromResults(sortedFindings, collectorResults, false)
+		code := exitCodeFromResultsForCommand(cmd, sortedFindings, collectorResults, false)
 		if code != exitcode.Success {
 			return exitCodeError{code: code}
 		}
@@ -212,18 +219,8 @@ func persistReport(report *schema.Report) error {
 	return nil
 }
 
-func severityHigher(a, b schema.Severity) bool {
-	order := map[schema.Severity]int{
-		schema.SeverityCritical: 4,
-		schema.SeverityHigh:     3,
-		schema.SeverityMedium:   2,
-		schema.SeverityLow:      1,
-		schema.SeverityInfo:     0,
-	}
-	return order[a] > order[b]
-}
-
 func init() {
 	scanCmd.Flags().BoolVar(&scanSaveReport, "save-report", false, "Persist report under .devdiag/runs for fix and capsule commands")
+	scanCmd.Flags().BoolVar(&scanCI, "ci", false, "Force CI/local parity collection and evaluation")
 	rootCmd.AddCommand(scanCmd)
 }

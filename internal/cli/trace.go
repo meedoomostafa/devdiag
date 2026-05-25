@@ -52,26 +52,37 @@ then analyzes the trace output to produce diagnostic findings.`,
 			return exitCodeError{code: exitcode.InvalidInput}
 		}
 
+		command := args[0]
+		commandArgs := args[1:]
+
+		var res *trace.Result
 		// Check strace availability after validating user input so malformed
 		// flags return the stable invalid-input exit code on every host.
 		if backend == trace.BackendStrace {
 			if _, err := exec.LookPath("strace"); err != nil {
 				logger.Warn("trace", "strace not found; trace mode unavailable")
-				return exitCodeError{code: exitcode.TraceUnavailable}
+				res = &trace.Result{
+					Command:           command,
+					Args:              commandArgs,
+					Scopes:            scopes,
+					Backend:           string(trace.BackendStrace),
+					Events:            []trace.Event{},
+					TraceUnavailable:  true,
+					UnavailableReason: "strace_not_found",
+					ExitCode:          -1,
+					Notes:             []string{"trace unavailable: strace not found"},
+				}
 			}
 		}
 
-		command := args[0]
-		commandArgs := args[1:]
-
-		logger.Info("trace", fmt.Sprintf("tracing command=%s backend=%s scopes=%v timeout=%s", command, backend, scopes, flagTraceTimeout))
-
-		var res *trace.Result
-		if backend == trace.BackendEBPF {
-			res, err = trace.RunEBPF(cmd.Context(), scopes, command, commandArgs...)
-		} else {
-			runner := &trace.Runner{Timeout: flagTraceTimeout, MaxEvents: flagTraceMaxEvents}
-			res, err = runner.Run(cmd.Context(), scopes, command, commandArgs...)
+		if res == nil {
+			logger.Info("trace", fmt.Sprintf("tracing command=%s backend=%s scopes=%v timeout=%s", command, backend, scopes, flagTraceTimeout))
+			if backend == trace.BackendEBPF {
+				res, err = trace.RunEBPF(cmd.Context(), scopes, command, commandArgs...)
+			} else {
+				runner := &trace.Runner{Timeout: flagTraceTimeout, MaxEvents: flagTraceMaxEvents}
+				res, err = runner.Run(cmd.Context(), scopes, command, commandArgs...)
+			}
 		}
 		if err != nil {
 			logger.Error("trace", err.Error())

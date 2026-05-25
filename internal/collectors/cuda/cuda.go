@@ -3,6 +3,7 @@ package cuda
 import (
 	"context"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,7 +11,10 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
-var nvccVersionRegex = regexp.MustCompile(`release\s+(\d+\.\d+)`)
+var (
+	nvccVersionRegex          = regexp.MustCompile(`release\s+(\d+\.\d+)`)
+	nvidiaSMICUDAVersionRegex = regexp.MustCompile(`CUDA Version:\s+(\d+\.\d+)`)
+)
 
 // CUDAInfo is the typed internal representation of CUDA runtime state.
 type CUDAInfo struct {
@@ -77,6 +81,12 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	if info.Version != "" {
 		evidence = append(evidence, schema.Evidence{Source: "cuda_runtime_version", Value: info.Version})
+		if driverCUDA, note := c.driverSupportedCUDAVersion(ctx); driverCUDA != "" {
+			evidence = append(evidence, schema.Evidence{Source: "cuda_driver_supported_version", Value: driverCUDA})
+			evidence = append(evidence, schema.Evidence{Source: "cuda_compatibility", Value: cudaCompatibility(info.Version, driverCUDA)})
+		} else if note != "" {
+			notes = append(notes, note)
+		}
 	}
 
 	applicable := info.Version != ""
@@ -97,4 +107,83 @@ func parseNVCCOutput(stdout string) (string, error) {
 		return strings.TrimSpace(matches[1]), nil
 	}
 	return "", nil
+}
+
+func (c *Collector) driverSupportedCUDAVersion(ctx context.Context) (string, string) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	res := c.Runner.Run(cmdCtx, "nvidia-smi")
+	cancel()
+	if res.TimedOut {
+		return "", "nvidia-smi CUDA compatibility probe timed out"
+	}
+	if res.ExitCode != 0 || res.NotFound {
+		return "", ""
+	}
+	version := parseNvidiaSMICUDAVersion(res.Stdout)
+	if version == "" {
+		return "", "nvidia-smi CUDA compatibility output parsing failed"
+	}
+	return version, ""
+}
+
+func parseNvidiaSMICUDAVersion(stdout string) string {
+	matches := nvidiaSMICUDAVersionRegex.FindStringSubmatch(stdout)
+	if len(matches) >= 2 {
+		return strings.TrimSpace(matches[1])
+	}
+	return ""
+}
+
+func cudaCompatibility(runtimeVersion, driverSupportedVersion string) string {
+	cmp, ok := compareCUDAVersions(runtimeVersion, driverSupportedVersion)
+	if !ok {
+		return "unknown"
+	}
+	if cmp > 0 {
+		return "runtime_newer_than_driver"
+	}
+	return "compatible"
+}
+
+func compareCUDAVersions(a, b string) (int, bool) {
+	amajor, aminor, ok := parseMajorMinor(a)
+	if !ok {
+		return 0, false
+	}
+	bmajor, bminor, ok := parseMajorMinor(b)
+	if !ok {
+		return 0, false
+	}
+	if amajor != bmajor {
+		if amajor > bmajor {
+			return 1, true
+		}
+		return -1, true
+	}
+	if aminor != bminor {
+		if aminor > bminor {
+			return 1, true
+		}
+		return -1, true
+	}
+	return 0, true
+}
+
+func parseMajorMinor(version string) (int, int, bool) {
+	parts := strings.SplitN(strings.TrimSpace(version), ".", 3)
+	if len(parts) == 0 || parts[0] == "" {
+		return 0, 0, false
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, false
+	}
+	minor := 0
+	if len(parts) > 1 && parts[1] != "" {
+		minor, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return 0, 0, false
+		}
+	}
+	return major, minor, true
 }

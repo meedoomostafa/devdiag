@@ -51,6 +51,37 @@ func TestCollector_TrackedEnv(t *testing.T) {
 	}
 }
 
+func TestCollector_TrackedEnvTemplateIsInformational(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	os.WriteFile(filepath.Join(dir, ".env.example"), []byte("SECRET=\n"), 0644)
+	runGit(t, dir, "add", ".env.example")
+	runGit(t, dir, "commit", "-m", "add env template")
+
+	c := &Collector{Root: dir}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+
+	var hasTrackedTemplate bool
+	for _, ev := range res.Evidence {
+		if ev.Source == "git_tracked_env" {
+			t.Fatalf("tracked env template was reported as risky env evidence: %v", res.Evidence)
+		}
+		if ev.Source == "git_tracked_env_template" && ev.Value == ".env.example" {
+			hasTrackedTemplate = true
+		}
+	}
+	if !hasTrackedTemplate {
+		t.Errorf("expected tracked env template evidence, got: %v", res.Evidence)
+	}
+}
+
 func TestCollector_EnvIgnored(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

@@ -27,6 +27,35 @@ func assertNoFindingM8(t *testing.T, findings []schema.Finding, id string) {
 	}
 }
 
+func countFindingM8(findings []schema.Finding, id string) int {
+	count := 0
+	for _, f := range findings {
+		if f.ID == id {
+			count++
+		}
+	}
+	return count
+}
+
+func assertFindingEvidenceValueM8(t *testing.T, finding schema.Finding, value string) {
+	t.Helper()
+	for _, ev := range finding.Evidence {
+		if ev.Value == value {
+			return
+		}
+	}
+	t.Fatalf("expected finding %s to include evidence value %q, got %+v", finding.ID, value, finding.Evidence)
+}
+
+func assertFindingEvidenceAbsentM8(t *testing.T, finding schema.Finding, value string) {
+	t.Helper()
+	for _, ev := range finding.Evidence {
+		if ev.Value == value {
+			t.Fatalf("expected finding %s not to include evidence value %q, got %+v", finding.ID, value, finding.Evidence)
+		}
+	}
+}
+
 func TestM8Engine_RuntimeMismatch(t *testing.T) {
 	e := NewM8Engine()
 	snapshot := graph.NormalizedSnapshot{
@@ -136,6 +165,111 @@ func TestM8Engine_EnvLocalOnlyDoesNotRequireCI(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertNoFindingM8(t, findings, "F-CI-ENV-002")
+}
+
+func TestM8Engine_EnvExampleDoesNotRequireCI(t *testing.T) {
+	e := NewM8Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_run__test__0", Value: "npm test"},
+			}},
+			{Name: "env", Evidence: []schema.Evidence{
+				{Source: ".env.example", Value: "keys: API_KEY, SERVICE_URL"},
+			}},
+		},
+	}
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoFindingM8(t, findings, "F-CI-ENV-002")
+}
+
+func TestM8Engine_RealEnvStillWarnsWhenMissingFromCI(t *testing.T) {
+	e := NewM8Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_run__test__0", Value: "npm test"},
+			}},
+			{Name: "env", Evidence: []schema.Evidence{
+				{Source: ".env", Value: "keys: SERVICE_URL"},
+			}},
+		},
+	}
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFindingM8(t, findings, "F-CI-ENV-002")
+}
+
+func TestM8Engine_EnvMissingKeysAreGrouped(t *testing.T) {
+	e := NewM8Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_env__job__test__CI_ONLY_A", Value: "value"},
+				{Source: "ci_env__job__test__CI_ONLY_B", Value: "value"},
+			}},
+			{Name: "env", Evidence: []schema.Evidence{
+				{Source: ".env", Value: "keys: LOCAL_ONLY_A, LOCAL_ONLY_B"},
+			}},
+		},
+	}
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countFindingM8(findings, "F-CI-ENV-001"); got != 1 {
+		t.Fatalf("F-CI-ENV-001 count = %d, want 1; findings=%v", got, findings)
+	}
+	if got := countFindingM8(findings, "F-CI-ENV-002"); got != 1 {
+		t.Fatalf("F-CI-ENV-002 count = %d, want 1; findings=%v", got, findings)
+	}
+	for _, f := range findings {
+		if f.ID == "F-CI-ENV-001" && len(f.Evidence) != 2 {
+			t.Fatalf("F-CI-ENV-001 evidence count = %d, want 2", len(f.Evidence))
+		}
+		if f.ID == "F-CI-ENV-002" && len(f.Evidence) != 2 {
+			t.Fatalf("F-CI-ENV-002 evidence count = %d, want 2", len(f.Evidence))
+		}
+	}
+}
+
+func TestM8Engine_ConfigIgnoresSelectedCIEnvParityKeys(t *testing.T) {
+	e := NewM8Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_env__job__test__CI_ONLY_ALLOWED", Value: "value"},
+				{Source: "ci_env__job__test__CI_ONLY_MISSING", Value: "value"},
+			}},
+			{Name: "env", Evidence: []schema.Evidence{
+				{Source: ".env", Value: "keys: LOCAL_ONLY_ALLOWED, LOCAL_ONLY_MISSING"},
+			}},
+			{Name: "config", Evidence: []schema.Evidence{
+				{Source: "devdiag_ci_env_ignore_missing_local", Value: "CI_ONLY_ALLOWED"},
+				{Source: "devdiag_ci_env_ignore_missing_ci", Value: "LOCAL_ONLY_ALLOWED"},
+			}},
+		},
+	}
+
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range findings {
+		if f.ID == "F-CI-ENV-001" {
+			assertFindingEvidenceAbsentM8(t, f, "CI_ONLY_ALLOWED")
+			assertFindingEvidenceValueM8(t, f, "CI_ONLY_MISSING")
+		}
+		if f.ID == "F-CI-ENV-002" {
+			assertFindingEvidenceAbsentM8(t, f, "LOCAL_ONLY_ALLOWED")
+			assertFindingEvidenceValueM8(t, f, "LOCAL_ONLY_MISSING")
+		}
+	}
 }
 
 func TestM8Engine_ServicePortMismatch(t *testing.T) {
@@ -341,6 +475,40 @@ func TestM8Engine_CIRunCommandMissingLocalCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertFindingM8(t, findings, "F-CI-COMMAND-001")
+}
+
+func TestM8Engine_CIRunCommandTitleSummarizesMultilineScripts(t *testing.T) {
+	e := NewM8Engine()
+	longScript := "docker system prune -af\nsudo rm -rf /usr/share/dotnet\nnpm ci\nnpm run build\nnpm test"
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_run__deploy__0", Value: longScript},
+			}},
+			{Name: "repo", Evidence: []schema.Evidence{
+				{Source: "repo_command__package_json__test", Value: "npm test"},
+			}},
+		},
+	}
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range findings {
+		if f.ID == "F-CI-COMMAND-001" {
+			if strings.Contains(f.Title, "\n") {
+				t.Fatalf("finding title contains a newline: %q", f.Title)
+			}
+			if len(f.Title) > 130 {
+				t.Fatalf("finding title too long: %d %q", len(f.Title), f.Title)
+			}
+			if f.Evidence[0].Value != longScript {
+				t.Fatalf("full command evidence changed: %q", f.Evidence[0].Value)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected F-CI-COMMAND-001, got: %v", findings)
 }
 
 func TestM8Engine_ShellMismatch(t *testing.T) {

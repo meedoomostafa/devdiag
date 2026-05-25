@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/meedoomostafa/devdiag/internal/graph"
@@ -270,6 +271,42 @@ func TestM1Engine_HostRuntimeRules_LTSNoMismatch(t *testing.T) {
 	}
 }
 
+func TestM1Engine_GitRules_TrackedEnvTemplateDoesNotWarn(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name: "git",
+				Evidence: []schema.Evidence{
+					{Source: "git_tracked_env", Value: ".env.example, .env.production"},
+					{Source: "git_env_exists", Value: "false"},
+					{Source: "git_env_ignored", Value: "true"},
+				},
+			},
+		},
+	}
+
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+
+	for _, f := range findings {
+		if f.ID == "F-GIT-001" && strings.Contains(f.Title, ".env.example") {
+			t.Fatalf("tracked env template leaked into F-GIT-001 title: %s", f.Title)
+		}
+	}
+	var hasRisky bool
+	for _, f := range findings {
+		if f.ID == "F-GIT-001" && strings.Contains(f.Title, ".env.production") {
+			hasRisky = true
+		}
+	}
+	if !hasRisky {
+		t.Fatalf("expected risky tracked env file to still produce F-GIT-001, got: %v", findings)
+	}
+}
+
 func TestM1Engine_DiskRules_Pressure(t *testing.T) {
 	engine := NewM1Engine()
 	snapshot := graph.NormalizedSnapshot{
@@ -298,6 +335,36 @@ func TestM1Engine_DiskRules_Pressure(t *testing.T) {
 	}
 	if !hasDisk001 {
 		t.Errorf("expected F-DISK-001 finding, got: %v", findings)
+	}
+}
+
+func TestM1Engine_DiskRules_ZeroInodeStatsUnavailable(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name: "disk",
+				Evidence: []schema.Evidence{
+					{Source: "host_disk_free_bytes", Value: "10737418240"},
+					{Source: "host_disk_free_pct", Value: "25.0"},
+					{Source: "host_disk_total_inodes", Value: "0"},
+					{Source: "host_disk_free_inodes", Value: "0"},
+					{Source: "host_disk_free_inodes_pct", Value: "0.0"},
+					{Source: "host_disk_inodes_available", Value: "false"},
+				},
+			},
+		},
+	}
+
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+
+	for _, f := range findings {
+		if f.ID == "F-DISK-001" {
+			t.Errorf("unexpected F-DISK-001 when inode stats are unavailable, got: %v", findings)
+		}
 	}
 }
 
@@ -412,6 +479,111 @@ func TestM1Engine_PermissionRules_NotExecutable(t *testing.T) {
 	}
 	if !hasFS001 {
 		t.Errorf("expected F-FS-001 finding, got: %v", findings)
+	}
+}
+
+func TestM1Engine_SecurityRules_Denials(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name: "security",
+				Evidence: []schema.Evidence{
+					{Source: "selinux_denial", Value: "comm=node operation=read name=data.db class=file"},
+					{Source: "apparmor_denial", Value: "profile=docker-default operation=open name=/workspace/config.json comm=python"},
+				},
+			},
+		},
+	}
+
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+
+	var hasSELinux, hasAppArmor bool
+	for _, f := range findings {
+		if f.ID == "F-SEC-SELINUX-001" {
+			hasSELinux = true
+		}
+		if f.ID == "F-SEC-APPARMOR-001" {
+			hasAppArmor = true
+		}
+	}
+	if !hasSELinux || !hasAppArmor {
+		t.Fatalf("expected SELinux and AppArmor findings, got: %v", findings)
+	}
+}
+
+func TestM1Engine_SecurityRules_SELinuxContainerLabelGuidance(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name: "security",
+				Evidence: []schema.Evidence{
+					{Source: "selinux_denial", Value: "operation=write comm=node name=cache cwd=/workspace/current class=dir scontext=system_u:system_r:container_t:s0 tcontext=unconfined_u:object_r:default_t:s0 container_label_hint=mount_relabel_z_or_Z"},
+				},
+			},
+		},
+	}
+
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+
+	var got schema.Finding
+	for _, f := range findings {
+		if f.ID == "F-SEC-SELINUX-001" {
+			got = f
+			break
+		}
+	}
+	if got.ID == "" {
+		t.Fatalf("expected SELinux finding, got: %v", findings)
+	}
+	if !containsString(got.FixHints, "relabel-container-volume") {
+		t.Fatalf("expected relabel-container-volume fix hint, got %v", got.FixHints)
+	}
+	if !containsString(got.LikelyCauses, "Container bind mount is missing an SELinux shared/private relabel such as :z or :Z") {
+		t.Fatalf("missing container label likely cause: %v", got.LikelyCauses)
+	}
+}
+
+func TestM1Engine_SecurityRules_AppArmorProfileGuidance(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name: "security",
+				Evidence: []schema.Evidence{
+					{Source: "apparmor_denial", Value: "profile=docker-default operation=open name=/workspace/current/config.json comm=python"},
+				},
+			},
+		},
+	}
+
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+
+	var got schema.Finding
+	for _, f := range findings {
+		if f.ID == "F-SEC-APPARMOR-001" {
+			got = f
+			break
+		}
+	}
+	if got.ID == "" {
+		t.Fatalf("expected AppArmor finding, got: %v", findings)
+	}
+	if !containsString(got.FixHints, "review-apparmor-profile") {
+		t.Fatalf("expected review-apparmor-profile fix hint, got %v", got.FixHints)
+	}
+	if !containsString(got.LikelyCauses, "Docker default AppArmor profile denied access to the mounted project path") {
+		t.Fatalf("missing docker-default AppArmor likely cause: %v", got.LikelyCauses)
 	}
 }
 
@@ -635,6 +807,35 @@ func TestM1Engine_PodmanRules_Unavailable(t *testing.T) {
 	}
 }
 
+func TestM1Engine_PodmanRules_RuntimeDirGuidance(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "podman",
+				Status: schema.CollectorUnavailable,
+				Evidence: []schema.Evidence{
+					{Source: "podman_binary", Value: "present"},
+					{Source: "podman_runtime_dir_error", Value: "true"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	for _, f := range findings {
+		if f.ID == "F-PODMAN-001" {
+			if !containsString(f.LikelyCauses, "Rootless Podman runtime directory under /run/user is missing or inaccessible") {
+				t.Fatalf("missing runtime-dir likely cause: %v", f.LikelyCauses)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected F-PODMAN-001 finding, got: %v", findings)
+}
+
 func TestM1Engine_ComposeStatusRules_ServiceNotRunning(t *testing.T) {
 	engine := NewM1Engine()
 	snapshot := graph.NormalizedSnapshot{
@@ -839,6 +1040,35 @@ func TestM1Engine_ReproRules_AddressInUse(t *testing.T) {
 	}
 }
 
+func TestM1Engine_ReproRules_RuntimeVersionFailure(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name:   "repro",
+				Status: schema.CollectorOK,
+				Evidence: []schema.Evidence{
+					{Source: "repro_exit_code", Value: "1"},
+					{Source: "repro_classification", Value: "runtime_version_failure"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+	var hasRepro006 bool
+	for _, f := range findings {
+		if f.ID == "F-REPRO-006" {
+			hasRepro006 = true
+		}
+	}
+	if !hasRepro006 {
+		t.Errorf("expected F-REPRO-006 finding, got: %v", findings)
+	}
+}
+
 func TestNormalizeVersion_StripsPrefixes(t *testing.T) {
 	tests := []struct {
 		input string
@@ -905,4 +1135,13 @@ func TestVersionsCompatible_SemverRanges(t *testing.T) {
 			}
 		})
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

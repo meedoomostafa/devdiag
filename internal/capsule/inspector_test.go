@@ -28,6 +28,18 @@ func TestInspect_ValidCapsule(t *testing.T) {
 	if len(result.FileList) == 0 {
 		t.Error("expected non-empty file list")
 	}
+	if result.FileCount != len(result.FileList) {
+		t.Fatalf("file_count = %d, want %d", result.FileCount, len(result.FileList))
+	}
+	if result.RunID != report.RunID {
+		t.Fatalf("run_id = %q, want %q", result.RunID, report.RunID)
+	}
+	if result.RedactionStatus != "default" {
+		t.Fatalf("redaction_status = %q, want default", result.RedactionStatus)
+	}
+	if len(result.ReviewSummary) == 0 {
+		t.Fatal("expected non-empty review summary")
+	}
 }
 
 func TestInspect_SummaryNoLogs(t *testing.T) {

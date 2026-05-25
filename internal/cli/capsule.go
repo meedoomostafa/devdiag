@@ -13,6 +13,7 @@ import (
 
 	"github.com/meedoomostafa/devdiag/internal/capsule"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
+	"github.com/meedoomostafa/devdiag/internal/redact"
 	"github.com/meedoomostafa/devdiag/internal/repro"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 	"github.com/meedoomostafa/devdiag/internal/version"
@@ -103,6 +104,12 @@ var capsuleCreateCmd = &cobra.Command{
 			}
 		}
 
+		reportForCapsule := redactEngine.RedactReport(&report)
+		var reproForCapsule *repro.ReproResult
+		if reproResult != nil {
+			reproForCapsule = redactReproResult(reproResult, redactEngine)
+		}
+
 		// Build capsule
 		outPath := fmt.Sprintf("support-%s.devdiag.tgz", runID)
 		outFile, err := os.Create(outPath)
@@ -113,19 +120,29 @@ var capsuleCreateCmd = &cobra.Command{
 		defer outFile.Close()
 
 		builder := capsule.NewBuilder(string(redactEngine.Level), version.Version)
+		addCapsuleCommandLog(builder, runsDir, "command.stdout.log", redactEngine)
+		addCapsuleCommandLog(builder, runsDir, "command.stderr.log", redactEngine)
 		tracePath := filepath.Join(runsDir, "trace-result.json")
 		if traceData, err := os.ReadFile(tracePath); err == nil {
 			builder.SetTraceArtifact(traceData)
 		}
-		if err := builder.Build(outFile, &report, reproResult); err != nil {
+		if err := builder.Build(outFile, reportForCapsule, reproForCapsule); err != nil {
 			logger.Error("capsule", fmt.Sprintf("build failed: %v", err))
 			return exitCodeError{code: exitcode.InternalError}
 		}
 
 		logger.Info("capsule", fmt.Sprintf("created %s", outPath))
-		fmt.Fprintf(cmd.OutOrStdout(), "Capsule created: %s\n", outPath)
-		return nil
+		return renderCapsuleCreate(cmd, runID, outPath, string(redactEngine.Level))
 	},
+}
+
+func addCapsuleCommandLog(builder *capsule.Builder, runsDir, name string, engine *redact.Engine) {
+	data, err := os.ReadFile(filepath.Join(runsDir, "logs", name))
+	if err != nil {
+		return
+	}
+	redacted := engine.RedactString(string(data), "capsule_log")
+	builder.SetLogArtifact(name, []byte(redacted))
 }
 
 var capsuleInspectCmd = &cobra.Command{
@@ -137,9 +154,60 @@ var capsuleInspectCmd = &cobra.Command{
 		if err != nil {
 			return exitCodeError{code: exitcode.InvalidInput}
 		}
-		fmt.Fprint(cmd.OutOrStdout(), result.Summary())
-		return nil
+		return renderCapsuleInspect(cmd, result)
 	},
+}
+
+type capsuleCreateResult struct {
+	SchemaVersion   string `json:"schema_version"`
+	DevDiagVersion  string `json:"devdiag_version"`
+	RunID           string `json:"run_id"`
+	RedactionStatus string `json:"redaction_status"`
+	CapsulePath     string `json:"capsule_path"`
+}
+
+func renderCapsuleCreate(cmd *cobra.Command, runID, outPath, redactionStatus string) error {
+	result := capsuleCreateResult{
+		SchemaVersion:   schema.SchemaVersion,
+		DevDiagVersion:  version.Version,
+		RunID:           runID,
+		RedactionStatus: redactionStatus,
+		CapsulePath:     outPath,
+	}
+	switch flagFormat {
+	case "json":
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	case "ndjson":
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+	case "markdown":
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "# DevDiag Capsule\n\n- Run ID: `%s`\n- Capsule: `%s`\n- Redaction: `%s`\n", runID, outPath, redactionStatus)
+		return err
+	case "github":
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "### DevDiag capsule\n\nCreated `%s` for run `%s`.\n", outPath, runID)
+		return err
+	default:
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "Capsule created: %s\n", outPath)
+		return err
+	}
+}
+
+func renderCapsuleInspect(cmd *cobra.Command, result *capsule.InspectResult) error {
+	switch flagFormat {
+	case "json":
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	case "ndjson":
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+	case "markdown", "github":
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "```text\n%s```\n", result.Summary())
+		return err
+	default:
+		_, err := fmt.Fprint(cmd.OutOrStdout(), result.Summary())
+		return err
+	}
 }
 
 func findLatestRunID() (string, error) {

@@ -56,6 +56,58 @@ func TestBuilder_IncludesManifest(t *testing.T) {
 	}
 }
 
+func TestBuilder_IncludesMarkdownReportAndRedactionRules(t *testing.T) {
+	b := NewBuilder("default", "0.1.0")
+	report := &schema.Report{
+		SchemaVersion:   "0.1",
+		DevDiagVersion:  "0.1.0",
+		RunID:           "test-run-format",
+		RedactionStatus: "default",
+		Findings: []schema.Finding{
+			{
+				ID:       "F-TEST-001",
+				Title:    "redacted test finding",
+				Severity: "medium",
+				Evidence: []schema.Evidence{
+					{Source: "example", Value: "API_KEY=<redacted>"},
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := b.Build(&buf, report, nil); err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+
+	reportCount, reportContent, err := readTarFileOccurrences(buf.Bytes(), "report.md")
+	if err != nil {
+		t.Fatalf("read report.md: %v", err)
+	}
+	if reportCount != 1 {
+		t.Fatalf("expected one report.md entry, got %d", reportCount)
+	}
+	if !bytes.Contains(reportContent, []byte("# DevDiag Report")) || !bytes.Contains(reportContent, []byte("F-TEST-001")) {
+		t.Fatalf("report.md missing expected markdown content: %s", reportContent)
+	}
+	if bytes.Contains(reportContent, []byte("secret")) {
+		t.Fatalf("report.md leaked raw secret-looking value: %s", reportContent)
+	}
+
+	rulesCount, rulesContent, err := readTarFileOccurrences(buf.Bytes(), "redaction/rules-applied.json")
+	if err != nil {
+		t.Fatalf("read redaction rules: %v", err)
+	}
+	if rulesCount != 1 {
+		t.Fatalf("expected one redaction/rules-applied.json entry, got %d", rulesCount)
+	}
+	if !bytes.Contains(rulesContent, []byte(`"redaction_status": "default"`)) {
+		t.Fatalf("redaction rules missing default status: %s", rulesContent)
+	}
+	if !bytes.Contains(rulesContent, []byte(`"env_values"`)) || !bytes.Contains(rulesContent, []byte(`"url_credentials"`)) {
+		t.Fatalf("redaction rules missing expected rule names: %s", rulesContent)
+	}
+}
+
 func TestBuilder_IncludesRepro(t *testing.T) {
 	b := NewBuilder("default", "0.1.0")
 	report := &schema.Report{

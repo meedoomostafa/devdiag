@@ -1,0 +1,7 @@
+[
+  {
+    "kind": "dependency_failure",
+    "source_stream": "stderr",
+    "pattern_id": "dep-fail-001"
+  }
+]

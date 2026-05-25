@@ -106,6 +106,16 @@ func (r *Registry) registerDefaults() {
 	})
 
 	r.register(Template{
+		HintID:         "systemctl-daemon-reload",
+		Title:          "Reload systemd manager configuration",
+		Class:          schema.FixGuarded,
+		Bin:            "systemctl",
+		Args:           []string{"daemon-reload"},
+		Platforms:      []string{"linux"},
+		ConfirmMessage: "Reloads systemd manager configuration on this host. Use only after reviewing changed unit files.",
+	})
+
+	r.register(Template{
 		HintID:           "suggest-docker-group",
 		Title:            "Add user to docker group",
 		Class:            schema.FixManual,
@@ -115,11 +125,15 @@ func (r *Registry) registerDefaults() {
 	})
 
 	r.register(Template{
-		HintID:    "compose-up",
-		Title:     "Start compose services",
-		Class:     schema.FixManual,
-		Args:      []string{"# Start services: docker compose up -d"},
-		Platforms: []string{"linux", "darwin", "windows"},
+		HintID:           "compose-up",
+		Title:            "Start compose service",
+		Class:            schema.FixGuarded,
+		Bin:              "docker",
+		Args:             []string{"compose", "--project-directory", "{{repo_root}}", "up", "-d", "{{service}}"},
+		Rollback:         []string{"docker", "compose", "--project-directory", "{{repo_root}}", "stop", "{{service}}"},
+		RequiredEvidence: []string{"compose_status"},
+		Platforms:        []string{"linux", "darwin", "windows"},
+		ConfirmMessage:   "Starts a Docker Compose service and may create or restart containers. Review the service logs and rollback command first.",
 	})
 
 	r.register(Template{

@@ -14,12 +14,14 @@ import (
 )
 
 var (
-	flagFormat  string
-	flagRedact  string
-	flagDebug   bool
-	flagNoColor bool
-	flagColor   string
-	flagProfile string
+	flagFormat       string
+	flagRedact       string
+	flagDebug        bool
+	flagVerbose      bool
+	flagNoColor      bool
+	flagColor        string
+	flagProfile      string
+	flagFailSeverity string
 )
 
 var rootCmd = &cobra.Command{
@@ -36,6 +38,9 @@ var rootCmd = &cobra.Command{
 		if err := validateColor(flagColor); err != nil {
 			return err
 		}
+		if err := validateFailSeverity(flagFailSeverity); err != nil {
+			return err
+		}
 		return nil
 	},
 	SilenceUsage:  true,
@@ -46,9 +51,11 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "human", "Output format: human, json, ndjson, markdown, github")
 	rootCmd.PersistentFlags().StringVar(&flagRedact, "redact", "default", "Redaction level: default, strict, off")
 	rootCmd.PersistentFlags().BoolVar(&flagDebug, "debug", false, "Enable debug/trace logs")
+	rootCmd.PersistentFlags().BoolVar(&flagVerbose, "verbose", false, "Include detailed evidence in human output")
 	rootCmd.PersistentFlags().BoolVar(&flagNoColor, "no-color", false, "Disable ANSI color")
 	rootCmd.PersistentFlags().StringVar(&flagColor, "color", "auto", "Color mode: always, auto, never")
 	rootCmd.PersistentFlags().StringVar(&flagProfile, "profile", "", "Profile mode: ai-ml")
+	rootCmd.PersistentFlags().StringVar(&flagFailSeverity, "fail-severity", "high", "Minimum finding severity that returns exit code 1: off, info, low, medium, high, critical")
 
 }
 
@@ -85,6 +92,13 @@ func validateRedact(v string) error {
 func validateColor(v string) error {
 	switch v {
 	case "always", "auto", "never":
+		return nil
+	}
+	return exitCodeError{code: exitcode.InvalidInput}
+}
+
+func validateFailSeverity(v string) error {
+	if _, _, ok := parseFailSeverityThreshold(v); ok {
 		return nil
 	}
 	return exitCodeError{code: exitcode.InvalidInput}

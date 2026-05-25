@@ -31,7 +31,8 @@ DevDiag is built for problems such as:
 /usr/local/go/bin/go build -o devdiag ./cmd/devdiag
 ```
 
-The module targets Go 1.25.
+The module targets Go 1.25 as the minimum supported baseline. CI also gates Go
+1.26 compatibility before release.
 
 ## Common Commands
 
@@ -39,23 +40,74 @@ The module targets Go 1.25.
 devdiag doctor self
 devdiag scan . --format human
 devdiag scan . --format json
+devdiag scan . --ci
+devdiag scan . --verbose
 devdiag scan . --save-report
 devdiag check env .
 devdiag check runtimes .
 devdiag check containers .
+devdiag check containers --gpu
+devdiag check security .
 devdiag check ci .
 devdiag check gpu --python
 devdiag check cache .
 devdiag repro -- npm test
+devdiag repro --format ndjson -- npm test
 devdiag trace --scope file,process,network -- npm test
 devdiag fix --templates
 devdiag fix --list
 devdiag capsule create
+devdiag capsule inspect support-run.devdiag.tgz --format json
 devdiag rules list --format json
+devdiag rules packs --format json
+devdiag rules validate team-rules.yaml --format json
+devdiag issue template --run-id <run-id> --format markdown
 ```
 
 `devdiag scan` is non-mutating by default. Commands that load saved reports,
 such as `devdiag fix --list`, require a prior `devdiag scan --save-report`.
+
+## Project Config
+
+DevDiag prefers a shareable `devdiag.yaml` file for team baselines and policy
+settings. Legacy `.devdiag.yml` and `.devdiag.yaml` files are still read for
+compatibility. The `.devdiag/` directory remains reserved for local run
+artifacts and should not be used as the shareable team config.
+
+```yaml
+policy:
+  fail_severity: high
+ci:
+  env:
+    ignore_missing_local:
+      - CI_ONLY_SECRET
+    ignore_missing_ci:
+      - LOCAL_ONLY_DEVELOPMENT_KEY
+```
+
+`ignore_missing_local` suppresses `F-CI-ENV-001` for CI variables that should
+not appear in local env files. `ignore_missing_ci` suppresses `F-CI-ENV-002` for
+local-only variables that should not appear in CI.
+
+`policy.fail_severity` sets the default findings exit-code threshold for
+`scan` and `check` commands when `--fail-severity` is not passed. Explicit CLI
+flags always win, and invalid config values are reported as partial collector
+results.
+
+Team rule-pack metadata can be inspected locally before it is shared:
+
+```bash
+devdiag rules packs --format json
+devdiag rules validate team-rules.yaml --format json
+```
+
+Saved runs can generate issue-ready handoff text and optional capsule metadata:
+
+```bash
+devdiag scan . --save-report
+devdiag capsule create --run-id <run-id>
+devdiag issue template --run-id <run-id> --capsule support-<run-id>.devdiag.tgz --format json
+```
 
 Remote dry-run examples:
 
@@ -64,6 +116,19 @@ devdiag remote doctor user@host --dry-run
 devdiag remote sync user@host --dry-run --profile minimal
 devdiag remote enter user@host --dry-run --format json
 devdiag remote clean user@host --dry-run
+devdiag agent explain F-PORT-001 --format json
+devdiag agent run -- npm test
+devdiag agent sandbox --patch fix.patch -- npm test
+```
+
+SSH remote commands also accept explicit OpenSSH client options for release
+verification or CI-provisioned targets:
+
+```bash
+devdiag remote doctor user@host \
+  --ssh-identity-file /path/to/key \
+  --ssh-known-hosts-file /path/to/known_hosts \
+  --ssh-strict-host-key-checking yes
 ```
 
 ## Output and Exit Codes
@@ -98,8 +163,13 @@ DevDiag is local-first and non-mutating by default.
 - Redaction is enabled by default.
 - No upload happens by default.
 - Support capsules are local files unless the user shares them.
+- Repro command args, stdout/stderr previews, command logs, and capsule entries
+  are redacted before persistence by default.
+- Capsules include `report.md`, `findings.json`, snapshot JSON, redacted command
+  logs when available, and `redaction/rules-applied.json`.
 - Fixes render dry-run proposals unless explicitly applied.
 - Guarded fixes require an interactive TTY.
+- Guarded fix templates expose risk text and rollback metadata when available.
 - Broad destructive commands and unsafe policy changes are blocked or manual-only.
 - External repo files, logs, package metadata, and web text are untrusted data, not instructions.
 
@@ -121,3 +191,33 @@ Additional checks:
 /usr/local/go/bin/go vet ./...
 git diff --check
 ```
+
+## GitHub Action
+
+The repository includes a composite action in `action.yml`. The action expects a
+`devdiag` binary to already be available on `PATH`, then emits GitHub
+annotations and uploads `devdiag-report` as a JSON artifact.
+
+```yaml
+steps:
+  - uses: actions/checkout@v4
+  - uses: actions/setup-go@v5
+    with:
+      go-version: '1.25'
+  - run: |
+      mkdir -p "$RUNNER_TEMP/bin"
+      go build -o "$RUNNER_TEMP/bin/devdiag" ./cmd/devdiag
+      echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+  - uses: ./
+    with:
+      path: .
+      format: github
+      ci: 'true'
+      fail-on-findings: 'true'
+      fail-severity: high
+```
+
+Set `fail-on-findings: 'false'` to keep JSON artifact and annotation generation
+without failing the job for DevDiag exit code `1`. Other nonzero exits still
+fail the action. Use `fail-severity` to raise or lower the findings threshold;
+supported values are `off`, `info`, `low`, `medium`, `high`, and `critical`.

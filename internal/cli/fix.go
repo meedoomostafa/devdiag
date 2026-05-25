@@ -14,6 +14,7 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/logging"
 	"github.com/meedoomostafa/devdiag/internal/output"
 	"github.com/meedoomostafa/devdiag/internal/schema"
+	"golang.org/x/term"
 )
 
 var (
@@ -21,6 +22,7 @@ var (
 	fixApply     bool
 	fixDryRun    bool
 	fixFresh     bool
+	fixHint      string
 	fixList      bool
 	fixTemplates bool
 )
@@ -88,13 +90,27 @@ func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger, colorM
 		return nil
 	}
 
+	if fixHint != "" {
+		proposals = filterProposalsByHint(proposals, fixHint)
+		if len(proposals) == 0 {
+			logger.Error("fix", fmt.Sprintf("no fix proposal for finding %s matches --hint %s", findingID, fixHint))
+			return exitCodeError{code: exitcode.InvalidInput}
+		}
+	}
+
 	// Render proposals
 	renderer := pickFixRenderer(colorMode)
 	if err := renderer.Render(proposals, cmd.OutOrStdout()); err != nil {
 		return err
 	}
 
-	blocked := false
+	if fixApply && fixHint == "" && len(proposals) > 1 {
+		logger.Error("fix", fmt.Sprintf("multiple fix proposals available for %s; rerun with --hint <hint-id>", findingID))
+		return exitCodeError{code: exitcode.UnsafeRefused}
+	}
+
+	refused := false
+	internalErr := false
 	// Apply if requested
 	if fixApply {
 		for _, p := range proposals {
@@ -105,18 +121,31 @@ func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger, colorM
 			})
 			if err != nil {
 				logger.Error("fix", fmt.Sprintf("apply failed for %s: %v", p.HintID, err))
-				if p.Class == schema.FixBlocked {
-					blocked = true
+				switch p.Class {
+				case schema.FixBlocked, schema.FixManual, schema.FixGuarded:
+					refused = true
+				default:
+					internalErr = true
 				}
 			}
 		}
 	}
 
-	code := exitCodeFromFixResults(true, blocked, false)
+	code := exitCodeFromFixResults(true, refused, internalErr)
 	if code != exitcode.Success {
 		return exitCodeError{code: code}
 	}
 	return nil
+}
+
+func filterProposalsByHint(proposals []schema.FixProposal, hint string) []schema.FixProposal {
+	filtered := make([]schema.FixProposal, 0, len(proposals))
+	for _, proposal := range proposals {
+		if proposal.HintID == hint {
+			filtered = append(filtered, proposal)
+		}
+	}
+	return filtered
 }
 
 func runFixList(cmd *cobra.Command, logger *logging.Logger, colorMode output.ColorMode) error {
@@ -160,6 +189,11 @@ func runFixTemplates(cmd *cobra.Command, logger *logging.Logger, colorMode outpu
 			HintID:           t.HintID,
 			Title:            t.Title,
 			Class:            t.Class,
+			Bin:              t.Bin,
+			Args:             t.Args,
+			Rollback:         t.Rollback,
+			ConfirmMessage:   t.ConfirmMessage,
+			BlockedReason:    t.BlockedReason,
 			RequiredEvidence: t.RequiredEvidence,
 			Source:           "",
 		})
@@ -222,7 +256,10 @@ func isTTY() bool {
 	if err != nil {
 		return false
 	}
-	return (stat.Mode() & os.ModeCharDevice) == os.ModeCharDevice
+	if stat.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
 func init() {
@@ -230,6 +267,7 @@ func init() {
 	fixCmd.Flags().BoolVar(&fixApply, "apply", false, "Apply fix proposals")
 	fixCmd.Flags().BoolVar(&fixDryRun, "dry-run", false, "Show fix proposals without applying (default)")
 	fixCmd.Flags().BoolVar(&fixFresh, "fresh", false, "Force fresh validation before applying")
+	fixCmd.Flags().StringVar(&fixHint, "hint", "", "Fix hint ID to apply when a finding has multiple proposals")
 	fixCmd.Flags().BoolVar(&fixList, "list", false, "List all fix proposals from report")
 	fixCmd.Flags().BoolVar(&fixTemplates, "templates", false, "List registry templates")
 	rootCmd.AddCommand(fixCmd)

@@ -1,0 +1,7 @@
+[
+  {
+    "kind": "permission_denied",
+    "source_stream": "stderr",
+    "pattern_id": "perm-denied-001"
+  }
+]

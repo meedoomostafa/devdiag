@@ -83,6 +83,14 @@ func ShellPath(path string) string {
 	return path
 }
 
+// ShellQuote returns a POSIX single-quoted shell word.
+func ShellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
 // ValidateRootDir rejects obviously dangerous root directories.
 func ValidateRootDir(dir string, kind target.Kind) error {
 	dir = strings.TrimSpace(dir)

@@ -30,6 +30,7 @@ func (e *M6Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 	gpuPresent := evMap["gpu_present"] == "true"
 	gpuHardware := evMap["gpu_hardware_detected"] == "true"
 	moduleLoaded := evMap["gpu_nvidia_module_loaded"] == "true"
+	nvidiaSMIStatus := evMap["gpu_nvidia_smi_status"]
 	secureBootStr := evMap["gpu_secure_boot_enabled"]
 	pytorchVersion := evMap["ml_pytorch_version"]
 	pytorchCUDA := evMap["ml_pytorch_cuda_available"] == "true"
@@ -45,14 +46,20 @@ func (e *M6Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 	toolkitVersion := evMap["nvidia_container_toolkit_version"]
 
 	// F-GPU-001: NVIDIA hardware present but driver unavailable
-	if gpuHardware && !moduleLoaded {
+	if gpuHardware && (!moduleLoaded || (!gpuPresent && nvidiaSMIDriverUnavailable(nvidiaSMIStatus))) {
+		symptom := "NVIDIA GPU detected but kernel module is not loaded"
+		likelyCauses := []string{"NVIDIA driver not installed", "Driver version incompatible with kernel", "Secure Boot blocking unsigned module"}
+		if moduleLoaded {
+			symptom = "NVIDIA hardware and kernel module are present, but nvidia-smi could not enumerate GPUs"
+			likelyCauses = []string{"NVIDIA user-space driver libraries may not match the loaded kernel module", "Driver stack may be partially installed or unhealthy", "GPU device nodes may be inaccessible"}
+		}
 		findings = append(findings, schema.Finding{
 			ID:           "F-GPU-001",
 			Title:        "NVIDIA hardware present but driver unavailable",
 			Severity:     schema.SeverityHigh,
 			Confidence:   0.8,
-			Symptom:      "NVIDIA GPU detected but kernel module is not loaded",
-			LikelyCauses: []string{"NVIDIA driver not installed", "Driver version incompatible with kernel", "Secure Boot blocking unsigned module"},
+			Symptom:      symptom,
+			LikelyCauses: likelyCauses,
 			FixHints:     []string{"install-nvidia-driver"},
 		})
 	}
@@ -202,4 +209,13 @@ func (e *M6Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 	}
 
 	return findings, nil
+}
+
+func nvidiaSMIDriverUnavailable(status string) bool {
+	switch status {
+	case "error", "permission_denied", "timeout", "parse_error":
+		return true
+	default:
+		return false
+	}
 }

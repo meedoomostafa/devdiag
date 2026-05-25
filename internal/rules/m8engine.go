@@ -2,6 +2,7 @@ package rules
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -26,6 +27,8 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 	var envEvs []schema.Evidence
 	var composeEvs []schema.Evidence
 	var repoEvs []schema.Evidence
+	ignoreMissingLocal := make(map[string]bool)
+	ignoreMissingCI := make(map[string]bool)
 	var hostShell string
 	var devcontainerImage string
 
@@ -55,6 +58,8 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 					devcontainerImage = ev.Value
 				}
 			}
+		case "config":
+			collectM8Config(c.Evidence, ignoreMissingLocal, ignoreMissingCI)
 		}
 	}
 
@@ -79,6 +84,9 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 			if isIgnoredCIEnv(key, ev.Value) {
 				continue
 			}
+			if ignoreMissingLocal[key] {
+				continue
+			}
 			allCIEnvKeys[key] = true
 		}
 	}
@@ -89,7 +97,10 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 		if ev.Source == ".env" || ev.Source == ".env.example" || ev.Source == ".env.local" || (strings.HasPrefix(ev.Source, ".env.") && strings.HasSuffix(ev.Source, ".example")) {
 			for _, k := range envKeysFromEvidence(ev.Value) {
 				localEnvKeys[k] = true
-				if ev.Source != ".env.local" {
+				if envSourceRequiresCI(ev.Source) {
+					if ignoreMissingCI[k] {
+						continue
+					}
 					localEnvKeysForCI[k] = true
 				}
 			}
@@ -194,7 +205,7 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 		if len(localCommands) > 0 && !localCommandMatches(ciCmd.Value, localCommands) {
 			findings = append(findings, schema.Finding{
 				ID:         "F-CI-COMMAND-001",
-				Title:      fmt.Sprintf("CI command %s is not documented locally", ciCmd.Value),
+				Title:      fmt.Sprintf("CI command %s is not documented locally", summarizeCommandForTitle(ciCmd.Value)),
 				Severity:   schema.SeverityLow,
 				Confidence: 0.5,
 				Symptom:    "CI run command does not match collected local README/package/Makefile/Taskfile/justfile commands",
@@ -209,42 +220,46 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 	}
 
 	// Check env parity
+	var missingLocalKeys []string
 	for key := range allCIEnvKeys {
 		if !localEnvKeys[key] {
-			findings = append(findings, schema.Finding{
-				ID:         "F-CI-ENV-001",
-				Title:      fmt.Sprintf("CI env var %s not found locally", key),
-				Severity:   schema.SeverityMedium,
-				Confidence: 0.6,
-				Symptom:    fmt.Sprintf("Environment variable %s is set in CI but missing from local .env", key),
-				Evidence: []schema.Evidence{
-					{Source: "ci_env", Value: key},
-					{Source: ".env", Value: "missing"},
-				},
-				LikelyCauses: []string{
-					"Local .env is out of date with CI configuration",
-				},
-			})
+			missingLocalKeys = append(missingLocalKeys, key)
 		}
 	}
+	if len(missingLocalKeys) > 0 {
+		sort.Strings(missingLocalKeys)
+		findings = append(findings, schema.Finding{
+			ID:         "F-CI-ENV-001",
+			Title:      fmt.Sprintf("CI env vars not found locally: %s", summarizeKeysForTitle(missingLocalKeys)),
+			Severity:   schema.SeverityMedium,
+			Confidence: 0.6,
+			Symptom:    "One or more environment variables are set in CI but missing from local .env evidence",
+			Evidence:   envKeyEvidence("ci_env", missingLocalKeys),
+			LikelyCauses: []string{
+				"Local .env is out of date with CI configuration",
+			},
+		})
+	}
 
+	var missingCIKeys []string
 	for key := range localEnvKeysForCI {
 		if !allCIEnvKeys[key] {
-			findings = append(findings, schema.Finding{
-				ID:         "F-CI-ENV-002",
-				Title:      fmt.Sprintf("Local env var %s not found in CI", key),
-				Severity:   schema.SeverityLow,
-				Confidence: 0.5,
-				Symptom:    fmt.Sprintf("Environment variable %s exists locally but is not referenced in CI", key),
-				Evidence: []schema.Evidence{
-					{Source: ".env", Value: key},
-					{Source: "ci_env", Value: "missing"},
-				},
-				LikelyCauses: []string{
-					"CI workflow may be missing required environment variables",
-				},
-			})
+			missingCIKeys = append(missingCIKeys, key)
 		}
+	}
+	if len(missingCIKeys) > 0 {
+		sort.Strings(missingCIKeys)
+		findings = append(findings, schema.Finding{
+			ID:         "F-CI-ENV-002",
+			Title:      fmt.Sprintf("Local env vars not found in CI: %s", summarizeKeysForTitle(missingCIKeys)),
+			Severity:   schema.SeverityLow,
+			Confidence: 0.5,
+			Symptom:    "One or more local .env variables are not referenced in CI",
+			Evidence:   envKeyEvidence(".env", missingCIKeys),
+			LikelyCauses: []string{
+				"CI workflow may be missing required environment variables",
+			},
+		})
 	}
 
 	for name, ciService := range ciServices {
@@ -361,6 +376,46 @@ func ciEnvKey(source string) (key string, ok bool) {
 		}
 	}
 	return "", false
+}
+
+func collectM8Config(evidence []schema.Evidence, ignoreMissingLocal, ignoreMissingCI map[string]bool) {
+	for _, ev := range evidence {
+		key := strings.TrimSpace(ev.Value)
+		if key == "" {
+			continue
+		}
+		switch ev.Source {
+		case "devdiag_ci_env_ignore_missing_local":
+			ignoreMissingLocal[key] = true
+		case "devdiag_ci_env_ignore_missing_ci":
+			ignoreMissingCI[key] = true
+		}
+	}
+}
+
+func summarizeCommandForTitle(command string) string {
+	const maxTitleCommandLen = 80
+	command = strings.Join(strings.Fields(command), " ")
+	if len(command) <= maxTitleCommandLen {
+		return command
+	}
+	return strings.TrimSpace(command[:maxTitleCommandLen-3]) + "..."
+}
+
+func summarizeKeysForTitle(keys []string) string {
+	const maxKeysInTitle = 5
+	if len(keys) <= maxKeysInTitle {
+		return strings.Join(keys, ", ")
+	}
+	return fmt.Sprintf("%s, and %d more", strings.Join(keys[:maxKeysInTitle], ", "), len(keys)-maxKeysInTitle)
+}
+
+func envKeyEvidence(source string, keys []string) []schema.Evidence {
+	evidence := make([]schema.Evidence, 0, len(keys))
+	for _, key := range keys {
+		evidence = append(evidence, schema.Evidence{Source: source, Value: key})
+	}
+	return evidence
 }
 
 func ciSetupInfo(source string) (actionName string, ok bool) {
@@ -687,6 +742,10 @@ func envKeysFromEvidence(value string) []string {
 		}
 	}
 	return keys
+}
+
+func envSourceRequiresCI(source string) bool {
+	return source == ".env"
 }
 
 func isIgnoredCIEnv(key, value string) bool {
