@@ -27,17 +27,11 @@ type ContextRequest struct {
 }
 
 type Context struct {
-	SchemaVersion     string         `json:"schema_version"`
-	GeneratedAt       string         `json:"generated_at"`
-	Root              string         `json:"root"`
-	Inputs            []ContextInput `json:"inputs"`
-	Findings          []Finding      `json:"findings,omitempty"`
-	ProviderRequested string         `json:"provider_requested,omitempty"`
-	ProviderUsed      string         `json:"provider_used,omitempty"`
-	Model             string         `json:"model,omitempty"`
-	Explanation       string         `json:"explanation,omitempty"`
-	ProviderFallback  bool           `json:"provider_fallback,omitempty"`
-	ProviderNotes     []string       `json:"provider_notes,omitempty"`
+	SchemaVersion string         `json:"schema_version"`
+	GeneratedAt   string         `json:"generated_at"`
+	Root          string         `json:"root"`
+	Inputs        []ContextInput `json:"inputs"`
+	Findings      []Finding      `json:"findings,omitempty"`
 }
 
 type ContextInput struct {
