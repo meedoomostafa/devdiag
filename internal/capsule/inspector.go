@@ -13,10 +13,14 @@ import (
 
 // InspectResult is the parsed metadata from a capsule.
 type InspectResult struct {
-	Manifest *Manifest
-	FileList []string
-	Valid    bool
-	Errors   []string
+	Manifest        *Manifest `json:"manifest,omitempty"`
+	FileList        []string  `json:"file_list"`
+	FileCount       int       `json:"file_count"`
+	RunID           string    `json:"run_id,omitempty"`
+	RedactionStatus string    `json:"redaction_status,omitempty"`
+	ReviewSummary   []string  `json:"review_summary,omitempty"`
+	Valid           bool      `json:"valid"`
+	Errors          []string  `json:"errors,omitempty"`
 }
 
 // Inspect reads a capsule .tgz and returns metadata without extracting raw logs.
@@ -89,9 +93,31 @@ func inspectTar(tr *tar.Reader) (*InspectResult, error) {
 	if result.Manifest == nil {
 		result.Valid = false
 		result.Errors = append(result.Errors, "missing manifest.json")
+	} else {
+		result.RunID = result.Manifest.RunID
+		result.RedactionStatus = result.Manifest.RedactionStatus
 	}
+	result.FileCount = len(result.FileList)
+	result.ReviewSummary = buildReviewSummary(result)
 
 	return result, nil
+}
+
+func buildReviewSummary(result *InspectResult) []string {
+	summary := []string{
+		fmt.Sprintf("valid=%t", result.Valid),
+		fmt.Sprintf("files=%d", result.FileCount),
+	}
+	if result.RunID != "" {
+		summary = append(summary, "run_id="+result.RunID)
+	}
+	if result.RedactionStatus != "" {
+		summary = append(summary, "redaction="+result.RedactionStatus)
+	}
+	if len(result.Errors) > 0 {
+		summary = append(summary, fmt.Sprintf("errors=%d", len(result.Errors)))
+	}
+	return summary
 }
 
 // Summary returns a human-readable capsule summary (no raw logs).

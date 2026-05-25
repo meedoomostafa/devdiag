@@ -49,6 +49,21 @@ func TestM6EngineFGPU001(t *testing.T) {
 	assertFinding(t, findings, "F-GPU-001")
 }
 
+func TestM6EngineFGPU001WhenNvidiaSMIFailsWithHardwareAndModuleLoaded(t *testing.T) {
+	engine := NewM6Engine()
+	snap := buildSnapshot(map[string]string{
+		"gpu_present":              "false",
+		"gpu_hardware_detected":    "true",
+		"gpu_nvidia_module_loaded": "true",
+		"gpu_nvidia_smi_status":    "error",
+	})
+	findings, err := engine.Evaluate(snap)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertFinding(t, findings, "F-GPU-001")
+}
+
 func TestM6EngineFGPU002(t *testing.T) {
 	engine := NewM6Engine()
 	snap := buildSnapshot(map[string]string{

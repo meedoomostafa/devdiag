@@ -61,6 +61,8 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	notes := []string{}
 	status := schema.CollectorOK
 	partial := false
+	nvidiaSMIStatus := ""
+	nvidiaSMIExitCode := ""
 
 	// Layer 1: nvidia-smi query
 	cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -72,26 +74,35 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	if res.TimedOut {
 		status = schema.CollectorTimeout
 		partial = true
+		nvidiaSMIStatus = "timeout"
 		notes = append(notes, "nvidia-smi timed out")
 	} else if res.NotFound {
 		// nvidia-smi not available — fall through to layer 2
+		nvidiaSMIStatus = "not_found"
 		notes = append(notes, "nvidia-smi not found")
 	} else if res.ExitCode == 0 {
 		devices, err := parseNvidiaSMIOutput(res.Stdout)
 		if err == nil && len(devices) > 0 {
+			nvidiaSMIStatus = "ok"
 			info.Present = true
 			info.Devices = devices
 			info.HardwareDetected = true
 		} else if res.Stdout != "" {
 			// Command succeeded but parsing failed — partial evidence
 			partial = true
+			nvidiaSMIStatus = "parse_error"
 			notes = append(notes, "nvidia-smi output parsing failed")
+		} else {
+			nvidiaSMIStatus = "ok"
 		}
 	} else {
 		// Non-zero exit — could be driver issue
 		partial = true
+		nvidiaSMIStatus = "error"
+		nvidiaSMIExitCode = strconv.Itoa(res.ExitCode)
 		notes = append(notes, "nvidia-smi exited with error")
 		if res.PermissionDenied {
+			nvidiaSMIStatus = "permission_denied"
 			status = schema.CollectorPermissionDenied
 		}
 	}
@@ -143,6 +154,13 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		evidence = append(evidence, schema.Evidence{Source: "gpu_nvidia_module_loaded", Value: "true"})
 	} else {
 		evidence = append(evidence, schema.Evidence{Source: "gpu_nvidia_module_loaded", Value: "false"})
+	}
+
+	if nvidiaSMIStatus != "" {
+		evidence = append(evidence, schema.Evidence{Source: "gpu_nvidia_smi_status", Value: nvidiaSMIStatus})
+	}
+	if nvidiaSMIExitCode != "" {
+		evidence = append(evidence, schema.Evidence{Source: "gpu_nvidia_smi_exit_code", Value: nvidiaSMIExitCode})
 	}
 
 	if info.SecureBootEnabled != nil {

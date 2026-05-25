@@ -62,8 +62,20 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 			}
 		}
 	}
-	if len(trackedFiles) > 0 {
-		evidence = append(evidence, schema.Evidence{Source: "git_tracked_env", Value: strings.Join(trackedFiles, ", ")})
+	var trackedRiskyEnv []string
+	var trackedTemplateEnv []string
+	for _, file := range trackedFiles {
+		if isSafeEnvTemplate(file) {
+			trackedTemplateEnv = append(trackedTemplateEnv, file)
+			continue
+		}
+		trackedRiskyEnv = append(trackedRiskyEnv, file)
+	}
+	if len(trackedRiskyEnv) > 0 {
+		evidence = append(evidence, schema.Evidence{Source: "git_tracked_env", Value: strings.Join(trackedRiskyEnv, ", ")})
+	}
+	if len(trackedTemplateEnv) > 0 {
+		evidence = append(evidence, schema.Evidence{Source: "git_tracked_env_template", Value: strings.Join(trackedTemplateEnv, ", ")})
 	}
 
 	// Check if .env exists on disk
@@ -117,4 +129,20 @@ func boolStr(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+func isSafeEnvTemplate(path string) bool {
+	base := filepath.Base(path)
+	if base == ".env" {
+		return false
+	}
+	if !strings.HasPrefix(base, ".env.") {
+		return false
+	}
+	for _, suffix := range []string{".example", ".sample", ".template", ".dist", ".schema", ".default", ".defaults"} {
+		if strings.HasSuffix(base, suffix) {
+			return true
+		}
+	}
+	return false
 }

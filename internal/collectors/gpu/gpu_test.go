@@ -157,6 +157,39 @@ func TestCollectorPermissionDenied(t *testing.T) {
 	}
 }
 
+func TestCollectorNvidiaSMIErrorWithHardwareFallbackEmitsStatusEvidence(t *testing.T) {
+	c := &Collector{
+		Runner: cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+			"nvidia-smi --query-gpu=index,name,driver_version,memory.total --format=csv,noheader,nounits": {
+				Command:  "nvidia-smi",
+				ExitCode: 9,
+				Stderr:   "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver",
+			},
+		}),
+		procPathChecker: func(string) (os.FileInfo, error) {
+			return nil, nil
+		},
+		modulesReader: func() ([]byte, error) {
+			return []byte("nvidia 12288 0 - Live 0x00000000\n"), nil
+		},
+	}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Partial {
+		t.Fatal("expected Partial=true")
+	}
+	if res.Applicable == nil || !*res.Applicable {
+		t.Fatal("expected Applicable=true from hardware fallback")
+	}
+	assertEvidence(t, res.Evidence, "gpu_present", "false")
+	assertEvidence(t, res.Evidence, "gpu_hardware_detected", "true")
+	assertEvidence(t, res.Evidence, "gpu_nvidia_module_loaded", "true")
+	assertEvidence(t, res.Evidence, "gpu_nvidia_smi_status", "error")
+	assertEvidence(t, res.Evidence, "gpu_nvidia_smi_exit_code", "9")
+}
+
 func TestCollectorLSPCIFallback(t *testing.T) {
 	c := &Collector{
 		Runner: cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{

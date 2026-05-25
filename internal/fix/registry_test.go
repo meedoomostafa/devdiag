@@ -17,6 +17,7 @@ func TestRegistryLookup(t *testing.T) {
 		{"gitignore-env", true},
 		{"change-compose-port", true},
 		{"stop-service", true},
+		{"systemctl-daemon-reload", true},
 		{"check-wd", true},
 		{"verify-config-path", true},
 		{"check-parent-permissions", true},
@@ -25,6 +26,7 @@ func TestRegistryLookup(t *testing.T) {
 		{"verify-port", true},
 		{"verify-service-listening", true},
 		{"verify-unix-socket", true},
+		{"compose-up", true},
 		{"unknown", false},
 	}
 	for _, tt := range tests {
@@ -51,6 +53,7 @@ func TestRegistryClasses(t *testing.T) {
 		{"gitignore-env", schema.FixManual},
 		{"change-compose-port", schema.FixManual},
 		{"stop-service", schema.FixManual},
+		{"systemctl-daemon-reload", schema.FixGuarded},
 		{"suggest-docker-group", schema.FixManual},
 		{"add-env-placeholder", schema.FixManual},
 		{"install-nvidia-driver", schema.FixManual},
@@ -66,6 +69,7 @@ func TestRegistryClasses(t *testing.T) {
 		{"verify-port", schema.FixManual},
 		{"verify-service-listening", schema.FixManual},
 		{"verify-unix-socket", schema.FixManual},
+		{"compose-up", schema.FixGuarded},
 	}
 	for _, tt := range tests {
 		t.Run(tt.hintID, func(t *testing.T) {

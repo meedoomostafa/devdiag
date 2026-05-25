@@ -53,6 +53,8 @@ func (e *M1Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 			findings = append(findings, e.networkRules(c)...)
 		case "systemd":
 			findings = append(findings, e.systemdRules(c)...)
+		case "security":
+			findings = append(findings, e.securityRules(c)...)
 		case "permission":
 			findings = append(findings, e.permissionRules(c)...)
 		case "docker":
@@ -145,7 +147,7 @@ func (e *M1Engine) gitRules(result schema.CollectorResult) []schema.Finding {
 	for _, ev := range result.Evidence {
 		switch ev.Source {
 		case "git_tracked_env":
-			trackedEnv = strings.Split(ev.Value, ", ")
+			trackedEnv = riskyTrackedEnvFiles(strings.Split(ev.Value, ", "))
 		case "git_env_ignored":
 			envIgnored = ev.Value == "true"
 		case "git_env_exists":
@@ -594,6 +596,8 @@ func (e *M1Engine) diskRules(result schema.CollectorResult) []schema.Finding {
 	var findings []schema.Finding
 
 	var freeBytes, freePct, freeInodesPct float64
+	var hasFreeInodesPct bool
+	inodesAvailable := true
 	for _, ev := range result.Evidence {
 		switch ev.Source {
 		case "host_disk_free_bytes":
@@ -601,12 +605,19 @@ func (e *M1Engine) diskRules(result schema.CollectorResult) []schema.Finding {
 		case "host_disk_free_pct":
 			freePct, _ = strconv.ParseFloat(ev.Value, 64)
 		case "host_disk_free_inodes_pct":
-			freeInodesPct, _ = strconv.ParseFloat(ev.Value, 64)
+			if parsed, err := strconv.ParseFloat(ev.Value, 64); err == nil {
+				freeInodesPct = parsed
+				hasFreeInodesPct = true
+			}
+		case "host_disk_inodes_available":
+			inodesAvailable = ev.Value != "false"
 		}
 	}
 
 	giB := 1024.0 * 1024.0 * 1024.0
-	if freeBytes < giB || freePct < 2.0 || freeInodesPct < 2.0 {
+	inodeCritical := inodesAvailable && hasFreeInodesPct && freeInodesPct < 2.0
+	inodeLow := inodesAvailable && hasFreeInodesPct && freeInodesPct < 10.0
+	if freeBytes < giB || freePct < 2.0 || inodeCritical {
 		findings = append(findings, schema.Finding{
 			ID:         "F-DISK-001",
 			Title:      "Disk or inode pressure on repo mount",
@@ -620,7 +631,7 @@ func (e *M1Engine) diskRules(result schema.CollectorResult) []schema.Finding {
 			},
 			FixHints: []string{"warn-disk-cleanup"},
 		})
-	} else if freeBytes < 5*giB || freePct < 10.0 || freeInodesPct < 10.0 {
+	} else if freeBytes < 5*giB || freePct < 10.0 || inodeLow {
 		findings = append(findings, schema.Finding{
 			ID:         "F-DISK-001",
 			Title:      "Disk or inode pressure on repo mount",
@@ -637,6 +648,37 @@ func (e *M1Engine) diskRules(result schema.CollectorResult) []schema.Finding {
 	}
 
 	return findings
+}
+
+func riskyTrackedEnvFiles(files []string) []string {
+	var risky []string
+	for _, file := range files {
+		file = strings.TrimSpace(file)
+		if file == "" || isSafeEnvTemplatePath(file) {
+			continue
+		}
+		risky = append(risky, file)
+	}
+	return risky
+}
+
+func isSafeEnvTemplatePath(path string) bool {
+	base := path
+	if idx := strings.LastIndex(base, "/"); idx != -1 {
+		base = base[idx+1:]
+	}
+	if base == ".env" {
+		return false
+	}
+	if !strings.HasPrefix(base, ".env.") {
+		return false
+	}
+	for _, suffix := range []string{".example", ".sample", ".template", ".dist", ".schema", ".default", ".defaults"} {
+		if strings.HasSuffix(base, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // portRules creates findings from port collector evidence.
@@ -798,6 +840,75 @@ func (e *M1Engine) permissionRules(result schema.CollectorResult) []schema.Findi
 	return findings
 }
 
+func (e *M1Engine) securityRules(result schema.CollectorResult) []schema.Finding {
+	var selinuxEvidence []schema.Evidence
+	var appArmorEvidence []schema.Evidence
+	for _, ev := range result.Evidence {
+		switch ev.Source {
+		case "selinux_denial":
+			selinuxEvidence = append(selinuxEvidence, ev)
+		case "apparmor_denial":
+			appArmorEvidence = append(appArmorEvidence, ev)
+		}
+	}
+
+	var findings []schema.Finding
+	if len(selinuxEvidence) > 0 {
+		likelyCauses := []string{
+			"Bind mount or workspace path may have an SELinux label mismatch",
+			"Container volume may need an explicit shared or private SELinux relabel",
+			"Process domain is not allowed to access the target path",
+		}
+		fixHints := []string{"inspect-selinux-context"}
+		if evidenceContainsValue(selinuxEvidence, "container_label_hint=mount_relabel_z_or_Z") {
+			likelyCauses = append([]string{"Container bind mount is missing an SELinux shared/private relabel such as :z or :Z"}, likelyCauses...)
+			fixHints = append(fixHints, "relabel-container-volume")
+		}
+		findings = append(findings, schema.Finding{
+			ID:           "F-SEC-SELINUX-001",
+			Title:        "SELinux denial likely blocking project access",
+			Severity:     schema.SeverityMedium,
+			Confidence:   0.7,
+			Symptom:      "Kernel audit logs show SELinux denied a file or process operation",
+			Evidence:     selinuxEvidence,
+			LikelyCauses: likelyCauses,
+			FixHints:     fixHints,
+		})
+	}
+	if len(appArmorEvidence) > 0 {
+		likelyCauses := []string{
+			"Container or process profile denies the requested operation",
+			"Mounted workspace path is outside the allowed profile paths",
+			"Service profile needs adjustment or a less restrictive local dev profile",
+		}
+		fixHints := []string{"inspect-apparmor-denial"}
+		if evidenceContainsValue(appArmorEvidence, "profile=docker-default") {
+			likelyCauses = append([]string{"Docker default AppArmor profile denied access to the mounted project path"}, likelyCauses...)
+			fixHints = append(fixHints, "review-apparmor-profile")
+		}
+		findings = append(findings, schema.Finding{
+			ID:           "F-SEC-APPARMOR-001",
+			Title:        "AppArmor denial likely blocking project access",
+			Severity:     schema.SeverityMedium,
+			Confidence:   0.7,
+			Symptom:      "Kernel audit logs show AppArmor denied a file or process operation",
+			Evidence:     appArmorEvidence,
+			LikelyCauses: likelyCauses,
+			FixHints:     fixHints,
+		})
+	}
+	return findings
+}
+
+func evidenceContainsValue(evidence []schema.Evidence, needle string) bool {
+	for _, ev := range evidence {
+		if strings.Contains(ev.Value, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 // dockerRules creates findings from docker collector evidence.
 func (e *M1Engine) dockerRules(result schema.CollectorResult, collectors map[string]schema.CollectorResult) []schema.Finding {
 	var findings []schema.Finding
@@ -884,21 +995,34 @@ func (e *M1Engine) podmanRules(result schema.CollectorResult) []schema.Finding {
 	var findings []schema.Finding
 
 	if result.Status == schema.CollectorUnavailable {
+		likelyCauses := []string{
+			"Podman is not installed",
+			"Podman service is not running",
+		}
+		if evidenceSourceValue(result.Evidence, "podman_runtime_dir_error", "true") {
+			likelyCauses = append([]string{"Rootless Podman runtime directory under /run/user is missing or inaccessible"}, likelyCauses...)
+		}
 		findings = append(findings, schema.Finding{
-			ID:         "F-PODMAN-001",
-			Title:      "Podman unavailable (repo expects containers)",
-			Severity:   schema.SeverityMedium,
-			Confidence: 0.7,
-			Symptom:    "Repo has container signals but Podman is not accessible",
-			Evidence:   result.Evidence,
-			LikelyCauses: []string{
-				"Podman is not installed",
-				"Podman service is not running",
-			},
+			ID:           "F-PODMAN-001",
+			Title:        "Podman unavailable (repo expects containers)",
+			Severity:     schema.SeverityMedium,
+			Confidence:   0.7,
+			Symptom:      "Repo has container signals but Podman is not accessible",
+			Evidence:     result.Evidence,
+			LikelyCauses: likelyCauses,
 		})
 	}
 
 	return findings
+}
+
+func evidenceSourceValue(evidence []schema.Evidence, source, value string) bool {
+	for _, ev := range evidence {
+		if ev.Source == source && ev.Value == value {
+			return true
+		}
+	}
+	return false
 }
 
 // composeStatusRules creates findings from compose_status collector evidence.
@@ -1040,6 +1164,11 @@ func (e *M1Engine) reproRules(result schema.CollectorResult) []schema.Finding {
 				title = "Connection refused or network unreachable"
 				severity = schema.SeverityMedium
 				symptom = "Command output indicates a connection was refused"
+			case "runtime_version_failure":
+				id = "F-REPRO-006"
+				title = "Runtime version failure during command execution"
+				severity = schema.SeverityMedium
+				symptom = "Command output indicates the active runtime version does not satisfy the project"
 			case "dependency_failure":
 				id = "F-REPRO-007"
 				title = "Dependency resolver failure"

@@ -64,6 +64,9 @@ func (r *HumanRenderer) Render(proposals []schema.FixProposal, w io.Writer) erro
 type JSONRenderer struct{}
 
 func (r *JSONRenderer) Render(proposals []schema.FixProposal, w io.Writer) error {
+	if proposals == nil {
+		proposals = []schema.FixProposal{}
+	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(proposals)

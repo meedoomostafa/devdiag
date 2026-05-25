@@ -26,12 +26,15 @@ import (
 )
 
 var (
-	flagRemoteProfile string
-	flagRemoteSession string
-	flagRemoteKeep    bool
-	flagRemoteCleanup string
-	flagRemoteDryRun  bool
-	flagRemoteAll     bool
+	flagRemoteProfile                  string
+	flagRemoteSession                  string
+	flagRemoteKeep                     bool
+	flagRemoteCleanup                  string
+	flagRemoteDryRun                   bool
+	flagRemoteAll                      bool
+	flagRemoteSSHIdentityFile          string
+	flagRemoteSSHKnownHostsFile        string
+	flagRemoteSSHStrictHostKeyChecking string
 )
 
 var remoteCmd = &cobra.Command{
@@ -86,6 +89,9 @@ func init() {
 	remoteCmd.PersistentFlags().BoolVar(&flagRemoteKeep, "keep", false, "Keep remote files after shell exits (enter only)")
 	remoteCmd.PersistentFlags().StringVar(&flagRemoteCleanup, "cleanup", "always", "Cleanup mode: always, never")
 	remoteCmd.PersistentFlags().BoolVar(&flagRemoteAll, "all", false, "Clean all sessions for the target")
+	remoteCmd.PersistentFlags().StringVar(&flagRemoteSSHIdentityFile, "ssh-identity-file", "", "SSH identity file for remote SSH targets")
+	remoteCmd.PersistentFlags().StringVar(&flagRemoteSSHKnownHostsFile, "ssh-known-hosts-file", "", "SSH known_hosts file for remote SSH targets")
+	remoteCmd.PersistentFlags().StringVar(&flagRemoteSSHStrictHostKeyChecking, "ssh-strict-host-key-checking", "", "SSH StrictHostKeyChecking value: yes, no, accept-new, ask")
 
 	remoteCmd.AddCommand(remoteDoctorCmd)
 	remoteCmd.AddCommand(remoteSyncCmd)
@@ -95,6 +101,19 @@ func init() {
 	rootCmd.AddCommand(remoteCmd)
 }
 
+func buildRemoteSSHOptions() (sshtransport.Options, error) {
+	switch flagRemoteSSHStrictHostKeyChecking {
+	case "", "yes", "no", "accept-new", "ask":
+	default:
+		return sshtransport.Options{}, exitCodeError{code: exitcode.InvalidInput}
+	}
+	return sshtransport.Options{
+		IdentityFile:          flagRemoteSSHIdentityFile,
+		UserKnownHostsFile:    flagRemoteSSHKnownHostsFile,
+		StrictHostKeyChecking: flagRemoteSSHStrictHostKeyChecking,
+	}, nil
+}
+
 func runRemoteDoctor(cmd *cobra.Command, args []string) error {
 	logger := buildLogger()
 	redactEngine := buildRedactEngine()
@@ -102,6 +121,14 @@ func runRemoteDoctor(cmd *cobra.Command, args []string) error {
 	t, err := target.Parse(args[0])
 	if err != nil {
 		return exitCodeError{code: exitcode.InvalidInput}
+	}
+
+	if t.Kind == target.KindK8s {
+		return outputUnsupportedK8s(cmd, t, redactEngine, "doctor")
+	}
+	sshOptions, err := buildRemoteSSHOptions()
+	if err != nil {
+		return err
 	}
 
 	result := render.NewDoctorResult(t)
@@ -120,7 +147,7 @@ func runRemoteDoctor(cmd *cobra.Command, args []string) error {
 	var probeResult *render.Finding
 	switch t.Kind {
 	case target.KindSSH:
-		tr := sshtransport.NewTransport(t, nil)
+		tr := sshtransport.NewTransportWithOptions(t, nil, sshOptions)
 		ctx, cancel := contextWithTimeout(cmd.Context(), 15)
 		defer cancel()
 		probe, err := tr.Probe(ctx)
@@ -154,7 +181,7 @@ func runRemoteDoctor(cmd *cobra.Command, args []string) error {
 		result.Findings = append(result.Findings, *probeResult)
 	}
 
-	return outputRemoteResult(result, redactEngine, cmd)
+	return outputRemoteResultWithFindingExit(result, redactEngine, cmd)
 }
 
 func runRemoteSync(cmd *cobra.Command, args []string) error {
@@ -164,6 +191,14 @@ func runRemoteSync(cmd *cobra.Command, args []string) error {
 	t, err := target.Parse(args[0])
 	if err != nil {
 		return exitCodeError{code: exitcode.InvalidInput}
+	}
+
+	if t.Kind == target.KindK8s {
+		return outputUnsupportedK8s(cmd, t, redactEngine, "sync")
+	}
+	sshOptions, err := buildRemoteSSHOptions()
+	if err != nil {
+		return err
 	}
 
 	// Validate profile
@@ -232,17 +267,17 @@ func runRemoteSync(cmd *cobra.Command, args []string) error {
 	if t.Kind == target.KindSSH {
 		ctx, cancel := contextWithTimeout(cmd.Context(), 30)
 		defer cancel()
-		if err := inject.UploadTarStream(ctx, t, stageDir, remoteDir); err != nil {
+		if err := inject.UploadTarStream(ctx, t, stageDir, remoteDir, sshOptions); err != nil {
 			logger.Error("remote.sync", fmt.Sprintf("upload failed: %v", err))
 			result.Status = "failed"
 			manifest.Status = "failed"
 			result.Notes = append(result.Notes, fmt.Sprintf("upload failed: %v", err))
-			return outputRemoteResult(result, redactEngine, cmd)
+			return outputRemoteResultWithExit(result, redactEngine, cmd, exitcode.ReproFailed)
 		}
 		result.Notes = append(result.Notes, "upload completed")
 
 		// Write remote manifest
-		if err := writeRemoteManifest(ctx, t, manifest); err != nil {
+		if err := writeRemoteManifest(ctx, t, manifest, sshOptions); err != nil {
 			logger.Warn("remote.sync", fmt.Sprintf("manifest write failed: %v", err))
 			result.Notes = append(result.Notes, fmt.Sprintf("manifest write failed: %v", err))
 		}
@@ -253,7 +288,7 @@ func runRemoteSync(cmd *cobra.Command, args []string) error {
 			result.Status = "failed"
 			manifest.Status = "failed"
 			result.Notes = append(result.Notes, fmt.Sprintf("container transport failed: %v", err))
-			return outputRemoteResult(result, redactEngine, cmd)
+			return outputRemoteResultWithExit(result, redactEngine, cmd, exitcode.ReproFailed)
 		}
 		ctx, cancel := contextWithTimeout(cmd.Context(), 30)
 		defer cancel()
@@ -262,7 +297,7 @@ func runRemoteSync(cmd *cobra.Command, args []string) error {
 			result.Status = "failed"
 			manifest.Status = "failed"
 			result.Notes = append(result.Notes, fmt.Sprintf("upload failed: %v", err))
-			return outputRemoteResult(result, redactEngine, cmd)
+			return outputRemoteResultWithExit(result, redactEngine, cmd, exitcode.ReproFailed)
 		}
 		result.Notes = append(result.Notes, "upload completed")
 
@@ -295,6 +330,14 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 	t, err := target.Parse(args[0])
 	if err != nil {
 		return exitCodeError{code: exitcode.InvalidInput}
+	}
+
+	if t.Kind == target.KindK8s {
+		return outputUnsupportedK8s(cmd, t, redactEngine, "enter")
+	}
+	sshOptions, err := buildRemoteSSHOptions()
+	if err != nil {
+		return err
 	}
 
 	var p *profile.RemoteProfile
@@ -355,11 +398,11 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 	if t.Kind == target.KindSSH {
 		ctx, cancel := contextWithTimeout(cmd.Context(), 30)
 		defer cancel()
-		if err := inject.UploadTarStream(ctx, t, stageDir, remoteDir); err != nil {
+		if err := inject.UploadTarStream(ctx, t, stageDir, remoteDir, sshOptions); err != nil {
 			logger.Error("remote.enter", fmt.Sprintf("upload failed: %v", err))
 			return exitCodeError{code: exitcode.ReproFailed}
 		}
-		if err := writeRemoteManifest(ctx, t, manifest); err != nil {
+		if err := writeRemoteManifest(ctx, t, manifest, sshOptions); err != nil {
 			logger.Warn("remote.enter", fmt.Sprintf("manifest write failed: %v", err))
 		}
 	} else if t.Kind == target.KindContainer {
@@ -400,7 +443,7 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 	var shellExitCode int
 	switch t.Kind {
 	case target.KindSSH:
-		tr := sshtransport.NewTransport(t, nil)
+		tr := sshtransport.NewTransportWithOptions(t, nil, sshOptions)
 		enterErr = tr.Enter(remoteDir)
 	case target.KindContainer:
 		tr, err := containertransport.NewTransport(t)
@@ -426,7 +469,7 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 		defer cancel()
 		var tr transport.Transport
 		if t.Kind == target.KindSSH {
-			tr = sshtransport.NewTransport(t, nil)
+			tr = sshtransport.NewTransportWithOptions(t, nil, sshOptions)
 		} else if t.Kind == target.KindContainer {
 			tr, _ = containertransport.NewTransport(t)
 		}
@@ -461,6 +504,14 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 		return exitCodeError{code: exitcode.InvalidInput}
 	}
 
+	if t.Kind == target.KindK8s {
+		return outputUnsupportedK8s(cmd, t, redactEngine, "clean")
+	}
+	sshOptions, err := buildRemoteSSHOptions()
+	if err != nil {
+		return err
+	}
+
 	logger.Info("remote.clean", fmt.Sprintf("target=%s session=%s", t.String(), flagRemoteSession))
 
 	result := render.NewDoctorResult(t)
@@ -492,7 +543,7 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 		result.Findings = append(result.Findings, render.Finding{
 			ID: "F-REMOTE-005", Title: "Unsafe cleanup refused", Severity: "high", Message: err.Error(),
 		})
-		return outputRemoteResult(result, redactEngine, cmd)
+		return outputRemoteResultWithExit(result, redactEngine, cmd, exitcode.UnsafeRefused)
 	}
 
 	if flagRemoteDryRun {
@@ -504,7 +555,7 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 	var cleanErr error
 	switch t.Kind {
 	case target.KindSSH:
-		tr := sshtransport.NewTransport(t, nil)
+		tr := sshtransport.NewTransportWithOptions(t, nil, sshOptions)
 		ctx, cancel := contextWithTimeout(context.Background(), 30)
 		defer cancel()
 		cleanErr = cleanManifest(ctx, tr, cached)
@@ -525,6 +576,8 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 			ID: "F-REMOTE-010", Title: "Cleanup completed partially", Severity: "medium", Message: cleanErr.Error(),
 		})
 		result.Notes = append(result.Notes, fmt.Sprintf("cleanup error: %v", cleanErr))
+		result.CleanupCommand = fmt.Sprintf("devdiag remote clean %s --session %s", t.String(), cached.SessionID)
+		return outputRemoteResultWithExit(result, redactEngine, cmd, exitcode.CollectorPartial)
 	} else {
 		result.Notes = append(result.Notes, fmt.Sprintf("removed %d files from %s", len(cached.Files), cached.RootDir))
 		cached.Status = "cleaned"
@@ -544,6 +597,10 @@ func runRemoteStatus(cmd *cobra.Command, args []string) error {
 	t, err := target.Parse(args[0])
 	if err != nil {
 		return exitCodeError{code: exitcode.InvalidInput}
+	}
+
+	if t.Kind == target.KindK8s {
+		return outputUnsupportedK8s(cmd, t, redactEngine, "status")
 	}
 
 	logger.Info("remote.status", fmt.Sprintf("target=%s", t.String()))
@@ -587,6 +644,44 @@ func outputRemoteResult(result *render.RemoteResult, redactEngine *redact.Engine
 	return render.Render(result, "human", cmd.OutOrStdout())
 }
 
+func outputRemoteResultWithExit(result *render.RemoteResult, redactEngine *redact.Engine, cmd *cobra.Command, code exitcode.Code) error {
+	if err := outputRemoteResult(result, redactEngine, cmd); err != nil {
+		return err
+	}
+	return exitCodeError{code: code}
+}
+
+func outputRemoteResultWithFindingExit(result *render.RemoteResult, redactEngine *redact.Engine, cmd *cobra.Command) error {
+	if err := outputRemoteResult(result, redactEngine, cmd); err != nil {
+		return err
+	}
+	for _, finding := range result.Findings {
+		if finding.Severity == "high" || finding.Severity == "critical" {
+			return exitCodeError{code: exitcode.FindingsExist}
+		}
+	}
+	return nil
+}
+
+func outputUnsupportedK8s(cmd *cobra.Command, t *target.Target, redactEngine *redact.Engine, operation string) error {
+	result := render.NewDoctorResult(t)
+	result.DevDiagVersion = version.Version
+	result.RedactionStatus = string(redactEngine.Level)
+	result.Status = "unsupported"
+	result.Profile = flagRemoteProfile
+	result.Findings = append(result.Findings, render.Finding{
+		ID:       "F-REMOTE-K8S-001",
+		Title:    "Kubernetes remote target unsupported",
+		Severity: "medium",
+		Message:  fmt.Sprintf("remote %s for Kubernetes targets is not implemented yet; target parsing is available, but no kubectl operations are executed", operation),
+	})
+	result.Notes = append(result.Notes, "kubernetes remote support is planned but not implemented")
+	if err := outputRemoteResult(result, redactEngine, cmd); err != nil {
+		return err
+	}
+	return exitCodeError{code: exitcode.InvalidInput}
+}
+
 func cleanManifest(ctx context.Context, tr transport.Transport, manifest *session.Manifest) error {
 	if err := session.ValidateRootDir(manifest.RootDir, manifest.Target.Kind); err != nil {
 		return err
@@ -619,12 +714,12 @@ func cleanManifest(ctx context.Context, tr transport.Transport, manifest *sessio
 	return lastErr
 }
 
-func writeRemoteManifest(ctx context.Context, t *target.Target, manifest *session.Manifest) error {
+func writeRemoteManifest(ctx context.Context, t *target.Target, manifest *session.Manifest, sshOptions sshtransport.Options) error {
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return err
 	}
-	tr := sshtransport.NewTransport(t, nil)
+	tr := sshtransport.NewTransportWithOptions(t, nil, sshOptions)
 	remotePath := session.ShellPath(filepath.Join(manifest.RootDir, "manifest.json"))
 	// Write manifest using cat over ssh
 	res, err := tr.Run(ctx, transport.RemoteCommand{

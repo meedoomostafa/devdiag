@@ -6,6 +6,7 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/collectors"
 	cicollector "github.com/meedoomostafa/devdiag/internal/collectors/ci"
 	composecollector "github.com/meedoomostafa/devdiag/internal/collectors/compose"
+	configcollector "github.com/meedoomostafa/devdiag/internal/collectors/config"
 	envcollector "github.com/meedoomostafa/devdiag/internal/collectors/env"
 	hostcollector "github.com/meedoomostafa/devdiag/internal/collectors/host"
 	hostruncollector "github.com/meedoomostafa/devdiag/internal/collectors/hostruntime"
@@ -20,6 +21,7 @@ var checkCiCmd = &cobra.Command{
 	Args:  cobra.MaximumNArgs(1),
 	RunE: makeCheckRun(func() rules.PolicyEngine { return rules.NewM8Engine() }, func(path string) []collectors.Collector {
 		return []collectors.Collector{
+			&configcollector.Collector{Root: path},
 			&cicollector.Collector{Root: path},
 			&envcollector.Collector{Root: path},
 			&composecollector.Collector{Root: path},

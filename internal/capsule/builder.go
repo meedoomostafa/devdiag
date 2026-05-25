@@ -2,15 +2,18 @@ package capsule
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/meedoomostafa/devdiag/internal/output"
 	"github.com/meedoomostafa/devdiag/internal/repro"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
@@ -20,6 +23,7 @@ type Builder struct {
 	RedactionStatus string
 	DevDiagVersion  string
 	TraceArtifact   []byte // optional redacted trace result JSON
+	LogArtifacts    map[string][]byte
 }
 
 // NewBuilder creates a capsule builder.
@@ -33,6 +37,14 @@ func NewBuilder(redactionStatus, version string) *Builder {
 // SetTraceArtifact attaches a redacted trace result to the capsule.
 func (b *Builder) SetTraceArtifact(data []byte) {
 	b.TraceArtifact = data
+}
+
+// SetLogArtifact attaches a redacted log file under logs/.
+func (b *Builder) SetLogArtifact(name string, data []byte) {
+	if b.LogArtifacts == nil {
+		b.LogArtifacts = map[string][]byte{}
+	}
+	b.LogArtifacts[name] = data
 }
 
 // Build creates a .tgz capsule from report and repro artifacts.
@@ -61,6 +73,14 @@ func (b *Builder) Build(w io.Writer, report *schema.Report, reproResult *repro.R
 		return err
 	}
 
+	reportMarkdown, err := b.markdownReport(report)
+	if err != nil {
+		return err
+	}
+	if err := b.addFile(tw, manifest, "report.md", reportMarkdown, now); err != nil {
+		return err
+	}
+
 	// Write findings as JSON
 	findingsData, err := json.MarshalIndent(report.Findings, "", "  ")
 	if err != nil {
@@ -78,6 +98,22 @@ func (b *Builder) Build(w io.Writer, report *schema.Report, reproResult *repro.R
 		}
 		if err := b.addFile(tw, manifest, "repro.json", reproData, now); err != nil {
 			return err
+		}
+	}
+
+	if len(b.LogArtifacts) > 0 {
+		if err := b.addDir(tw, "logs/", now); err != nil {
+			return err
+		}
+		logNames := make([]string, 0, len(b.LogArtifacts))
+		for name := range b.LogArtifacts {
+			logNames = append(logNames, name)
+		}
+		sort.Strings(logNames)
+		for _, name := range logNames {
+			if err := b.addFile(tw, manifest, filepath.Join("logs", name), b.LogArtifacts[name], now); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -111,6 +147,17 @@ func (b *Builder) Build(w io.Writer, report *schema.Report, reproResult *repro.R
 		}
 	}
 
+	if err := b.addDir(tw, "redaction/", now); err != nil {
+		return err
+	}
+	rulesData, err := json.MarshalIndent(b.redactionRulesApplied(), "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal redaction rules: %w", err)
+	}
+	if err := b.addFile(tw, manifest, "redaction/rules-applied.json", rulesData, now); err != nil {
+		return err
+	}
+
 	// Write manifest last so we have all file checksums
 	manifestData, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -121,6 +168,37 @@ func (b *Builder) Build(w io.Writer, report *schema.Report, reproResult *repro.R
 	}
 
 	return nil
+}
+
+func (b *Builder) markdownReport(report *schema.Report) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := (&output.MarkdownRenderer{}).Render(report, &buf); err != nil {
+		return nil, fmt.Errorf("render markdown report: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+func (b *Builder) redactionRulesApplied() RedactionRulesApplied {
+	applied := RedactionRulesApplied{
+		RedactionStatus:  b.RedactionStatus,
+		ReplacementToken: "<redacted>",
+		Rules: []string{
+			"env_values",
+			"cli_secret_flags",
+			"url_credentials",
+			"jwt_tokens",
+			"home_directory",
+		},
+	}
+	switch b.RedactionStatus {
+	case "strict":
+		applied.Rules = append(applied.Rules, "strict_long_tokens")
+	case "off":
+		applied.Rules = nil
+		applied.ReplacementToken = ""
+		applied.Notes = append(applied.Notes, "redaction disabled by explicit operator request")
+	}
+	return applied
 }
 
 func (b *Builder) addFile(tw *tar.Writer, manifest *Manifest, name string, data []byte, modTime time.Time) error {
@@ -198,4 +276,12 @@ type ManifestFile struct {
 	Path      string `json:"path"`
 	SizeBytes int    `json:"size_bytes"`
 	SHA256    string `json:"sha256"`
+}
+
+// RedactionRulesApplied describes the redaction profile represented in the capsule.
+type RedactionRulesApplied struct {
+	RedactionStatus  string   `json:"redaction_status"`
+	ReplacementToken string   `json:"replacement_token,omitempty"`
+	Rules            []string `json:"rules"`
+	Notes            []string `json:"notes,omitempty"`
 }

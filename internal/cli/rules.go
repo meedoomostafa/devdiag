@@ -1,8 +1,14 @@
 package cli
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+
 	"github.com/spf13/cobra"
 
+	"github.com/meedoomostafa/devdiag/internal/exitcode"
+	"github.com/meedoomostafa/devdiag/internal/rulepack"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 	"github.com/meedoomostafa/devdiag/internal/version"
 )
@@ -58,6 +64,54 @@ var rulesListCmd = &cobra.Command{
 	},
 }
 
+var rulesPacksCmd = &cobra.Command{
+	Use:   "packs",
+	Short: "List available rule packs",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return renderRulepackValue(cmd, rulepack.BuiltInPacks())
+	},
+}
+
+type rulepackValidationOutput struct {
+	rulepack.ValidationResult
+	Pack rulepack.Pack `json:"pack,omitempty"`
+}
+
+var rulesValidateCmd = &cobra.Command{
+	Use:   "validate <file>",
+	Short: "Validate a deterministic DevDiag rule-pack metadata file",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		data, err := os.ReadFile(args[0])
+		if err != nil {
+			return exitCodeError{code: exitcode.InvalidInput}
+		}
+		pack, result := rulepack.Validate(data)
+		output := rulepackValidationOutput{ValidationResult: result, Pack: pack}
+		if err := renderRulepackValue(cmd, output); err != nil {
+			return err
+		}
+		if !result.Valid {
+			return exitCodeError{code: exitcode.InvalidInput}
+		}
+		return nil
+	},
+}
+
+func renderRulepackValue(cmd *cobra.Command, value any) error {
+	switch flagFormat {
+	case "json":
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(value)
+	case "ndjson":
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(value)
+	default:
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "%+v\n", value)
+		return err
+	}
+}
+
 func availableRuleFindings() []schema.Finding {
 	rules := []struct {
 		id    string
@@ -81,6 +135,8 @@ func availableRuleFindings() []schema.Finding {
 		{"F-SVC-001", "Required service inactive"},
 		{"F-FS-001", "Script missing executable bit"},
 		{"F-PERM-002", "Root-owned workspace artifact"},
+		{"F-SEC-SELINUX-001", "SELinux denial likely blocking project access"},
+		{"F-SEC-APPARMOR-001", "AppArmor denial likely blocking project access"},
 		{"F-DOCKER-001", "Docker daemon inactive or inaccessible"},
 		{"F-DOCKER-002", "Docker socket permission denied"},
 		{"F-DOCKER-003", "Docker Compose plugin missing"},
@@ -88,6 +144,13 @@ func availableRuleFindings() []schema.Finding {
 		{"F-CONTAINER-001", "Compose service unhealthy"},
 		{"F-CONTAINER-003", "Compose service exited"},
 		{"F-REPRO-001", "Reproduced command failure"},
+		{"F-REPRO-002", "Permission denied during command execution"},
+		{"F-REPRO-003", "Missing file or command not found"},
+		{"F-REPRO-004", "Address already in use (port conflict)"},
+		{"F-REPRO-005", "Connection refused or network unreachable"},
+		{"F-REPRO-006", "Runtime version failure during command execution"},
+		{"F-REPRO-007", "Dependency resolver failure"},
+		{"F-REPRO-008", "Compose interpolation or config error"},
 		{"F-REPRO-009", "Command timed out"},
 		{"F-GPU-001", "NVIDIA hardware present but driver unavailable"},
 		{"F-GPU-002", "Secure Boot may block NVIDIA module"},
@@ -134,5 +197,7 @@ func availableRuleFindings() []schema.Finding {
 
 func init() {
 	rulesCmd.AddCommand(rulesListCmd)
+	rulesCmd.AddCommand(rulesPacksCmd)
+	rulesCmd.AddCommand(rulesValidateCmd)
 	rootCmd.AddCommand(rulesCmd)
 }

@@ -52,8 +52,10 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		{Source: "host_disk_path", Value: path},
 		{Source: "host_disk_free_bytes", Value: fmt.Sprintf("%d", freeBytes)},
 		{Source: "host_disk_free_pct", Value: fmt.Sprintf("%.1f", freeBytesPct)},
+		{Source: "host_disk_total_inodes", Value: fmt.Sprintf("%d", totalInodes)},
 		{Source: "host_disk_free_inodes", Value: fmt.Sprintf("%d", freeInodes)},
 		{Source: "host_disk_free_inodes_pct", Value: fmt.Sprintf("%.1f", freeInodesPct)},
+		{Source: "host_disk_inodes_available", Value: boolStr(totalInodes > 0)},
 	}
 
 	return schema.CollectorResult{
@@ -61,4 +63,11 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		Status:   schema.CollectorOK,
 		Evidence: evidence,
 	}, nil
+}
+
+func boolStr(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
 }

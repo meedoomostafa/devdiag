@@ -48,6 +48,20 @@ func TestShellPath(t *testing.T) {
 	}
 }
 
+func TestShellQuote(t *testing.T) {
+	tests := map[string]string{
+		"":               "''",
+		"simple":         "'simple'",
+		"mkdir -p $HOME": "'mkdir -p $HOME'",
+		"can't touch":    "'can'\"'\"'t touch'",
+	}
+	for input, want := range tests {
+		if got := ShellQuote(input); got != want {
+			t.Fatalf("ShellQuote(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestValidateRootDir(t *testing.T) {
 	tests := []struct {
 		dir   string

@@ -248,3 +248,47 @@ func TestTransportUpload_CustomPortPassesSeparateScpPortArgs(t *testing.T) {
 		t.Fatalf("scp args = %#v, want %#v", runner.calls[0].args, want)
 	}
 }
+
+func TestTransportSSHOptionsPassedToSSHAndSCP(t *testing.T) {
+	opts := Options{
+		IdentityFile:          "/tmp/devdiag-key",
+		UserKnownHostsFile:    "/tmp/devdiag-known-hosts",
+		StrictHostKeyChecking: "accept-new",
+	}
+	runner := &recordingRunner{res: cmdrunner.Result{ExitCode: 0}}
+	tr := NewTransportWithOptions(&target.Target{Kind: target.KindSSH, User: "user", Host: "host", Port: 2222}, runner, opts)
+
+	sshArgs := tr.sshArgs(true)
+	for _, want := range []string{
+		"-i", "/tmp/devdiag-key",
+		"UserKnownHostsFile=/tmp/devdiag-known-hosts",
+		"StrictHostKeyChecking=accept-new",
+	} {
+		if !containsArg(sshArgs, want) {
+			t.Fatalf("ssh args missing %q: %#v", want, sshArgs)
+		}
+	}
+
+	if err := tr.Upload(context.Background(), "/tmp/local", "/tmp/remote"); err != nil {
+		t.Fatalf("Upload error: %v", err)
+	}
+	scpArgs := runner.calls[0].args
+	for _, want := range []string{
+		"-i", "/tmp/devdiag-key",
+		"UserKnownHostsFile=/tmp/devdiag-known-hosts",
+		"StrictHostKeyChecking=accept-new",
+	} {
+		if !containsArg(scpArgs, want) {
+			t.Fatalf("scp args missing %q: %#v", want, scpArgs)
+		}
+	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}

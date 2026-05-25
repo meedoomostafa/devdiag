@@ -54,10 +54,15 @@ func TestCollector_UsesCommandRunnerForPodmanProbes(t *testing.T) {
 			Stdout: `{
 				"host": {
 					"remoteSocket": {"path": "/run/user/1000/podman/podman.sock"},
+					"networkBackend": "netavark",
+					"rootlessNetworkCmd": "pasta",
+					"idMappings": {"uidmap": [{"container_id": 0}, {"container_id": 1}], "gidmap": [{"container_id": 0}, {"container_id": 1}]},
 					"security": {"rootless": true, "uidmap": [{"container_id": 0}], "gidmap": [{"container_id": 0}]},
+					"pasta": {"executable": "/usr/bin/pasta"},
+					"slirp4netns": {"executable": "/usr/bin/slirp4netns"},
 					"cgroupManager": "systemd"
 				},
-				"store": {"graphRoot": "/home/user/.local/share/containers/storage", "graphDriverName": "overlay"}
+				"store": {"graphRoot": "/home/user/.local/share/containers/storage", "runRoot": "/run/user/1000/containers", "graphDriverName": "overlay"}
 			}`,
 		},
 		"podman ps -a --format json": {
@@ -78,6 +83,13 @@ func TestCollector_UsesCommandRunnerForPodmanProbes(t *testing.T) {
 	}
 	assertPodmanEvidence(t, res.Evidence, "podman_binary", "present")
 	assertPodmanEvidence(t, res.Evidence, "podman_rootless", "true")
+	assertPodmanEvidence(t, res.Evidence, "podman_network_backend", "netavark")
+	assertPodmanEvidence(t, res.Evidence, "podman_rootless_network_cmd", "pasta")
+	assertPodmanEvidence(t, res.Evidence, "podman_uid_map", "2")
+	assertPodmanEvidence(t, res.Evidence, "podman_gid_map", "2")
+	assertPodmanEvidence(t, res.Evidence, "podman_pasta_executable", "/usr/bin/pasta")
+	assertPodmanEvidence(t, res.Evidence, "podman_slirp4netns_executable", "/usr/bin/slirp4netns")
+	assertPodmanEvidence(t, res.Evidence, "podman_run_root", "/run/user/1000/containers")
 	assertPodmanEvidence(t, res.Evidence, "podman_container_api_status", "running")
 	if len(runner.Calls) != 3 {
 		t.Fatalf("expected 3 runner calls, got %d", len(runner.Calls))
@@ -102,6 +114,32 @@ func TestCollector_PodmanNotFoundFromRunner(t *testing.T) {
 		t.Fatalf("expected applicable=false when podman is not found, got %v", res.Applicable)
 	}
 	assertPodmanEvidence(t, res.Evidence, "podman_binary", "not_found")
+}
+
+func TestCollector_PodmanRuntimeDirFailureEvidence(t *testing.T) {
+	runner := cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+		"podman --version": {
+			Command:  "podman",
+			ExitCode: 0,
+			Stdout:   "podman version 5.0.0\n",
+		},
+		"podman info --format json": {
+			Command:  "podman",
+			ExitCode: 125,
+			Stderr:   "cannot mkdir /run/user/1000/libpod: permission denied",
+		},
+	})
+
+	c := &Collector{Runner: runner}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+	if res.Status != schema.CollectorUnavailable {
+		t.Fatalf("status = %s, want unavailable", res.Status)
+	}
+	assertPodmanEvidence(t, res.Evidence, "podman_binary", "present")
+	assertPodmanEvidence(t, res.Evidence, "podman_runtime_dir_error", "true")
 }
 
 func assertPodmanEvidence(t *testing.T, evidence []schema.Evidence, source, want string) {

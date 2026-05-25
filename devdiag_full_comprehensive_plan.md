@@ -2847,15 +2847,20 @@ Exit criteria:
 
 **Goal:** Turn local CLI trust into team adoption.
 
-**Duration:** after open-source traction
+**Duration:** open-source team workflow slice now; hosted product surface later
 
-Deliverables:
+Open-source deliverables:
 
-- Policy packs.
-- Rule pack registry.
+- Shareable `devdiag.yaml` team baseline config.
+- Deterministic rule-pack listing and metadata validation.
 - Team baseline configs.
+- Issue-template generation from saved findings and capsule metadata.
+- Stable `capsule inspect` JSON for team review workflows.
+
+Future hosted/commercial deliverables:
+
+- Private rule-pack registry.
 - Capsule viewer.
-- Issue template generator.
 - VS Code/Zed extension.
 - Enterprise redaction policies.
 
@@ -3187,3 +3192,155 @@ Once that is trusted, every other layer becomes natural.
 ## 25. One-Sentence Pitch
 
 **DevDiag is a Linux-first diagnostic CLI that correlates repo metadata, host state, containers, services, logs, and optional traces to explain broken developer environments with evidence and safe fixes.**
+
+---
+
+## 26. Current Implementation Audit and Findings Notes — 2026-05-20
+
+This section records the current codebase review against the plan, with May 2026 ecosystem assumptions.
+
+### 26.1 May 2026 Sync
+
+- Go `1.25` is the repository minimum target. It is not the latest Go line as of this audit; official Go release history lists Go `1.26.3` and Go `1.25.10` as released on 2026-05-07, so CI must keep a Go `1.25` minimum gate and a Go `1.26` compatibility gate before release.
+- GitHub Actions behavior must stay aligned with current workflow-command environment files, including `$GITHUB_ENV`, `$GITHUB_OUTPUT`, `$GITHUB_STEP_SUMMARY`, annotations, and `add-mask` log masking.
+- Docker Compose environment precedence and the Compose Develop/watch specification remain active plan inputs.
+- Podman/rootless and NVIDIA Container Toolkit diagnostics must remain separate paths because Docker, Podman, rootless storage, NVIDIA CDI, and GPU runtime failures produce different evidence.
+- OPA/Rego and CUE remain future hardening layers. Current milestone delivery still uses deterministic Go rule engines and Go schema tests.
+
+### 26.2 Milestone Count Status
+
+| Milestone | Current count status | Evidence and notes |
+| --- | --- | --- |
+| M0 Product skeleton and invariants | Counts | CLI, global flags, schema, redaction, renderer tests, `doctor self`, and rule listing exist. |
+| M1 Repo-aware static diagnosis | Counts with fixes applied | Repo/env/runtime/git/compose parsing exists. `.env.example` and similar templates are now treated as informational tracked templates, not risky tracked env files. |
+| M2 Host runtime and service collectors | Counts with fixes applied | Host/runtime/disk/ports/network/systemd/permission collectors exist. Filesystems that report inode totals as `0` are now treated as inode-stat unavailable instead of inode exhaustion. |
+| M3 Docker/Podman diagnosis | Counts | Docker, Podman, Compose status, SELinux/AppArmor state evidence, and bounded SELinux/AppArmor denial correlation exist. SELinux multi-line audit records are correlated by audit ID for project-root attribution, and SELinux/AppArmor findings include non-destructive container label/profile guidance. Podman rootless evidence now covers modern network/runtime signals (`netavark`, `pasta`/`slirp4netns`, UID/GID maps, run root) and runtime-dir failures. Live-gated Docker/Podman collector acceptance passed on 2026-05-24. Deeper runtime mount attribution remains future hardening. |
+| M4 Repro runner and support capsule | Counts with local validation | `repro` and capsule commands exist. Command-level temp-repo tests now prove failed repro runs persist redacted report/repro/log artifacts, avoid raw secret leakage in args/stdout/stderr/timeline evidence, emit redacted repro NDJSON event records, flush the redacted `repro_start` record before the child command exits, classify every documented M4 repro finding category through golden fixtures, map runtime-version failures to `F-REPRO-006`, package redacted stdout/stderr logs into capsules, and inspect generated capsules as JSON without exposing raw logs. Capsules include `report.md` and `redaction/rules-applied.json`. |
+| M5 Safe fix planner | Counts | `fix --templates`, `fix --list`, saved report flow, guarded/manual/blocklist concepts, and safe/manual/guarded apply-flow tests exist. Safe `chmod-script` apply writes an audit entry; manual apply returns unsafe-refused instead of silently succeeding. Guarded `systemctl daemon-reload` requires fresh data and interactive TTY confirmation, with fake-command PTY validation. `compose-up` is a guarded Docker Compose proposal with validated service evidence, project-directory scoping, rollback metadata, and JSON template metadata coverage. Findings that resolve to multiple proposals require an explicit `--hint <hint-id>` selector before `--apply` can mutate anything. Real service mutation remains operator-gated and is future release hardening, not a milestone blocker. |
+| M6 GPU/CUDA and AI/ML pack | Counts | GPU, CUDA, Python ML, Docker GPU, and cache collectors/rules exist. `check containers --gpu` is accepted as the plan-compatible container GPU entry point. CUDA collection now records driver-supported CUDA version and compatibility status when `nvcc` and `nvidia-smi` expose enough evidence. Cache ownership and no-GPU `applicable:false` behavior are covered. Live host validation on 2026-05-24 reported an NVIDIA RTX 3050 and exercised the Docker GPU verifier without pulling images. |
+| M7 Trace mode | Counts | `trace` exists with scoped tracing and redacted reports. Unavailable `strace` returns machine-readable JSON with exit code `7`; fake-`strace` command tests cover ptrace permission denial, successful report/trace artifact persistence, timeout-to-partial artifact behavior, and analyzer findings from parsed trace evidence. eBPF remains explicitly unavailable. A live-gated real-`strace` test exists; the 2026-05-24 host did not have `strace` installed. |
+| M8 CI/local parity and GitHub Action | Counts | GitHub Actions/GitLab parsing and M8 rules exist. `scan --ci` forces CI collection/evaluation. CI command finding titles are summarized while full commands remain in evidence. `devdiag.yaml` plus legacy config names support explicit CI/local env parity ignore profiles for project-specific key asymmetry. The composite GitHub Action has local metadata and shell-path tests for annotations, JSON artifact creation, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY`, forced CI mode, path quoting, configurable severity-threshold findings exits, `add-mask` registration, and redacted JSON artifact behavior. Repository CI gates Go `1.25` minimum and Go `1.26` compatibility. Hosted CI artifact/UI validation remains release signoff evidence. |
+| M9 Remote environment sync | Counts for SSH/container; Kubernetes deferred | SSH/container target handling exists, Kubernetes targets now return explicit unsupported output instead of implying dry-run support, `remote doctor` high findings now return findings exit code `1`, failed `remote sync` uploads now return nonzero while preserving machine-readable failed JSON, and refused/partial `remote clean` paths now return nonzero. Live-gated SSH and Docker container verification now prove doctor, dry-run sync, sync, status, enter planning, partial cleanup, and final cleanup. Kubernetes is formally scoped out of M9 and remains unsupported until a later `kubectl` transport slice. |
+| M10 Agentic interceptor and sandbox | Counts with deterministic local implementation | `devdiag agent explain`, `devdiag agent run -- <cmd>`, and `devdiag agent sandbox --patch <patch> -- <cmd>` exist. M10 uses an agent-safe untrusted-context schema, redacted command output, prompt-injection evidence, timeout-aware command execution, isolated patch sandboxing, and cleanup-by-default. Provider-backed LLM integration remains future hardening and is not required for M10. |
+| M11 Team product layer | Counts for the open-source team workflow slice | `devdiag.yaml` is the preferred shareable team baseline config while `.devdiag/` remains local artifact storage. `devdiag rules packs`, `devdiag rules validate`, and `devdiag issue template` exist. `capsule inspect --format json` now exposes stable review fields including run ID, redaction status, file count, and review summary. Hosted SaaS, paid registry, editor extensions, OPA/Rego, and CUE remain future hardening and are not M11 blockers. |
+
+### 26.3 Findings from Real-Project Scans
+
+Read-only scans were run against:
+
+- `~/Bosla/BoslaPipeline`
+- `~/Bosla/bosla-ai-frontend`
+- `~/Bosla/API`
+- `~/Bosla/.venv`
+- `~/RiderProjects/Villa-Web-API`
+- `~/RiderProjects/E-Commerce-App`
+- `~/RiderProjects/E-CommerceApi`
+- `~/RiderProjects/obj`
+
+Validated findings:
+
+- Machine JSON stdout is clean when stdout/stderr are separated. The combined terminal transcript may show log lines before JSON because stderr and stdout are displayed together by the runner.
+- Docker socket access is denied in this environment and should remain a diagnostic finding/status, not an internal DevDiag failure.
+- Podman rootless `info` succeeds in this environment with `pasta`, SELinux
+  enabled, and UID/GID maps present, but no live Podman container target was
+  available during the M9 verification pass.
+- Direct live-tool checks on 2026-05-21 confirm the remaining host blockers:
+  Docker client `29.5.0` and Compose plugin `5.1.3` are present but the
+  server socket returns permission denied; `podman info` fails creating
+  `/run/user/1000/libpod`; `strace` is not installed; `nvidia-smi` cannot
+  communicate with the NVIDIA driver.
+- `devdiag check gpu --format json` and `devdiag check containers --gpu --format
+  json` now report `gpu_nvidia_smi_status=error`,
+  `gpu_nvidia_smi_exit_code=9`, and `F-GPU-001` for the local NVIDIA driver
+  failure instead of returning only partial collector notes.
+- Current host disk pressure is still close to the warning boundary, but the
+  2026-05-22 scan saw `/` at about 90% used with 20G available, so `F-DISK-001`
+  does not appear in the latest real-project scan matrix.
+- Some external project repos are dirty; this is currently informational evidence only.
+- Several scans found missing env keys, CI/local parity drift, Docker/Podman unavailability, and local runtime differences as expected.
+- Non-project glob entries such as `~/Bosla/.venv` and
+  `~/RiderProjects/obj` are handled as edge-case scan targets: Git is reported
+  unavailable where appropriate, but the scan still exits successfully and emits
+  valid JSON.
+
+Latest read-only scan matrix after the 2026-05-22 M9 cleanup validation audit:
+
+| Project | Collector status summary | Finding IDs |
+| --- | --- | --- |
+| `~/Bosla/API` | Core collectors OK; `systemd`, `docker`, and `podman` unavailable in this host environment. | `F-CI-ENV-002x1`, `F-CI-PACKAGE-001x1`, `F-DOCKER-002x1`, `F-ENV-001x1`, `F-PODMAN-001x1` |
+| `~/Bosla/bosla-ai-frontend` | Core collectors OK; `systemd`, `docker`, and `podman` unavailable in this host environment. | `F-CI-COMMAND-001x10`, `F-CI-ENV-001x1`, `F-CI-ENV-002x1`, `F-CI-PACKAGE-001x3`, `F-DOCKER-002x1`, `F-ENV-001x1`, `F-PODMAN-001x1` |
+| `~/Bosla/BoslaPipeline` | Core collectors OK; `systemd`, `docker`, and `podman` unavailable in this host environment. | `F-CI-ENV-001x1`, `F-CI-ENV-002x1`, `F-CI-PACKAGE-001x1`, `F-DOCKER-002x1`, `F-ENV-001x1`, `F-PODMAN-001x1` |
+| `~/Bosla/.venv` | Non-project edge-case target; core collectors OK; `git` and `systemd` unavailable in this host environment. | None |
+| `~/RiderProjects/E-CommerceApi` | Core collectors OK; `systemd`, `docker`, and `podman` unavailable in this host environment. | `F-DOCKER-002x1`, `F-PODMAN-001x1`, `F-RUNTIME-004x1`, `F-RUNTIME-DECL-001x1` |
+| `~/RiderProjects/E-Commerce-App` | Core collectors OK; `systemd`, `docker`, and `podman` unavailable in this host environment. | `F-DOCKER-002x1`, `F-PODMAN-001x1` |
+| `~/RiderProjects/Villa-Web-API` | Core collectors OK; `systemd` unavailable in this host environment. | None |
+| `~/RiderProjects/obj` | Non-project edge-case target; core collectors OK; `git` and `systemd` unavailable in this host environment. | None |
+
+False positives or noisy output corrected by this audit:
+
+- Safe tracked templates such as `.env.example`, `.env.sample`, `.env.template`, `.env.dist`, `.env.schema`, `.env.default`, and `.env.defaults` no longer trigger `F-GIT-001`.
+- Filesystems that expose no inode accounting no longer trigger `F-DISK-001` solely because inode totals and free counts are `0`.
+- Multiline CI scripts no longer expand finding titles into very large, annotation-hostile text. Full command evidence remains attached to the finding.
+- CI env parity findings now group missing keys into one finding per direction (`F-CI-ENV-001` and `F-CI-ENV-002`) while preserving every key as evidence.
+- Optional `.devdiag.yml`/`.devdiag.yaml` config now supports `ci.env.ignore_missing_local` and `ci.env.ignore_missing_ci` key-name lists. This suppresses intentional CI-only or local-only env key asymmetry without exposing secret values and without weakening the default parity checks.
+- `check security` now exposes non-mutating SELinux/AppArmor state evidence.
+- Security collection now scans bounded tails of common audit/kernel logs and emits concise `selinux_denial` and `apparmor_denial` evidence. `scan` filters these log lines to the scanned root path to avoid unrelated stale host denials; SELinux multi-line audit records are correlated by audit ID so a companion `CWD` record can attribute the denial to the scanned project root. `check security` can report broader host denials.
+- SELinux container-domain denials against generic host labels now emit `container_label_hint=mount_relabel_z_or_Z` evidence and `F-SEC-SELINUX-001` surfaces non-destructive `:z`/`:Z` relabel guidance. AppArmor `docker-default` denials now surface profile-review guidance without recommending AppArmor disablement.
+- `capsule create --format json` now emits machine-readable JSON on stdout, with progress logs on stderr.
+- `repro --format json -- <cmd>` now has command-level coverage for failed-command artifact persistence. Saved `report.json`, `repro.json`, `logs/command.stdout.log`, and `logs/command.stderr.log` are redacted, including uppercase `KEY=value` stdout/stderr lines, command args, and timeline details. `repro --format ndjson` now emits redacted repro timeline/result/finding records and flushes the redacted `repro_start` record before the child command exits. `capsule create --run-id <run_id>` now packages redacted command stdout/stderr logs, writes a redacted `report.md`, records redaction provenance in `redaction/rules-applied.json`, and re-applies the current redaction profile to loaded report/repro/log artifacts before writing the capsule. `capsule inspect --format json` is covered against a generated capsule and returns metadata/file lists without raw log exposure.
+- Repro classifier golden fixtures now cover every documented M4 supported finding category, including runtime-version failure. Runtime-version repro output now maps through M1 to `F-REPRO-006`, and `rules list` exposes the specific `F-REPRO-002` through `F-REPRO-008` repro rules instead of only listing generic failure and timeout rules.
+- Empty `fix --list --format json` output now renders as `[]`, not JSON `null`.
+- `fix --apply` now treats refused manual, guarded, and blocked proposals as unsafe-refused instead of returning success after an executor refusal. Command-level tests cover safe `chmod-script` apply with audit output and manual proposal refusal.
+- The guarded `systemctl-daemon-reload` template is now registered as guarded, uses a proper terminal check via `term.IsTerminal`, and was validated with a live PTY smoke using a fake `systemctl` binary. Non-interactive guarded apply is refused with audit evidence.
+- The `compose-up` template is now guarded instead of manual, binds only validated `compose_service_<service>_status` evidence, scopes the command with `--project-directory`, exposes `docker compose stop <service>` rollback metadata, and is covered by planner plus CLI JSON tests. `fix --templates --format json` now exposes command, rollback, risk text, blocked reason, and required-evidence metadata for auditability.
+- `fix --apply` now refuses multi-proposal findings unless the operator chooses one proposal with `--hint <hint-id>`; unknown hints are invalid input and do not fall back to applying another proposal.
+- `trace --format json` now emits a normal report with collector status `unavailable` and `trace_unavailable_reason=strace_not_found` when `strace` is absent; exit code `7` is preserved.
+- Fake-`strace` command tests now prove CLI-level handling for ptrace permission denial and successful trace artifact persistence under `.devdiag/runs/<run_id>/trace-result.json` plus `.devdiag/latest/trace-result.json`.
+- Fake-`strace` timeout tests now prove the CLI returns a timeout collector, persists a redacted partial trace artifact with `timed_out`, and exits through the repro-failed path. Fake trace evidence also proves parsed syscall events can become CLI findings; an `EADDRINUSE` bind event produces `F-TRACE-NET-002` with port and errno evidence.
+- The composite GitHub Action now defaults to `--ci`, writes a JSON report artifact path to `GITHUB_OUTPUT`, uploads `devdiag-report` with `actions/upload-artifact@v4`, writes a concise `GITHUB_STEP_SUMMARY`, preserves non-finding failures, supports configurable findings failure thresholds through `fail-severity`, registers optional `mask-values` with GitHub `add-mask`, and can avoid failing a job for DevDiag findings with `fail-on-findings: 'false'`. Local action-smoke tests execute the composite shell body with a fake `devdiag` binary and verify artifact, summary, output, path quoting, threshold forwarding, redaction forwarding, add-mask registration, and exit-code behavior.
+- GPU diagnosis now records structured `gpu_nvidia_smi_status` and
+  `gpu_nvidia_smi_exit_code` evidence. M6 now treats NVIDIA hardware plus a
+  loaded kernel module but failed `nvidia-smi` enumeration as `F-GPU-001`,
+  covering partially installed or unhealthy driver stacks.
+- CUDA diagnosis now records `cuda_driver_supported_version` and
+  `cuda_compatibility` when `nvcc` and `nvidia-smi` expose enough evidence to
+  compare the installed toolkit against the driver-supported CUDA version.
+- Podman diagnosis now records modern rootless evidence for network backend,
+  `pasta`/`slirp4netns`, UID/GID maps, and run-root paths, and it marks
+  `/run/user`/libpod runtime-directory failures with explicit finding guidance.
+- `remote sync` failed-upload paths now preserve JSON output with
+  `status: "failed"` and return exit code `6`, so automation cannot mistake a
+  failed remote injection for success.
+- `remote doctor` high-severity SSH/container findings now preserve JSON output
+  and return exit code `1`, aligning remote diagnostics with the documented
+  high-finding exit contract.
+- `remote clean` refused and partial cleanup paths now preserve JSON output and
+  return exit codes `5` and `3` respectively, so rollback failures are not
+  invisible to automation.
+- `remote` SSH targets now support explicit identity-file, known-hosts-file,
+  and strict-host-key-checking flags. Live-gated M9 tests use those flags to
+  verify SSH sync against an isolated temporary sshd without editing the user's
+  real SSH configuration.
+- `agent explain`, `agent run`, and `agent sandbox` now provide the deterministic
+  M10 surface. Agent context inputs are marked untrusted, secret-bearing command
+  output is redacted, obvious instruction-injection and secret-exfiltration text
+  is reported as evidence, and patch sandbox runs happen in a temporary copied
+  workspace that is removed unless `--keep` is set.
+- `devdiag.yaml` is now the canonical shareable team baseline config name,
+  with legacy `.devdiag.yml`/`.devdiag.yaml` still supported. Rule-pack metadata
+  can be listed and validated with `rules packs` and `rules validate`.
+  `issue template` generates redacted issue-ready Markdown/JSON from saved runs,
+  optional capsule metadata, and finding details. `capsule inspect --format json`
+  now exposes stable review fields: `run_id`, `redaction_status`, `file_count`,
+  and `review_summary`.
+
+### 26.4 Remaining Release Hardening and Deferred Work
+
+- SELinux/AppArmor denial correlation now covers bounded log evidence, SELinux audit-record project attribution through companion `CWD` records, and container label/profile guidance. Deeper runtime mount attribution from real Docker/Podman metadata remains future hardening.
+- Safe fix planner rollback metadata, guarded-template coverage, and explicit apply-selection semantics are covered locally. Live guarded-apply validation against real external services such as Docker Compose and systemd remains optional release evidence because those paths are intentionally operator-gated.
+- GitHub Action release packaging has an equivalent local metadata and shell-path audit. Hosted GitHub UI annotation display, artifact retention, and artifact download validation should still be checked before release.
+- Remote Kubernetes support is explicitly reported as unsupported and is formally deferred out of M9.
+- Live Docker and Podman collector checks passed on 2026-05-24. Docker GPU verification was exercised without pulling images; successful `docker run --gpus all ... nvidia-smi` remains optional release evidence on a host with a preloaded CUDA image or explicit pull permission.
+- Trace mode has a live-gated real-`strace` test. The 2026-05-24 host did not have `strace` installed, so live real-strace evidence remains a host-dependent release check.
+- CI/local env parity now avoids treating `.env.example` template keys as mandatory CI keys for `F-CI-ENV-002`, groups missing env keys for scanability, and supports explicit ignore profiles for intentional project-specific key asymmetry. Future work can broaden this into a full baseline/schema system if team workflows require it.
+- Full completion still requires unit tests, vet, build, command smoke tests, and real-use scans across the listed local projects after every blocker fix.

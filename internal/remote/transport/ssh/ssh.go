@@ -15,17 +15,45 @@ import (
 
 // Transport implements transport.Transport for SSH targets.
 type Transport struct {
-	Target *target.Target
-	Runner cmdrunner.CommandRunner
+	Target  *target.Target
+	Runner  cmdrunner.CommandRunner
+	Options Options
+}
+
+// Options carries explicit OpenSSH client options needed for non-default
+// identity and known-hosts setups.
+type Options struct {
+	IdentityFile          string
+	UserKnownHostsFile    string
+	StrictHostKeyChecking string
+}
+
+func (o Options) Args() []string {
+	var args []string
+	if o.IdentityFile != "" {
+		args = append(args, "-i", o.IdentityFile)
+	}
+	if o.UserKnownHostsFile != "" {
+		args = append(args, "-o", "UserKnownHostsFile="+o.UserKnownHostsFile)
+	}
+	if o.StrictHostKeyChecking != "" {
+		args = append(args, "-o", "StrictHostKeyChecking="+o.StrictHostKeyChecking)
+	}
+	return args
 }
 
 // NewTransport creates an SSH transport for the given target.
 // If runner is nil, a real runner is used.
 func NewTransport(t *target.Target, runner cmdrunner.CommandRunner) *Transport {
+	return NewTransportWithOptions(t, runner, Options{})
+}
+
+// NewTransportWithOptions creates an SSH transport with explicit OpenSSH options.
+func NewTransportWithOptions(t *target.Target, runner cmdrunner.CommandRunner, options Options) *Transport {
 	if runner == nil {
 		runner = cmdrunner.NewRealRunner()
 	}
-	return &Transport{Target: t, Runner: runner}
+	return &Transport{Target: t, Runner: runner, Options: options}
 }
 
 // Kind returns the transport kind.
@@ -37,6 +65,7 @@ func (t *Transport) Close() error { return nil }
 // sshArgs builds the base ssh arguments for the target.
 func (t *Transport) sshArgs(batchMode bool) []string {
 	args := []string{"-o", "ConnectTimeout=5"}
+	args = append(args, t.Options.Args()...)
 	if batchMode {
 		args = append(args, "-o", "BatchMode=yes")
 	}
@@ -104,7 +133,7 @@ func (t *Transport) Run(ctx context.Context, cmd transport.RemoteCommand) (*tran
 	args := t.sshArgs(false)
 	args = append(args, "--")
 	if len(cmd.Args) > 1 {
-		args = append(args, strings.Join(cmd.Args, " "))
+		args = append(args, shellCommand(cmd.Args))
 	} else {
 		args = append(args, cmd.Args...)
 	}
@@ -125,6 +154,7 @@ func (t *Transport) Upload(ctx context.Context, localDir, remoteDir string) erro
 		host = fmt.Sprintf("%s@%s", t.Target.User, t.Target.Host)
 	}
 	args := []string{"-r", "-o", "ConnectTimeout=5"}
+	args = append(args, t.Options.Args()...)
 	if t.Target.Port != 0 && t.Target.Port != 22 {
 		args = append(args, "-P", fmt.Sprintf("%d", t.Target.Port))
 	}
@@ -154,6 +184,7 @@ func (t *Transport) OpenShell(ctx context.Context, shell string) error {
 // It allocates a TTY, forwards stdin/stdout/stderr, and returns the shell's exit code.
 func (t *Transport) Enter(remoteDir string) error {
 	args := []string{"-t", "-o", "ConnectTimeout=10"}
+	args = append(args, t.Options.Args()...)
 	if t.Target.Port != 0 && t.Target.Port != 22 {
 		args = append(args, "-p", fmt.Sprintf("%d", t.Target.Port))
 	}
@@ -172,6 +203,14 @@ func (t *Transport) Enter(remoteDir string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func shellCommand(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, session.ShellQuote(arg))
+	}
+	return strings.Join(quoted, " ")
 }
 
 func classifySSHError(stderr string, exitCode int) string {

@@ -2,8 +2,10 @@ package fix
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -117,6 +119,61 @@ func TestExecutorSafe(t *testing.T) {
 	}
 	if len(data) == 0 {
 		t.Fatal("expected audit log entry")
+	}
+}
+
+func TestExecutorGuardedInteractiveConfirmationExecutes(t *testing.T) {
+	tmpDir := t.TempDir()
+	markerPath := filepath.Join(tmpDir, "daemon-reload-called")
+	fakeSystemctl := filepath.Join(tmpDir, "systemctl")
+	if err := os.WriteFile(fakeSystemctl, []byte("#!/bin/sh\ntouch "+markerPath+"\n"), 0o755); err != nil {
+		t.Fatalf("write fake systemctl: %v", err)
+	}
+
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdin pipe: %v", err)
+	}
+	if _, err := io.WriteString(stdinW, "yes\n"); err != nil {
+		t.Fatalf("write confirmation: %v", err)
+	}
+	if err := stdinW.Close(); err != nil {
+		t.Fatalf("close stdin writer: %v", err)
+	}
+	oldStdin := os.Stdin
+	os.Stdin = stdinR
+	t.Cleanup(func() {
+		os.Stdin = oldStdin
+		_ = stdinR.Close()
+	})
+
+	auditPath := filepath.Join(tmpDir, "audit.ndjson")
+	executor := NewExecutor(NewAuditLog(auditPath))
+	proposal := schema.FixProposal{
+		FindingID:      "F-SVC-001",
+		HintID:         "systemctl-daemon-reload",
+		Class:          schema.FixGuarded,
+		Source:         schema.FixSourceFreshScan,
+		Bin:            fakeSystemctl,
+		Args:           []string{"daemon-reload"},
+		ConfirmMessage: "Reload systemd manager configuration on this host.",
+	}
+	exec, err := executor.Execute(context.Background(), proposal, ExecutorOptions{Apply: true, Fresh: true, Interactive: true})
+	if err != nil {
+		t.Fatalf("guarded fix failed: %v", err)
+	}
+	if exec == nil || !exec.Success {
+		t.Fatalf("expected successful guarded execution, got %#v", exec)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("expected fake systemctl marker: %v", err)
+	}
+	auditData, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	if !strings.Contains(string(auditData), `"hint_id":"systemctl-daemon-reload"`) || !strings.Contains(string(auditData), `"success":true`) {
+		t.Fatalf("audit log missing guarded execution: %s", string(auditData))
 	}
 }
 

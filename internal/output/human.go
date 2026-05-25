@@ -12,6 +12,7 @@ import (
 // HumanRenderer emits terminal-friendly output with optional color.
 type HumanRenderer struct {
 	ColorMode ColorMode
+	Verbose   bool
 }
 
 func (r *HumanRenderer) Render(report *schema.Report, w io.Writer) error {
@@ -41,6 +42,18 @@ func (r *HumanRenderer) Render(report *schema.Report, w io.Writer) error {
 	b.WriteString(fmt.Sprintf("Redaction: %s\n", report.RedactionStatus))
 	if report.RedactionStatus == "off" {
 		b.WriteString("WARNING: redaction is disabled. Secrets may be visible.\n")
+	}
+	if r.Verbose && len(report.Collectors) > 0 {
+		b.WriteString("\nCollector evidence\n")
+		for _, c := range report.Collectors {
+			b.WriteString(fmt.Sprintf("- %s: %s\n", c.Name, c.Status))
+			for _, ev := range c.Evidence {
+				b.WriteString(fmt.Sprintf("  %s=%s\n", ev.Source, ev.Value))
+			}
+			for _, note := range c.Notes {
+				b.WriteString(fmt.Sprintf("  note=%s\n", note))
+			}
+		}
 	}
 
 	_, err := w.Write([]byte(b.String()))

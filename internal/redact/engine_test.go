@@ -63,6 +63,24 @@ func TestRedactString_EnvWithColon(t *testing.T) {
 	}
 }
 
+func TestRedactString_MultilineEnvValues(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	input := "API_KEY=secret123\nERR_TOKEN=secret456\nplain line"
+	got := e.RedactString(input, "log")
+	if got != "API_KEY=<redacted>\nERR_TOKEN=<redacted>\nplain line" {
+		t.Errorf("RedactString() = %q", got)
+	}
+}
+
+func TestRedactString_DoesNotRedactLowercaseDiagnostics(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	input := "exit_code=1"
+	got := e.RedactString(input, "log")
+	if got != input {
+		t.Errorf("RedactString() = %q, want %q", got, input)
+	}
+}
+
 func TestRedactString_StrictRedactsHexTokens(t *testing.T) {
 	e := NewEngine(LevelStrict)
 	input := "commit abcd1234abcd1234abcd1234abcd1234abcd1234 found"

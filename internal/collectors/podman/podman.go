@@ -49,6 +49,9 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	infoRes := runner.Run(cmdCtx, "podman", "info", "--format", "json")
 	cancel()
 	if infoRes.ExitCode != 0 {
+		if podmanRuntimeDirFailure(infoRes) {
+			evidence = append(evidence, schema.Evidence{Source: "podman_runtime_dir_error", Value: "true"})
+		}
 		return schema.CollectorResult{
 			Name:     c.Name(),
 			Status:   schema.CollectorUnavailable,
@@ -68,16 +71,48 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		if info.Host.Security.Rootless != nil && *info.Host.Security.Rootless {
 			evidence = append(evidence, schema.Evidence{Source: "podman_rootless", Value: "true"})
 		}
-		if info.Host.Security.UIDMap != nil {
+		if info.Host.NetworkBackend != "" {
 			evidence = append(evidence, schema.Evidence{
-				Source: "podman_uid_map",
-				Value:  fmt.Sprintf("%d", len(info.Host.Security.UIDMap)),
+				Source: "podman_network_backend",
+				Value:  info.Host.NetworkBackend,
 			})
 		}
-		if info.Host.Security.GIDMap != nil {
+		if info.Host.RootlessNetworkCmd != "" {
+			evidence = append(evidence, schema.Evidence{
+				Source: "podman_rootless_network_cmd",
+				Value:  info.Host.RootlessNetworkCmd,
+			})
+		}
+		if info.Host.Pasta.Executable != "" {
+			evidence = append(evidence, schema.Evidence{
+				Source: "podman_pasta_executable",
+				Value:  info.Host.Pasta.Executable,
+			})
+		}
+		if info.Host.Slirp4netns.Executable != "" {
+			evidence = append(evidence, schema.Evidence{
+				Source: "podman_slirp4netns_executable",
+				Value:  info.Host.Slirp4netns.Executable,
+			})
+		}
+		uidMapCount := len(info.Host.IDMappings.UIDMap)
+		if uidMapCount == 0 {
+			uidMapCount = len(info.Host.Security.UIDMap)
+		}
+		if uidMapCount > 0 {
+			evidence = append(evidence, schema.Evidence{
+				Source: "podman_uid_map",
+				Value:  fmt.Sprintf("%d", uidMapCount),
+			})
+		}
+		gidMapCount := len(info.Host.IDMappings.GIDMap)
+		if gidMapCount == 0 {
+			gidMapCount = len(info.Host.Security.GIDMap)
+		}
+		if gidMapCount > 0 {
 			evidence = append(evidence, schema.Evidence{
 				Source: "podman_gid_map",
-				Value:  fmt.Sprintf("%d", len(info.Host.Security.GIDMap)),
+				Value:  fmt.Sprintf("%d", gidMapCount),
 			})
 		}
 		if info.Host.CgroupManager != "" {
@@ -96,6 +131,12 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 			evidence = append(evidence, schema.Evidence{
 				Source: "podman_graph_driver",
 				Value:  info.Store.GraphDriverName,
+			})
+		}
+		if info.Store.RunRoot != "" {
+			evidence = append(evidence, schema.Evidence{
+				Source: "podman_run_root",
+				Value:  info.Store.RunRoot,
 			})
 		}
 	}
@@ -145,12 +186,31 @@ func commandFailure(res cmdrunner.Result) string {
 	return fmt.Sprintf("exit code %d", res.ExitCode)
 }
 
+func podmanRuntimeDirFailure(res cmdrunner.Result) bool {
+	text := strings.ToLower(res.Stderr + "\n" + res.Stdout)
+	return strings.Contains(text, "/run/user") ||
+		strings.Contains(text, "xdg_runtime_dir") ||
+		strings.Contains(text, "runtime dir") ||
+		strings.Contains(text, "runtime directory") ||
+		strings.Contains(text, "libpod")
+}
+
 // podmanInfo represents selected fields from `podman info --format json`.
 type podmanInfo struct {
 	Host struct {
 		RemoteSocket struct {
 			Path string `json:"path"`
 		} `json:"remoteSocket"`
+		NetworkBackend     string `json:"networkBackend"`
+		RootlessNetworkCmd string `json:"rootlessNetworkCmd"`
+		IDMappings         struct {
+			UIDMap []struct {
+				ContainerID int `json:"container_id"`
+			} `json:"uidmap,omitempty"`
+			GIDMap []struct {
+				ContainerID int `json:"container_id"`
+			} `json:"gidmap,omitempty"`
+		} `json:"idMappings"`
 		Security struct {
 			Rootless *bool `json:"rootless,omitempty"`
 			UIDMap   []struct {
@@ -160,10 +220,17 @@ type podmanInfo struct {
 				ContainerID int `json:"container_id"`
 			} `json:"gidmap,omitempty"`
 		} `json:"security"`
+		Pasta struct {
+			Executable string `json:"executable"`
+		} `json:"pasta"`
+		Slirp4netns struct {
+			Executable string `json:"executable"`
+		} `json:"slirp4netns"`
 		CgroupManager string `json:"cgroupManager"`
 	} `json:"host"`
 	Store struct {
 		GraphRoot       string `json:"graphRoot"`
+		RunRoot         string `json:"runRoot"`
 		GraphDriverName string `json:"graphDriverName"`
 	} `json:"store"`
 }

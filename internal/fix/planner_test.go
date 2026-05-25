@@ -143,6 +143,91 @@ func TestPlannerListAll(t *testing.T) {
 	}
 }
 
+func TestPlannerResolveComposeUpGuardedWithRollback(t *testing.T) {
+	report := makeTestReport([]schema.Finding{
+		{
+			ID:       "F-CONTAINER-001",
+			Title:    "Compose service 'api' is not running",
+			FixHints: []string{"compose-up"},
+			Evidence: []schema.Evidence{
+				{Source: "compose_service_api_status", Value: "exited"},
+			},
+		},
+	})
+
+	planner := NewPlanner()
+	proposals, err := planner.Resolve(report, ResolveOptions{
+		FindingID: "F-CONTAINER-001",
+		Source:    schema.FixSourceSavedReport,
+		RunID:     "test-run",
+		ReportAge: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if len(proposals) != 1 {
+		t.Fatalf("expected 1 proposal, got %d: %+v", len(proposals), proposals)
+	}
+	got := proposals[0]
+	if got.HintID != "compose-up" {
+		t.Fatalf("HintID = %q, want compose-up", got.HintID)
+	}
+	if got.Class != schema.FixGuarded {
+		t.Fatalf("Class = %q, want guarded", got.Class)
+	}
+	if got.Bin != "docker" {
+		t.Fatalf("Bin = %q, want docker", got.Bin)
+	}
+	wantArgs := []string{"compose", "--project-directory", "/tmp/repo", "up", "-d", "api"}
+	if len(got.Args) != len(wantArgs) {
+		t.Fatalf("Args = %v, want %v", got.Args, wantArgs)
+	}
+	for i := range wantArgs {
+		if got.Args[i] != wantArgs[i] {
+			t.Fatalf("Args = %v, want %v", got.Args, wantArgs)
+		}
+	}
+	wantRollback := []string{"docker", "compose", "--project-directory", "/tmp/repo", "stop", "api"}
+	if len(got.Rollback) != len(wantRollback) {
+		t.Fatalf("Rollback = %v, want %v", got.Rollback, wantRollback)
+	}
+	for i := range wantRollback {
+		if got.Rollback[i] != wantRollback[i] {
+			t.Fatalf("Rollback = %v, want %v", got.Rollback, wantRollback)
+		}
+	}
+	if got.ConfirmMessage == "" {
+		t.Fatal("guarded compose-up proposal missing confirm message")
+	}
+}
+
+func TestPlannerSkipsGuardedComposeUpForInvalidServiceEvidence(t *testing.T) {
+	report := makeTestReport([]schema.Finding{
+		{
+			ID:       "F-CONTAINER-001",
+			Title:    "Compose service has unsafe evidence",
+			FixHints: []string{"compose-up"},
+			Evidence: []schema.Evidence{
+				{Source: "compose_service_api;rm_status", Value: "exited"},
+			},
+		},
+	})
+
+	planner := NewPlanner()
+	proposals, err := planner.Resolve(report, ResolveOptions{
+		FindingID: "F-CONTAINER-001",
+		Source:    schema.FixSourceSavedReport,
+		RunID:     "test-run",
+		ReportAge: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if len(proposals) != 0 {
+		t.Fatalf("expected invalid compose service evidence to produce no guarded proposal, got %+v", proposals)
+	}
+}
+
 func TestRankProposals(t *testing.T) {
 	proposals := []schema.FixProposal{
 		{HintID: "manual", Class: schema.FixManual},

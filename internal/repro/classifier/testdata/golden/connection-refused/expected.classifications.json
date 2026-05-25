@@ -1,0 +1,7 @@
+[
+  {
+    "kind": "connection_refused",
+    "source_stream": "stderr",
+    "pattern_id": "conn-refused-001"
+  }
+]

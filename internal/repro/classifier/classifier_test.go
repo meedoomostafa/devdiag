@@ -1,6 +1,9 @@
 package classifier
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -123,4 +126,73 @@ func TestClassifier_MultipleMatches(t *testing.T) {
 	if len(results) < 2 {
 		t.Errorf("expected at least 2 classifications, got %d", len(results))
 	}
+}
+
+func TestClassifier_GoldenFixtures(t *testing.T) {
+	fixturesDir := filepath.Join("testdata", "golden")
+	entries, err := os.ReadDir(fixturesDir)
+	if err != nil {
+		t.Fatalf("read golden fixtures: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected classifier golden fixtures")
+	}
+
+	c := New()
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		t.Run(entry.Name(), func(t *testing.T) {
+			dir := filepath.Join(fixturesDir, entry.Name())
+			stdout := readOptionalFixture(t, filepath.Join(dir, "stdout.log"))
+			stderr := readOptionalFixture(t, filepath.Join(dir, "stderr.log"))
+			expectedData, err := os.ReadFile(filepath.Join(dir, "expected.classifications.json"))
+			if err != nil {
+				t.Fatalf("read expected classifications: %v", err)
+			}
+			var expected []classificationExpectation
+			if err := json.Unmarshal(expectedData, &expected); err != nil {
+				t.Fatalf("parse expected classifications: %v", err)
+			}
+
+			results := c.Classify(stdout, stderr)
+			if len(results) != len(expected) {
+				t.Fatalf("classification count = %d, want %d; results=%+v", len(results), len(expected), results)
+			}
+			for i, want := range expected {
+				got := results[i]
+				if got.Kind != want.Kind {
+					t.Fatalf("result[%d].kind = %q, want %q", i, got.Kind, want.Kind)
+				}
+				if got.SourceStream != want.SourceStream {
+					t.Fatalf("result[%d].source_stream = %q, want %q", i, got.SourceStream, want.SourceStream)
+				}
+				if got.PatternID != want.PatternID {
+					t.Fatalf("result[%d].pattern_id = %q, want %q", i, got.PatternID, want.PatternID)
+				}
+				if got.Excerpt == "" {
+					t.Fatalf("result[%d] missing excerpt", i)
+				}
+			}
+		})
+	}
+}
+
+type classificationExpectation struct {
+	Kind         string `json:"kind"`
+	SourceStream string `json:"source_stream"`
+	PatternID    string `json:"pattern_id"`
+}
+
+func readOptionalFixture(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ""
+		}
+		t.Fatalf("read fixture %s: %v", path, err)
+	}
+	return string(data)
 }

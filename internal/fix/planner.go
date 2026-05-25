@@ -2,6 +2,7 @@ package fix
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -158,7 +159,21 @@ func evidenceForFinding(finding *schema.Finding, evidenceMap map[string][]schema
 
 func validateEvidence(tmpl Template, evidence map[string]string, repoRoot string) (values map[string]string, missing []string, err error) {
 	values = make(map[string]string)
+	if repoRoot == "" {
+		repoRoot = "."
+	}
+	values["repo_root"] = filepath.Clean(repoRoot)
 	for _, req := range tmpl.RequiredEvidence {
+		if req == "compose_status" {
+			service, status, ok := composeStatusEvidence(evidence)
+			if !ok {
+				missing = append(missing, req)
+				continue
+			}
+			values["service"] = service
+			values["status"] = status
+			continue
+		}
 		val, ok := evidence[req]
 		if !ok || val == "" {
 			missing = append(missing, req)
@@ -220,6 +235,24 @@ func validateEvidence(tmpl Template, evidence map[string]string, repoRoot string
 		}
 	}
 	return values, missing, nil
+}
+
+func composeStatusEvidence(evidence map[string]string) (service string, status string, ok bool) {
+	for source, value := range evidence {
+		if !strings.HasPrefix(source, "compose_service_") || !strings.HasSuffix(source, "_status") {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(source, "compose_service_"), "_status")
+		validName, err := ValidateServiceName(name)
+		if err != nil {
+			continue
+		}
+		switch value {
+		case "exited", "dead", "restarting":
+			return validName, value, true
+		}
+	}
+	return "", "", false
 }
 
 func rankProposals(proposals []schema.FixProposal) []schema.FixProposal {

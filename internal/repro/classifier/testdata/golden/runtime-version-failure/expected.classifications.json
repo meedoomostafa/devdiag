@@ -1,0 +1,7 @@
+[
+  {
+    "kind": "runtime_version_failure",
+    "source_stream": "stderr",
+    "pattern_id": "runtime-version-001"
+  }
+]
