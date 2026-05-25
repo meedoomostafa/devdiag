@@ -11,13 +11,16 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/meedoomostafa/devdiag/internal/agent"
+	agentprovider "github.com/meedoomostafa/devdiag/internal/agent/provider"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 )
 
 var (
-	agentTimeout time.Duration
-	agentPatch   string
-	agentKeep    bool
+	agentTimeout  time.Duration
+	agentPatch    string
+	agentKeep     bool
+	agentProvider string
+	agentModel    string
 )
 
 var agentCmd = &cobra.Command{
@@ -45,6 +48,13 @@ var agentExplainCmd = &cobra.Command{
 			},
 			Redact: func(s string) string { return redactor.RedactString(s, "agent_context") },
 		})
+		providerResult := agentprovider.Explain(cmd.Context(), agentprovider.Request{
+			Context:  ctx,
+			Provider: agentProvider,
+			Model:    agentModel,
+			Redact:   func(s string) string { return redactor.RedactString(s, "agent_provider") },
+		})
+		ctx = agentprovider.ApplyResult(ctx, providerResult)
 		return renderAgentValue(cmd, ctx)
 	},
 }
@@ -115,6 +125,8 @@ var agentSandboxCmd = &cobra.Command{
 }
 
 func init() {
+	agentExplainCmd.Flags().StringVar(&agentProvider, "provider", agentprovider.ProviderDeterministic, "Explanation provider: deterministic, openai, local")
+	agentExplainCmd.Flags().StringVar(&agentModel, "model", "", "Provider model name")
 	agentRunCmd.Flags().DurationVar(&agentTimeout, "timeout", 30*time.Second, "Command timeout")
 	agentSandboxCmd.Flags().DurationVar(&agentTimeout, "timeout", 30*time.Second, "Sandbox command timeout")
 	agentSandboxCmd.Flags().StringVar(&agentPatch, "patch", "", "Patch file to apply inside the sandbox")
@@ -145,6 +157,12 @@ func renderAgentHuman(cmd *cobra.Command, value any) error {
 		b.WriteString("DevDiag agent context\n")
 		b.WriteString(fmt.Sprintf("Inputs: %d\n", len(v.Inputs)))
 		b.WriteString(fmt.Sprintf("Findings: %d\n", len(v.Findings)))
+		if v.ProviderUsed != "" {
+			b.WriteString(fmt.Sprintf("Provider: %s\n", v.ProviderUsed))
+		}
+		if v.Explanation != "" {
+			b.WriteString(fmt.Sprintf("Explanation: %s\n", v.Explanation))
+		}
 	case agent.RunResult:
 		b.WriteString("DevDiag agent run\n")
 		b.WriteString(fmt.Sprintf("Command: %s\n", v.Command))

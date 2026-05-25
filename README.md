@@ -126,9 +126,14 @@ devdiag remote clean user@host --dry-run
 devdiag remote doctor k8s:default/api-pod --dry-run --format json
 devdiag remote sync k8s:prod/default/api-pod --k8s-container app --dry-run --format json
 devdiag agent explain F-PORT-001 --format json
+devdiag agent explain logs/failure.log --provider openai --model gpt-5.1 --format json
 devdiag agent run -- npm test
 devdiag agent sandbox --patch fix.patch -- npm test
 ```
+
+`agent explain` defaults to the deterministic provider. OpenAI and local
+providers are opt-in, explanation-only, and fall back to deterministic output
+when credentials, endpoints, or models are unavailable.
 
 SSH remote commands also accept explicit OpenSSH client options for release
 verification or CI-provisioned targets:
