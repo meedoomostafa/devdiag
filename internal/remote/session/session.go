@@ -73,6 +73,11 @@ func ContainerRootDir(sessionID string) string {
 	return filepath.Join("/tmp/devdiag-remote", sessionID)
 }
 
+// K8sRootDir returns the default DevDiag remote root for Kubernetes pods.
+func K8sRootDir(sessionID string) string {
+	return filepath.Join("/tmp/devdiag-remote", sessionID)
+}
+
 // ShellPath converts a validated generated remote path into a shell-friendly
 // form. It preserves container paths and lets SSH "~/" paths expand through
 // $HOME even when assigned to shell variables.
@@ -111,14 +116,14 @@ func ValidateRootDir(dir string, kind target.Kind) error {
 	}
 	cleanDir := filepath.Clean(dir)
 	switch kind {
-	case target.KindSSH, target.KindK8s:
+	case target.KindSSH:
 		// For SSH, root must be a DevDiag-managed remote session.
 		if !strings.HasPrefix(cleanDir, "~/.devdiag/remote/") && !strings.Contains(cleanDir, "/.devdiag/remote/") {
 			return fmt.Errorf("ssh root dir must be within .devdiag/remote")
 		}
-	case target.KindContainer:
+	case target.KindContainer, target.KindK8s:
 		if !strings.HasPrefix(cleanDir, "/tmp/devdiag-remote/") {
-			return fmt.Errorf("container root dir must be within /tmp/devdiag-remote")
+			return fmt.Errorf("%s root dir must be within /tmp/devdiag-remote", kind)
 		}
 	default:
 		return fmt.Errorf("unsupported target kind %q", kind)
