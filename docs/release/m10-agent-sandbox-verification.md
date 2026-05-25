@@ -5,8 +5,7 @@ Date: 2026-05-24
 ## Scope
 
 This note records local verification for the deterministic Milestone 10 agent
-interceptor and sandbox. No provider-backed LLM is required for M10 completion.
-Provider-backed explanations are tracked separately by M15.
+interceptor and sandbox.
 
 ## Implemented Contract
 
@@ -35,8 +34,8 @@ env PATH=/usr/local/go/bin:$PATH \
   /usr/local/go/bin/go test ./internal/agent ./internal/cli -run 'TestBuildContext|TestClassifyPromptInjection|TestAgentExplainJSONMarksFileUntrustedAndReportsInjection|TestAgentRunJSONRedactsOutputAndReportsInjection|TestAgentSandboxAppliesPatchRunsCommandAndCleansUp|TestAgentSandboxPatchFailureJSON' -count=1
 ```
 
-## Remaining M10 Gaps
+## M10 Closure
 
-Provider-backed model integration remained intentionally out of scope for M10.
-M15 adds optional provider-backed explanations while preserving the same
-untrusted-context schema and non-execution safety contract.
+No M10-specific product gap remains. Agent behavior is deterministic and
+offline-only; external model integration is not part of the DevDiag release
+surface.
