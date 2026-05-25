@@ -1687,6 +1687,15 @@ func assertCollectorEvidenceSource(t *testing.T, collector schema.CollectorResul
 	t.Fatalf("missing collector evidence source %s in %+v", source, collector.Evidence)
 }
 
+func hasCollectorEvidenceSource(collector schema.CollectorResult, source string) bool {
+	for _, ev := range collector.Evidence {
+		if ev.Source == source {
+			return true
+		}
+	}
+	return false
+}
+
 func findReportCollector(t *testing.T, report schema.Report, name string) schema.CollectorResult {
 	t.Helper()
 	for _, collector := range report.Collectors {
@@ -1788,6 +1797,27 @@ func TestTraceCommand_LiveStraceJSONAcceptance(t *testing.T) {
 	}
 }
 
+func TestTraceCommand_LiveEBPFJSONAcceptance(t *testing.T) {
+	if os.Getenv("DEVDIAG_LIVE_EBPF") == "" {
+		t.Skip("set DEVDIAG_LIVE_EBPF=1 to run live eBPF JSON acceptance")
+	}
+	workDir := t.TempDir()
+	stdout, stderr, code := runBinaryInDir(workDir, "trace", "--backend", "ebpf", "--scope", "file,process,network", "--format", "json", "--", "true")
+	if code != 0 {
+		t.Fatalf("trace live ebpf exit code = %d, want 0; stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	var report schema.Report
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("trace live ebpf stdout is not valid JSON: %v; stdout=%s", err, stdout)
+	}
+	collector := findReportCollector(t, report, "trace")
+	if collector.Status != schema.CollectorOK {
+		t.Fatalf("trace live ebpf collector status = %s, want ok; collector=%+v", collector.Status, collector)
+	}
+	assertCollectorEvidence(t, collector, "trace_backend", "ebpf")
+	assertCollectorEvidenceSource(t, collector, "ebpf_tracepoints_attached")
+}
+
 func TestTraceCommand_InvalidScope(t *testing.T) {
 	_, stderr, code := runBinary("trace", "--scope", "gpu", "--", "true")
 	if code != 2 {
@@ -1806,6 +1836,28 @@ func TestTraceCommand_EBPFBackendUnavailableDiagnostic(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "ebpf") && !strings.Contains(stderr, "eBPF") {
 		t.Fatalf("expected ebpf unavailable diagnostic in stderr, got %s", stderr)
+	}
+}
+
+func TestTraceCommand_EBPFBackendUnavailableJSONIncludesEvidence(t *testing.T) {
+	workDir := t.TempDir()
+	stdout, stderr, code := runBinaryInDir(workDir, "trace", "--backend", "ebpf", "--scope", "file,network", "--format", "json", "--", "true")
+	if code != int(exitcode.TraceUnavailable) {
+		t.Fatalf("trace --backend ebpf exit code = %d, want %d, stderr=%s stdout=%s", code, exitcode.TraceUnavailable, stderr, stdout)
+	}
+	var report schema.Report
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("trace ebpf unavailable stdout is not valid JSON: %v; stdout=%s", err, stdout)
+	}
+	collector := findReportCollector(t, report, "trace")
+	if collector.Status != schema.CollectorUnavailable {
+		t.Fatalf("trace ebpf collector status = %s, want unavailable; collector=%+v", collector.Status, collector)
+	}
+	assertCollectorEvidence(t, collector, "trace_backend", "ebpf")
+	assertCollectorEvidenceSource(t, collector, "trace_unavailable_reason")
+	assertCollectorEvidence(t, collector, "trace_event_count", "0")
+	if !hasCollectorEvidenceSource(collector, "ebpf_btf") && !hasCollectorEvidenceSource(collector, "ebpf_cap_bpf") && !hasCollectorEvidenceSource(collector, "ebpf_tracepoint_program_type") {
+		t.Fatalf("trace ebpf collector missing capability evidence: %+v", collector.Evidence)
 	}
 }
 
