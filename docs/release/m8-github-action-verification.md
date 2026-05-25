@@ -1,6 +1,6 @@
 # M8 GitHub Action Verification
 
-Date: 2026-05-24
+Date: 2026-05-25
 
 ## Scope
 
@@ -46,6 +46,8 @@ Current GitHub Actions docs confirm these packaging contracts:
   failing on collector and command errors.
 - Supports `mask-values` for registering additional literal values with
   GitHub `add-mask` before DevDiag output is emitted.
+- Supports `artifact-name` for matrix workflows or dual invocations that must
+  avoid artifact-name collisions.
 
 ## Implemented CI/Local Config Contract
 
@@ -95,6 +97,11 @@ a fake `devdiag` binary. This validates:
 - Non-finding failures such as exit code `3` still fail the action.
 - The repository CI workflow runs both the Go 1.25 minimum baseline and Go 1.26
   compatibility gate through the `actions/setup-go` version matrix.
+- The hosted signoff workflow
+  `.github/workflows/action-live-signoff.yml` builds `devdiag`, runs the local
+  composite action, checks `GITHUB_OUTPUT`, verifies the job summary, downloads
+  JSON artifacts, checks masking/redaction, and verifies fail-threshold behavior
+  across Go 1.25 and Go 1.26.
 
 Targeted command:
 
@@ -124,9 +131,25 @@ env PATH=/usr/local/go/bin:$PATH \
   /usr/local/go/bin/go test ./internal/cli -run 'TestCheckCI_DevDiagConfigIgnoresConfiguredEnvParityKeys' -count=1
 ```
 
-## Hosted Runner Signoff
+## Hosted Runner Attempt
 
-A hosted GitHub Actions run or equivalent runner environment should still be
-used before release to visually confirm annotation display and artifact
-retention/download behavior. Local tests prove the composite action script,
-metadata, environment-file usage, masking, and artifact-path contract.
+Workflow:
+
+```bash
+gh workflow run .github/workflows/action-live-signoff.yml \
+  --repo meedoomostafa/devdiag \
+  --ref m12-m16-hardening
+```
+
+Observed on 2026-05-25:
+
+- Run URL: https://github.com/meedoomostafa/devdiag/actions/runs/26402976076
+- Head SHA: `ab5b16e67957660b1bb83dee159fa63dc477de90`
+- GitHub accepted the workflow dispatch.
+- GitHub did not start the hosted runner jobs because the account has failed
+  payments or a spending-limit issue.
+
+The repository-side workflow and local composite action contract are verified.
+Hosted UI annotation rendering and artifact download evidence must be captured
+from a green hosted run after the GitHub account runner-start condition is
+resolved.
