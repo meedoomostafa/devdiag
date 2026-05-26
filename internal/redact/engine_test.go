@@ -72,6 +72,39 @@ func TestRedactString_MultilineEnvValues(t *testing.T) {
 	}
 }
 
+func TestRedactString_QuotedEnvValues(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "single quoted shell argument",
+			input: "printf 'API_KEY=secret123'",
+			want:  "printf 'API_KEY=<redacted>'",
+		},
+		{
+			name:  "double quoted shell argument",
+			input: `printf "API_KEY=secret123"`,
+			want:  `printf "API_KEY=<redacted>"`,
+		},
+		{
+			name:  "json quoted value",
+			input: `{"args":["API_KEY=secret123"]}`,
+			want:  `{"args":["API_KEY=<redacted>"]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := e.RedactString(tt.input, "agent_run")
+			if got != tt.want {
+				t.Errorf("RedactString() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRedactString_DoesNotRedactLowercaseDiagnostics(t *testing.T) {
 	e := NewEngine(LevelDefault)
 	input := "exit_code=1"

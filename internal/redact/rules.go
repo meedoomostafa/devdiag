@@ -25,8 +25,9 @@ var (
 	// quotedKeyMaterialPattern matches long base64-like material echoed by tools
 	// in quoted diagnostics, such as malformed multiline .env key material.
 	quotedKeyMaterialPattern = regexp.MustCompile(`"([A-Za-z0-9+/]{32,}=*)"`)
-	// envValuePattern matches KEY=VALUE style assignments and redacts the value.
-	envValuePattern = regexp.MustCompile(`(?m)(^|\s)([A-Z_][A-Z0-9_]*=)([^\s]*)`)
+	// envValuePattern matches KEY=VALUE assignments in logs, shell args, and
+	// JSON-quoted command arrays while preserving surrounding delimiters.
+	envValuePattern = regexp.MustCompile("(?m)(^|[\\s'\"`])([A-Z_][A-Z0-9_]*=)([^\\s'\"`]*)")
 	// cliSecretPattern matches common CLI flag patterns that carry secrets.
 	// Covers: --password=secret, --password secret, --token=abc, --api-key=xyz, etc.
 	// Case-insensitive via (?i:...).

@@ -2860,6 +2860,34 @@ func TestAgentRunJSONRedactsOutputAndReportsInjection(t *testing.T) {
 	assertAgentJSONFinding(t, result, "A-SECRET-EXFIL-001")
 }
 
+func TestAgentRunJSONRedactsQuotedEnvAssignmentsInArgs(t *testing.T) {
+	dir := t.TempDir()
+	stdout, stderr, code := runBinaryInDir(dir,
+		"agent", "run", "--format", "json", "--",
+		"sh", "-c", "printf 'API_KEY=secret123'",
+	)
+	if code != 0 {
+		t.Fatalf("agent run exit code = %d, want 0; stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	if strings.Contains(stdout, "secret123") {
+		t.Fatalf("agent run leaked raw secret: %s", stdout)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("agent run stdout is not valid JSON: %v; stdout=%s", err, stdout)
+	}
+	args, ok := result["args"].([]any)
+	if !ok || len(args) != 2 {
+		t.Fatalf("agent run args = %v, want two args", result["args"])
+	}
+	if args[1] != "printf 'API_KEY=<redacted>'" {
+		t.Fatalf("agent run shell arg = %v, want redacted env assignment", args[1])
+	}
+	if result["stdout_preview"] != "API_KEY=<redacted>" {
+		t.Fatalf("agent run stdout_preview = %v, want redacted env assignment", result["stdout_preview"])
+	}
+}
+
 func TestAgentSandboxAppliesPatchRunsCommandAndCleansUp(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "message.txt"), []byte("original\n"), 0o644); err != nil {
