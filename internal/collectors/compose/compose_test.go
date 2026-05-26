@@ -174,6 +174,8 @@ func TestCollector_PortMappings(t *testing.T) {
       - "127.0.0.1:8000:8000"
       - "127.0.0.1:9000"
       - "5432"
+      - "${PORT:-3000}:3000"
+      - "${PORT_MISSING}:4000"
 `
 	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(yaml), 0644)
 
@@ -182,7 +184,7 @@ func TestCollector_PortMappings(t *testing.T) {
 		t.Fatalf("extractPortMappings error: %v", err)
 	}
 
-	want := []string{"5432", "8000", "9000"}
+	want := []string{"5432", "8000", "9000", "3000"}
 	if len(ports) != len(want) {
 		t.Fatalf("expected %v, got %v", want, ports)
 	}
@@ -249,5 +251,103 @@ func TestCollector_LineNumbersPreserved(t *testing.T) {
 	}
 	if refs[0].Line == 0 {
 		t.Error("expected non-zero line number")
+	}
+}
+
+func TestCollector_InterpolatedPortsWithReplacement(t *testing.T) {
+	// Unset ALT_PORT
+	t.Setenv("ALT_PORT", "") // empty
+	os.Unsetenv("ALT_PORT")  // truly unset
+
+	// Case 1: ALT_PORT is unset
+	dir := t.TempDir()
+	yamlContent := `services:
+  api:
+    ports:
+      - "${ALT_PORT:+18080}:80"
+      - "${ALT_PORT+18081}:80"
+`
+	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(yamlContent), 0644)
+	ports, err := extractPortMappings(filepath.Join(dir, "compose.yaml"))
+	if err != nil {
+		t.Fatalf("extractPortMappings error: %v", err)
+	}
+	if len(ports) != 0 {
+		t.Fatalf("expected 0 ports when ALT_PORT is unset, got: %v", ports)
+	}
+
+	// Case 2: ALT_PORT is set to empty string
+	t.Setenv("ALT_PORT", "")
+	ports, err = extractPortMappings(filepath.Join(dir, "compose.yaml"))
+	if err != nil {
+		t.Fatalf("extractPortMappings error: %v", err)
+	}
+	// With ALT_PORT="", ${ALT_PORT:+18080} should not resolve, but ${ALT_PORT+18081} should resolve (since it's set).
+	if len(ports) != 1 || ports[0] != "18081" {
+		t.Fatalf("expected [18081] when ALT_PORT is empty, got: %v", ports)
+	}
+
+	// Case 3: ALT_PORT is set to a non-empty string
+	t.Setenv("ALT_PORT", "something")
+	ports, err = extractPortMappings(filepath.Join(dir, "compose.yaml"))
+	if err != nil {
+		t.Fatalf("extractPortMappings error: %v", err)
+	}
+	// Both should resolve
+	if len(ports) != 2 || ports[0] != "18080" || ports[1] != "18081" {
+		t.Fatalf("expected [18080, 18081] when ALT_PORT is set, got: %v", ports)
+	}
+}
+
+func TestCollector_InterpolatedPortsWithDefaultsPreferEnvValue(t *testing.T) {
+	dir := t.TempDir()
+	yamlContent := `services:
+  api:
+    ports:
+      - "${APP_PORT:-3000}:80"
+      - "${APP_PORT2-3001}:81"
+`
+	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(yamlContent), 0644)
+
+	t.Setenv("APP_PORT", "7777")
+	t.Setenv("APP_PORT2", "8888")
+	ports, err := extractPortMappings(filepath.Join(dir, "compose.yaml"))
+	if err != nil {
+		t.Fatalf("extractPortMappings error: %v", err)
+	}
+	if len(ports) != 2 || ports[0] != "7777" || ports[1] != "8888" {
+		t.Fatalf("expected env ports [7777, 8888], got: %v", ports)
+	}
+
+	t.Setenv("APP_PORT", "")
+	t.Setenv("APP_PORT2", "")
+	ports, err = extractPortMappings(filepath.Join(dir, "compose.yaml"))
+	if err != nil {
+		t.Fatalf("extractPortMappings error: %v", err)
+	}
+	if len(ports) != 1 || ports[0] != "3000" {
+		t.Fatalf("expected empty-aware ports [3000], got: %v", ports)
+	}
+}
+
+func TestCollector_InterpolatedPortsWithDirectEnvValue(t *testing.T) {
+	dir := t.TempDir()
+	yamlContent := `services:
+  api:
+    ports:
+      - "${DIRECT_PORT}:80"
+      - "$SIMPLE_PORT:81"
+      - "${MISSING_DIRECT_PORT}:82"
+`
+	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(yamlContent), 0644)
+
+	t.Setenv("DIRECT_PORT", "7000")
+	t.Setenv("SIMPLE_PORT", "7001")
+	ports, err := extractPortMappings(filepath.Join(dir, "compose.yaml"))
+	if err != nil {
+		t.Fatalf("extractPortMappings error: %v", err)
+	}
+	if len(ports) != 2 || ports[0] != "7000" || ports[1] != "7001" {
+		t.Fatalf("expected direct env ports [7000, 7001], got: %v", ports)
 	}
 }

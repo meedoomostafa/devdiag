@@ -2,6 +2,8 @@ package rules
 
 import (
 	"fmt"
+	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -32,7 +34,7 @@ func (e *M1Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 		case "env":
 			findings = append(findings, e.envRules(c)...)
 		case "compose":
-			findings = append(findings, e.composeRules(c)...)
+			findings = append(findings, e.composeRules(c, collectorMap)...)
 		case "git":
 			findings = append(findings, e.gitRules(c)...)
 		case "repo":
@@ -122,20 +124,113 @@ func (e *M1Engine) envRules(result schema.CollectorResult) []schema.Finding {
 }
 
 // composeRules creates findings from compose collector evidence.
-func (e *M1Engine) composeRules(result schema.CollectorResult) []schema.Finding {
+func (e *M1Engine) composeRules(result schema.CollectorResult, collectors map[string]schema.CollectorResult) []schema.Finding {
 	var findings []schema.Finding
+
+	// Extract local env keys
+	envKeys := make(map[string]bool)
+	if envResult, ok := collectors["env"]; ok {
+		for _, ev := range envResult.Evidence {
+			if ev.Source == ".env" || ev.Source == ".env.local" {
+				for _, k := range envKeysFromEvidence(ev.Value) {
+					envKeys[k] = true
+				}
+			}
+		}
+	}
+
+	// Map to group evidence by missing variable name
+	missingVars := make(map[string][]schema.Evidence)
+
 	for _, ev := range result.Evidence {
+		// Only evaluate evidence that is a real Compose file line source
+		if !strings.Contains(ev.Source, ".yaml:") && !strings.Contains(ev.Source, ".yml:") {
+			continue
+		}
+
+		// Value is e.g. "services.api.environment.DB references ${DB:-default}"
+		idx := strings.Index(ev.Value, " references ")
+		if idx == -1 {
+			continue
+		}
+		rawRef := ev.Value[idx+len(" references "):]
+
+		varName, hasDefault := parseComposeRef(rawRef)
+		if varName == "" {
+			continue
+		}
+
+		// Suppress F-ENV-002 if:
+		// 1. Defined in env files
+		if envKeys[varName] {
+			continue
+		}
+		// 2. Defined in process environment
+		if _, ok := os.LookupEnv(varName); ok {
+			continue
+		}
+		// 3. Has a default or alternative form
+		if hasDefault {
+			continue
+		}
+
+		// Otherwise, it's missing!
+		missingVars[varName] = append(missingVars[varName], ev)
+	}
+
+	// Create grouped findings sorted by varName for determinism
+	var varNames []string
+	for k := range missingVars {
+		varNames = append(varNames, k)
+	}
+	sort.Strings(varNames)
+
+	for _, varName := range varNames {
+		evs := missingVars[varName]
 		findings = append(findings, schema.Finding{
 			ID:           "F-ENV-002",
-			Title:        "Compose references env variable that may be undefined",
+			Title:        fmt.Sprintf("Compose references env variable that may be undefined: %s", varName),
 			Severity:     schema.SeverityMedium,
 			Confidence:   0.6,
-			Symptom:      "Compose file references an environment variable that may not be defined",
-			Evidence:     []schema.Evidence{ev},
-			LikelyCauses: []string{"Variable may be missing from .env or host environment"},
+			Symptom:      fmt.Sprintf("Compose file references environment variable %s which may not be defined", varName),
+			Evidence:     evs,
+			LikelyCauses: []string{"Variable may be missing from .env, .env.local, or host environment"},
 		})
 	}
+
 	return findings
+}
+
+func parseComposeRef(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "$") {
+		return "", false
+	}
+	inner := strings.TrimPrefix(raw, "$")
+	if strings.HasPrefix(inner, "{") && strings.HasSuffix(inner, "}") {
+		inner = inner[1 : len(inner)-1]
+	} else {
+		// simple $VAR
+		return inner, false
+	}
+
+	// Check modifiers
+	hasDefault := false
+	for _, sep := range []string{":-", "-", ":+", "+"} {
+		if idx := strings.Index(inner, sep); idx != -1 {
+			inner = inner[:idx]
+			hasDefault = true
+			break
+		}
+	}
+	// Strip error check modifiers but do not mark as having default
+	for _, sep := range []string{":?", "?"} {
+		if idx := strings.Index(inner, sep); idx != -1 {
+			inner = inner[:idx]
+			break
+		}
+	}
+	return strings.TrimSpace(inner), hasDefault
 }
 
 // gitRules creates findings from git collector evidence.

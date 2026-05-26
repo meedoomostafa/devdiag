@@ -2,9 +2,11 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -56,13 +58,14 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		evidence = append(evidence, schema.Evidence{Source: "global.json", Value: "dotnet " + v})
 	}
 
-	// package.json engines / packageManager
-	if pm, engines := parsePackageJSONRuntime(filepath.Join(root, "package.json")); pm != "" || engines != "" {
+	for _, packagePath := range packageJSONRuntimePaths(root) {
+		source := packageJSONEvidenceSource(root, packagePath)
+		pm, engines := parsePackageJSONRuntime(packagePath)
 		if pm != "" {
-			evidence = append(evidence, schema.Evidence{Source: "package.json", Value: "packageManager: " + pm})
+			evidence = append(evidence, schema.Evidence{Source: source, Value: "packageManager: " + pm})
 		}
 		if engines != "" {
-			evidence = append(evidence, schema.Evidence{Source: "package.json", Value: "engines: " + engines})
+			evidence = append(evidence, schema.Evidence{Source: source, Value: "engines: " + engines})
 		}
 	}
 
@@ -140,6 +143,31 @@ func parsePackageJSONRuntime(path string) (packageManager, engines string) {
 	if err != nil {
 		return "", ""
 	}
+	var pkg struct {
+		PackageManager string            `json:"packageManager"`
+		Engines        map[string]string `json:"engines"`
+	}
+	if err := json.Unmarshal(data, &pkg); err == nil {
+		packageManager = strings.TrimSpace(pkg.PackageManager)
+		if len(pkg.Engines) > 0 {
+			keys := make([]string, 0, len(pkg.Engines))
+			for key := range pkg.Engines {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			parts := make([]string, 0, len(keys))
+			for _, key := range keys {
+				value := strings.TrimSpace(pkg.Engines[key])
+				if value == "" {
+					continue
+				}
+				parts = append(parts, `"`+key+`": "`+value+`"`)
+			}
+			engines = strings.Join(parts, ", ")
+		}
+		return packageManager, engines
+	}
+
 	content := string(data)
 	if m := packageManagerRe.FindStringSubmatch(content); m != nil {
 		packageManager = m[1]
@@ -147,5 +175,56 @@ func parsePackageJSONRuntime(path string) (packageManager, engines string) {
 	if m := enginesRe.FindStringSubmatch(content); m != nil {
 		engines = strings.TrimSpace(m[1])
 	}
-	return
+	return packageManager, engines
+}
+
+func packageJSONRuntimePaths(root string) []string {
+	var paths []string
+	rootPackage := filepath.Join(root, "package.json")
+	if fileExists(rootPackage) {
+		paths = append(paths, rootPackage)
+	}
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if path == root {
+			return nil
+		}
+		if entry.IsDir() {
+			if shouldSkipRuntimeDir(entry.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Name() != "package.json" || path == rootPackage {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	sort.Strings(paths)
+	return paths
+}
+
+func shouldSkipRuntimeDir(name string) bool {
+	switch name {
+	case ".git", ".devdiag", "node_modules", "vendor", "dist", "build", "coverage":
+		return true
+	default:
+		return false
+	}
+}
+
+func packageJSONEvidenceSource(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "package.json"
+	}
+	return filepath.ToSlash(rel)
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }

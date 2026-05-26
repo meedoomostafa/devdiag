@@ -139,6 +139,7 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 	localRuntimes := extractLocalRuntimes(runtimeEvs)
 
 	// Compare CI setup action versions with local runtime declarations
+	missingRuntimePinEvidence := make(map[string][]schema.Evidence)
 	for _, ev := range ciSetupActions {
 		actionName, ok := ciSetupInfo(ev.Source)
 		if !ok {
@@ -150,19 +151,8 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 		}
 		localRT := localRuntimes[actionName]
 		if localRT == "" {
-			findings = append(findings, schema.Finding{
-				ID:         "F-CI-PACKAGE-001",
-				Title:      fmt.Sprintf("CI uses %s but repo has no local runtime pin", actionName),
-				Severity:   schema.SeverityLow,
-				Confidence: 0.5,
-				Symptom:    fmt.Sprintf("CI configures %s=%s but no .nvmrc/.python-version/go.mod version matches", actionName, ciVal),
-				Evidence: []schema.Evidence{
-					{Source: ev.Source, Value: ciVal},
-				},
-				LikelyCauses: []string{
-					"Add a local runtime pin file so dev and CI stay in sync",
-				},
-			})
+			key := actionName + "\x00" + ciVal
+			missingRuntimePinEvidence[key] = append(missingRuntimePinEvidence[key], ev)
 			continue
 		}
 		if !versionsCompatible(localRT, ciVal) {
@@ -182,7 +172,28 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 			})
 		}
 	}
+	for _, key := range sortedKeys(missingRuntimePinEvidence) {
+		evidence := missingRuntimePinEvidence[key]
+		parts := strings.SplitN(key, "\x00", 2)
+		actionName := parts[0]
+		ciVal := ""
+		if len(parts) == 2 {
+			ciVal = parts[1]
+		}
+		findings = append(findings, schema.Finding{
+			ID:         "F-CI-PACKAGE-001",
+			Title:      fmt.Sprintf("CI uses %s but repo has no local runtime pin", actionName),
+			Severity:   schema.SeverityLow,
+			Confidence: 0.5,
+			Symptom:    fmt.Sprintf("CI configures %s=%s but no .nvmrc/.python-version/go.mod version matches", actionName, ciVal),
+			Evidence:   evidence,
+			LikelyCauses: []string{
+				"Add a local runtime pin file so dev and CI stay in sync",
+			},
+		})
+	}
 
+	var undocumentedCmds []schema.Evidence
 	for _, ciCmd := range ciRunCommands {
 		ciPM := commandPackageManager(ciCmd.Value)
 		if repoPackageManager != "" && ciPM != "" && ciPM != packageManagerName(repoPackageManager) && localCommandWithSameArgs(ciCmd.Value, localCommands) {
@@ -203,20 +214,41 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 			continue
 		}
 		if len(localCommands) > 0 && !localCommandMatches(ciCmd.Value, localCommands) {
-			findings = append(findings, schema.Finding{
-				ID:         "F-CI-COMMAND-001",
-				Title:      fmt.Sprintf("CI command %s is not documented locally", summarizeCommandForTitle(ciCmd.Value)),
-				Severity:   schema.SeverityLow,
-				Confidence: 0.5,
-				Symptom:    "CI run command does not match collected local README/package/Makefile/Taskfile/justfile commands",
-				Evidence: []schema.Evidence{
-					ciCmd,
-				},
-				LikelyCauses: []string{
-					"Local command documentation may be out of sync with CI",
-				},
-			})
+			undocumentedCmds = append(undocumentedCmds, ciCmd)
 		}
+	}
+
+	if len(undocumentedCmds) > 0 {
+		// Group and deduplicate the evidence
+		dedupedEvs := make([]schema.Evidence, 0, len(undocumentedCmds))
+		seenCmds := make(map[string]bool)
+		for _, cmd := range undocumentedCmds {
+			norm := normalizeCommand(cmd.Value)
+			if !seenCmds[norm] {
+				seenCmds[norm] = true
+				dedupedEvs = append(dedupedEvs, cmd)
+			}
+		}
+
+		// Also add a stable evidence source with the count
+		stableEv := schema.Evidence{
+			Source: "ci_undocumented_command_count",
+			Value:  fmt.Sprintf("%d", len(dedupedEvs)),
+		}
+
+		finalEvidence := append([]schema.Evidence{stableEv}, dedupedEvs...)
+
+		findings = append(findings, schema.Finding{
+			ID:         "F-CI-COMMAND-001",
+			Title:      fmt.Sprintf("CI has %d undocumented commands", len(dedupedEvs)),
+			Severity:   schema.SeverityLow,
+			Confidence: 0.5,
+			Symptom:    "CI run commands do not match collected local README/package/Makefile/Taskfile/justfile commands",
+			Evidence:   finalEvidence,
+			LikelyCauses: []string{
+				"Local command documentation may be out of sync with CI",
+			},
+		})
 	}
 
 	// Check env parity
@@ -475,7 +507,8 @@ func extractLocalRuntimes(runtimeEvs map[string]string) map[string]string {
 			result["setup-ruby"] = strings.TrimSpace(strings.TrimPrefix(val, "ruby "))
 		case "global.json":
 			result["setup-dotnet"] = strings.TrimSpace(strings.TrimPrefix(val, "dotnet "))
-		case "package.json":
+		}
+		if strings.HasSuffix(src, "package.json") {
 			if strings.Contains(val, "engines:") {
 				engines := strings.TrimPrefix(val, "engines: ")
 				for _, part := range strings.Split(engines, ",") {
@@ -495,6 +528,15 @@ func extractLocalRuntimes(runtimeEvs map[string]string) map[string]string {
 		}
 	}
 	return result
+}
+
+func sortedKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func decodeSourceSegment(s string) string {
@@ -755,11 +797,30 @@ func isIgnoredCIEnv(key, value string) bool {
 	if key == "CI" || key == "GITHUB_TOKEN" {
 		return true
 	}
+	if isStandardCIControlEnv(key) {
+		return true
+	}
 	if strings.HasPrefix(key, "GITHUB_") || strings.HasPrefix(key, "RUNNER_") || strings.HasPrefix(key, "ACTIONS_") {
 		return true
 	}
 	value = strings.TrimSpace(value)
 	return strings.HasPrefix(value, "${{ github.") || strings.HasPrefix(value, "${{ runner.") || strings.HasPrefix(value, "${{ env.")
+}
+
+func isStandardCIControlEnv(key string) bool {
+	switch key {
+	case "NODE_ENV",
+		"NODE_VERSION",
+		"PYTHON_VERSION",
+		"GO_VERSION",
+		"DOTNET_VERSION",
+		"DOTNET_NOLOGO",
+		"DOTNET_CLI_TELEMETRY_OPTOUT",
+		"DOTNET_SKIP_FIRST_TIME_EXPERIENCE":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeContainerImage(image string) string {

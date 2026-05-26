@@ -148,6 +148,26 @@ func TestM8Engine_GitHubBuiltInEnvIgnored(t *testing.T) {
 	assertNoFindingM8(t, findings, "F-CI-ENV-001")
 }
 
+func TestM8Engine_StandardCIControlEnvIgnored(t *testing.T) {
+	e := NewM8Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_env__workflow__NODE_ENV", Value: "production"},
+				{Source: "ci_env__workflow__DOTNET_NOLOGO", Value: "true"},
+				{Source: "ci_env__workflow__DOTNET_CLI_TELEMETRY_OPTOUT", Value: "1"},
+				{Source: "ci_env__workflow__DOTNET_VERSION", Value: "10.0.x"},
+			}},
+			{Name: "env", Evidence: []schema.Evidence{}},
+		},
+	}
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoFindingM8(t, findings, "F-CI-ENV-001")
+}
+
 func TestM8Engine_EnvLocalOnlyDoesNotRequireCI(t *testing.T) {
 	e := NewM8Engine()
 	snapshot := graph.NormalizedSnapshot{
@@ -502,13 +522,58 @@ func TestM8Engine_CIRunCommandTitleSummarizesMultilineScripts(t *testing.T) {
 			if len(f.Title) > 130 {
 				t.Fatalf("finding title too long: %d %q", len(f.Title), f.Title)
 			}
-			if f.Evidence[0].Value != longScript {
-				t.Fatalf("full command evidence changed: %q", f.Evidence[0].Value)
+			if f.Evidence[1].Value != longScript {
+				t.Fatalf("full command evidence changed: %q", f.Evidence[1].Value)
 			}
 			return
 		}
 	}
 	t.Fatalf("expected F-CI-COMMAND-001, got: %v", findings)
+}
+
+func TestM8Engine_CIUndocumentedCommandsGrouped(t *testing.T) {
+	e := NewM8Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_run__test__0", Value: "pnpm e2e"},
+				{Source: "ci_run__test__1", Value: "pnpm integration"},
+				{Source: "ci_run__test__2", Value: "pnpm e2e"}, // duplicate, should be deduped
+			}},
+			{Name: "repo", Evidence: []schema.Evidence{
+				{Source: "repo_package_manager", Value: "pnpm@9.0.0"},
+				{Source: "repo_command__package_json__test", Value: "pnpm test"},
+			}},
+		},
+	}
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cmdFinding *schema.Finding
+	for i := range findings {
+		if findings[i].ID == "F-CI-COMMAND-001" {
+			cmdFinding = &findings[i]
+		}
+	}
+	if cmdFinding == nil {
+		t.Fatal("expected F-CI-COMMAND-001 finding")
+	}
+
+	// Should have title: "CI has 2 undocumented commands"
+	if cmdFinding.Title != "CI has 2 undocumented commands" {
+		t.Errorf("unexpected title: %q", cmdFinding.Title)
+	}
+
+	// Evidence count should be 3 (stable count + 2 unique commands)
+	if len(cmdFinding.Evidence) != 3 {
+		t.Fatalf("expected 3 evidence items, got %d: %v", len(cmdFinding.Evidence), cmdFinding.Evidence)
+	}
+
+	if cmdFinding.Evidence[0].Source != "ci_undocumented_command_count" || cmdFinding.Evidence[0].Value != "2" {
+		t.Errorf("unexpected stable evidence: %v", cmdFinding.Evidence[0])
+	}
 }
 
 func TestM8Engine_ShellMismatch(t *testing.T) {
@@ -662,6 +727,47 @@ func TestM8Engine_PackageJSONNodeRangeCompatibleWithCI(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertNoFindingM8(t, findings, "F-CI-RUNTIME-001")
+}
+
+func TestM8Engine_NestedPackageJSONNodeRangeCompatibleWithCI(t *testing.T) {
+	e := NewM8Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_setup__docs__0__setup_node__node_version", Value: "24"},
+			}},
+			{Name: "runtime", Evidence: []schema.Evidence{
+				{Source: "docs-site/package.json", Value: `engines: "node": ">=24"`},
+			}},
+		},
+	}
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoFindingM8(t, findings, "F-CI-PACKAGE-001")
+	assertNoFindingM8(t, findings, "F-CI-RUNTIME-001")
+}
+
+func TestM8Engine_GroupsMissingRuntimePinBySetupAction(t *testing.T) {
+	e := NewM8Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_setup__test__0__setup_node__node_version", Value: "22"},
+				{Source: "ci_setup__build__0__setup_node__node_version", Value: "22"},
+				{Source: "ci_setup__docs__0__setup_node__node_version", Value: "22"},
+			}},
+			{Name: "runtime", Evidence: []schema.Evidence{}},
+		},
+	}
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countFindingM8(findings, "F-CI-PACKAGE-001"); got != 1 {
+		t.Fatalf("F-CI-PACKAGE-001 count = %d, want 1; findings=%v", got, findings)
+	}
 }
 
 func TestM8Engine_IgnoresOpaqueMatrixExpressionWhenConcreteMatrixValueExists(t *testing.T) {

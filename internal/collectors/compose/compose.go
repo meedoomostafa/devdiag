@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -150,28 +151,28 @@ func extractPortMappings(path string) ([]string, error) {
 			if val == "" {
 				return
 			}
-			// Only capture explicit host:container mappings
-			if strings.Contains(val, ":") {
-				parts := strings.Split(val, ":")
-				if len(parts) == 2 {
-					// "5432:5432" or "127.0.0.1:8000"
-					hostPart := strings.TrimSpace(parts[0])
-					if strings.Contains(hostPart, ".") {
-						// IP:port syntax → host port is the second part
-						hostPart = strings.TrimSpace(parts[1])
-					}
-					if hostPart != "" {
-						ports = append(ports, hostPart)
-					}
-				} else if len(parts) == 3 {
-					// "127.0.0.1:8000:8000" → host port is middle part
-					hostPart := strings.TrimSpace(parts[1])
-					if hostPart != "" {
-						ports = append(ports, hostPart)
-					}
+			parts := splitPortSpec(val)
+			for i, p := range parts {
+				parts[i] = strings.Trim(strings.TrimSpace(p), "\"'")
+			}
+			var hostPart string
+			if len(parts) == 2 {
+				// "5432:5432" or "127.0.0.1:8000"
+				hostPart = parts[0]
+				if strings.Contains(hostPart, ".") {
+					// IP:port syntax → host port is the second part
+					hostPart = parts[1]
+				}
+			} else if len(parts) == 3 {
+				// "127.0.0.1:8000:8000" → host port is middle part
+				hostPart = parts[1]
+			}
+			if hostPart != "" {
+				resolved := resolveHostPort(hostPart)
+				if resolved != "" {
+					ports = append(ports, resolved)
 				}
 			}
-			// Single port like "5432" is ambiguous; skip for host conflict
 		}
 	})
 	return ports, nil
@@ -253,17 +254,122 @@ func parsePortSpec(portStr string) portSpec {
 		return portSpec{}
 	}
 	portStr = strings.SplitN(portStr, "/", 2)[0]
-	parts := strings.Split(portStr, ":")
+	parts := splitPortSpec(portStr)
+	for i, p := range parts {
+		parts[i] = strings.Trim(strings.TrimSpace(p), "\"'")
+	}
 	switch len(parts) {
 	case 1:
-		return portSpec{ContainerPort: strings.TrimSpace(parts[0])}
+		return portSpec{ContainerPort: parts[0]}
 	case 2:
-		return portSpec{HostPort: strings.TrimSpace(parts[0]), ContainerPort: strings.TrimSpace(parts[1])}
+		hp := resolveHostPort(parts[0])
+		return portSpec{HostPort: hp, ContainerPort: parts[1]}
 	case 3:
-		return portSpec{HostPort: strings.TrimSpace(parts[1]), ContainerPort: strings.TrimSpace(parts[2])}
+		hp := resolveHostPort(parts[1])
+		return portSpec{HostPort: hp, ContainerPort: parts[2]}
 	default:
 		return portSpec{}
 	}
+}
+
+func splitPortSpec(val string) []string {
+	var parts []string
+	var current strings.Builder
+	inBraces := false
+	for i := 0; i < len(val); i++ {
+		ch := val[i]
+		if ch == '{' {
+			inBraces = true
+			current.WriteByte(ch)
+		} else if ch == '}' {
+			inBraces = false
+			current.WriteByte(ch)
+		} else if ch == ':' && !inBraces {
+			parts = append(parts, current.String())
+			current.Reset()
+		} else {
+			current.WriteByte(ch)
+		}
+	}
+	parts = append(parts, current.String())
+	return parts
+}
+
+func resolveHostPort(hostPart string) string {
+	hostPart = strings.TrimSpace(hostPart)
+	hostPart = strings.Trim(hostPart, "\"'")
+	if !strings.Contains(hostPart, "$") {
+		return hostPart
+	}
+	// It has interpolation. Let's find ${...} or $VAR.
+	// Since it's a port, we expect it to be either fully interpolated or partially.
+	// Let's extract the first ${...} block.
+	startIdx := strings.Index(hostPart, "${")
+	if startIdx == -1 {
+		// simple $VAR
+		varName := strings.TrimPrefix(hostPart, "$")
+		return numericEnvPort(varName)
+	}
+	endIdx := strings.Index(hostPart[startIdx:], "}")
+	if endIdx == -1 {
+		return ""
+	}
+	endIdx += startIdx
+	inner := hostPart[startIdx+2 : endIdx]
+
+	var varName string
+	var separator string
+	var defaultPart string
+	for _, sep := range []string{":-", "-", ":+", "+"} {
+		if idx := strings.Index(inner, sep); idx != -1 {
+			varName = strings.TrimSpace(inner[:idx])
+			separator = sep
+			defaultPart = inner[idx+len(sep):]
+			break
+		}
+	}
+
+	if separator == "" {
+		return numericEnvPort(strings.TrimSpace(inner))
+	}
+
+	envValue, envSet := os.LookupEnv(varName)
+	switch separator {
+	case ":-":
+		if envSet && envValue != "" {
+			return numericPort(envValue)
+		}
+		return numericPort(defaultPart)
+	case "-":
+		if envSet {
+			return numericPort(envValue)
+		}
+		return numericPort(defaultPart)
+	case ":+":
+		if envSet && envValue != "" {
+			return numericPort(defaultPart)
+		}
+	case "+":
+		if envSet {
+			return numericPort(defaultPart)
+		}
+	}
+	return ""
+}
+
+func numericPort(value string) string {
+	value = strings.TrimSpace(value)
+	if _, err := strconv.Atoi(value); err == nil {
+		return value
+	}
+	return ""
+}
+
+func numericEnvPort(varName string) string {
+	if value, ok := os.LookupEnv(varName); ok {
+		return numericPort(value)
+	}
+	return ""
 }
 
 func extractEnvRefs(path string) ([]envRef, error) {
