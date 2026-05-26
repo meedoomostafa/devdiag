@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -837,6 +838,19 @@ func TestScan_RulePackValid(t *testing.T) {
 	// Since this is complex and depends on real rego evaluation,
 	// we skip it in favor of the error case above.
 	t.Skip("skipping rule pack success test; requires temporary rego files")
+}
+
+func TestRulePackError_WrappedStillMatches(t *testing.T) {
+	inner := &RulePackError{Errors: []string{"bad pack"}}
+	wrapped := fmt.Errorf("wrapped: %w", inner)
+
+	var rpe *RulePackError
+	if !errors.As(wrapped, &rpe) {
+		t.Fatal("expected errors.As to match wrapped RulePackError")
+	}
+	if len(rpe.Errors) != 1 || rpe.Errors[0] != "bad pack" {
+		t.Errorf("expected Errors ['bad pack'], got %v", rpe.Errors)
+	}
 }
 
 func TestDefaultScannerDeps_ReturnsNonNil(t *testing.T) {

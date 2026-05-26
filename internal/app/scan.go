@@ -42,6 +42,8 @@ import (
 )
 
 // ScanOptions holds behavior-affecting scan configuration.
+// Presentation and process-control flags (format, color, verbose, debug,
+// fail-severity) stay in the CLI layer.
 type ScanOptions struct {
 	Path         string
 	Profile      string
@@ -123,6 +125,7 @@ func NewScanner(deps ScannerDeps) *Scanner {
 }
 
 // Scan runs a diagnostic scan and returns the report.
+// Events are internal and experimental; they are not a public compatibility contract.
 func Scan(ctx context.Context, opts ScanOptions, sink EventSink) (*schema.Report, error) {
 	return NewScanner(DefaultScannerDeps()).Scan(ctx, opts, sink)
 }
