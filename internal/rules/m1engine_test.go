@@ -105,32 +105,261 @@ func TestM1Engine_GitRules_TrackedEnv(t *testing.T) {
 }
 
 func TestM1Engine_ComposeRules(t *testing.T) {
-	engine := NewM1Engine()
-	snapshot := graph.NormalizedSnapshot{
-		Collectors: []schema.CollectorResult{
-			{
-				Name: "compose",
-				Evidence: []schema.Evidence{
-					{Source: "compose.yaml:17", Value: "services.api.environment.DATABASE_URL references ${DATABASE_URL}"},
+	// 1. Missing everywhere (should emit finding)
+	t.Run("missing everywhere", func(t *testing.T) {
+		engine := NewM1Engine()
+		snapshot := graph.NormalizedSnapshot{
+			Collectors: []schema.CollectorResult{
+				{
+					Name: "compose",
+					Evidence: []schema.Evidence{
+						{Source: "compose.yaml:17", Value: "services.api.environment.DB_MISSING_EVERYWHERE references ${DB_MISSING_EVERYWHERE}"},
+					},
 				},
 			},
-		},
-	}
-
-	findings, err := engine.Evaluate(snapshot)
-	if err != nil {
-		t.Fatalf("Evaluate error: %v", err)
-	}
-
-	var hasEnv002 bool
-	for _, f := range findings {
-		if f.ID == "F-ENV-002" {
-			hasEnv002 = true
 		}
-	}
-	if !hasEnv002 {
-		t.Errorf("expected F-ENV-002 finding, got: %v", findings)
-	}
+		findings, err := engine.Evaluate(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var found bool
+		for _, f := range findings {
+			if f.ID == "F-ENV-002" && strings.Contains(f.Title, "DB_MISSING_EVERYWHERE") {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("expected F-ENV-002 finding for DB_MISSING_EVERYWHERE")
+		}
+	})
+
+	// 2. Defined in .env (should not emit finding)
+	t.Run("defined in .env", func(t *testing.T) {
+		engine := NewM1Engine()
+		snapshot := graph.NormalizedSnapshot{
+			Collectors: []schema.CollectorResult{
+				{
+					Name: "env",
+					Evidence: []schema.Evidence{
+						{Source: ".env", Value: "keys: DB_IN_DOTENV, OTHER"},
+					},
+				},
+				{
+					Name: "compose",
+					Evidence: []schema.Evidence{
+						{Source: "compose.yaml:17", Value: "services.api.environment.DB_IN_DOTENV references ${DB_IN_DOTENV}"},
+					},
+				},
+			},
+		}
+		findings, err := engine.Evaluate(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range findings {
+			if f.ID == "F-ENV-002" && strings.Contains(f.Title, "DB_IN_DOTENV") {
+				t.Error("unexpected F-ENV-002 finding for DB_IN_DOTENV (defined in .env)")
+			}
+		}
+	})
+
+	// 3. Defined in .env.local (should not emit finding)
+	t.Run("defined in .env.local", func(t *testing.T) {
+		engine := NewM1Engine()
+		snapshot := graph.NormalizedSnapshot{
+			Collectors: []schema.CollectorResult{
+				{
+					Name: "env",
+					Evidence: []schema.Evidence{
+						{Source: ".env.local", Value: "keys: DB_IN_ENVLOCAL"},
+					},
+				},
+				{
+					Name: "compose",
+					Evidence: []schema.Evidence{
+						{Source: "compose.yaml:17", Value: "services.api.environment.DB_IN_ENVLOCAL references ${DB_IN_ENVLOCAL}"},
+					},
+				},
+			},
+		}
+		findings, err := engine.Evaluate(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range findings {
+			if f.ID == "F-ENV-002" && strings.Contains(f.Title, "DB_IN_ENVLOCAL") {
+				t.Error("unexpected F-ENV-002 finding for DB_IN_ENVLOCAL (defined in .env.local)")
+			}
+		}
+	})
+
+	// 4. Defined in process env (should not emit finding)
+	t.Run("defined in process env", func(t *testing.T) {
+		const varName = "DB_IN_PROCESS_ENV_TEST"
+		t.Setenv(varName, "somevalue")
+
+		engine := NewM1Engine()
+		snapshot := graph.NormalizedSnapshot{
+			Collectors: []schema.CollectorResult{
+				{
+					Name: "compose",
+					Evidence: []schema.Evidence{
+						{Source: "compose.yaml:17", Value: "services.api.environment.DB_IN_PROCESS_ENV_TEST references ${DB_IN_PROCESS_ENV_TEST}"},
+					},
+				},
+			},
+		}
+		findings, err := engine.Evaluate(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range findings {
+			if f.ID == "F-ENV-002" && strings.Contains(f.Title, varName) {
+				t.Error("unexpected F-ENV-002 finding for DB_IN_PROCESS_ENV_TEST (defined in process environment)")
+			}
+		}
+	})
+
+	// 5. Default/alternative forms (should not emit finding)
+	t.Run("default or alternative forms", func(t *testing.T) {
+		engine := NewM1Engine()
+		snapshot := graph.NormalizedSnapshot{
+			Collectors: []schema.CollectorResult{
+				{
+					Name: "compose",
+					Evidence: []schema.Evidence{
+						{Source: "compose.yaml:10", Value: "services.api.ports[0] references ${PORT:-5432}"},
+						{Source: "compose.yaml:11", Value: "services.api.ports[1] references ${PORT-5432}"},
+						{Source: "compose.yaml:12", Value: "services.api.ports[2] references ${PORT:+5432}"},
+						{Source: "compose.yaml:13", Value: "services.api.ports[3] references ${PORT+5432}"},
+					},
+				},
+			},
+		}
+		findings, err := engine.Evaluate(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range findings {
+			if f.ID == "F-ENV-002" {
+				t.Errorf("unexpected F-ENV-002 finding: %v", f)
+			}
+		}
+	})
+
+	// 6. Error check modifiers (should emit finding if missing, should not if defined)
+	t.Run("error check modifiers missing", func(t *testing.T) {
+		engine := NewM1Engine()
+		snapshot := graph.NormalizedSnapshot{
+			Collectors: []schema.CollectorResult{
+				{
+					Name: "compose",
+					Evidence: []schema.Evidence{
+						{Source: "compose.yaml:17", Value: "services.api.environment.DB_REQ references ${DB_REQ:?required}"},
+					},
+				},
+			},
+		}
+		findings, err := engine.Evaluate(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var found bool
+		for _, f := range findings {
+			if f.ID == "F-ENV-002" && strings.Contains(f.Title, "DB_REQ") {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("expected F-ENV-002 finding for DB_REQ:?required")
+		}
+	})
+
+	t.Run("error check modifiers defined", func(t *testing.T) {
+		engine := NewM1Engine()
+		snapshot := graph.NormalizedSnapshot{
+			Collectors: []schema.CollectorResult{
+				{
+					Name: "env",
+					Evidence: []schema.Evidence{
+						{Source: ".env", Value: "keys: DB_REQ"},
+					},
+				},
+				{
+					Name: "compose",
+					Evidence: []schema.Evidence{
+						{Source: "compose.yaml:17", Value: "services.api.environment.DB_REQ references ${DB_REQ:?required}"},
+					},
+				},
+			},
+		}
+		findings, err := engine.Evaluate(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range findings {
+			if f.ID == "F-ENV-002" && strings.Contains(f.Title, "DB_REQ") {
+				t.Error("unexpected F-ENV-002 finding for DB_REQ when defined")
+			}
+		}
+	})
+
+	// 7. Compose metadata (should not emit finding)
+	t.Run("compose metadata ignored", func(t *testing.T) {
+		engine := NewM1Engine()
+		snapshot := graph.NormalizedSnapshot{
+			Collectors: []schema.CollectorResult{
+				{
+					Name: "compose",
+					Evidence: []schema.Evidence{
+						{Source: "compose_host_port", Value: "8080"},
+						{Source: "compose_service__api__image", Value: "node:18"},
+					},
+				},
+			},
+		}
+		findings, err := engine.Evaluate(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range findings {
+			if f.ID == "F-ENV-002" {
+				t.Errorf("unexpected F-ENV-002 finding for compose metadata: %v", f)
+			}
+		}
+	})
+
+	// 8. Grouping multiple references
+	t.Run("grouped findings", func(t *testing.T) {
+		engine := NewM1Engine()
+		snapshot := graph.NormalizedSnapshot{
+			Collectors: []schema.CollectorResult{
+				{
+					Name: "compose",
+					Evidence: []schema.Evidence{
+						{Source: "compose.yaml:10", Value: "services.api.environment.DB references ${DB}"},
+						{Source: "compose.yaml:20", Value: "services.worker.environment.DB references ${DB}"},
+					},
+				},
+			},
+		}
+		findings, err := engine.Evaluate(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var dbFindings []schema.Finding
+		for _, f := range findings {
+			if f.ID == "F-ENV-002" && strings.Contains(f.Title, "DB") {
+				dbFindings = append(dbFindings, f)
+			}
+		}
+		if len(dbFindings) != 1 {
+			t.Fatalf("expected exactly 1 grouped finding for DB, got %d", len(dbFindings))
+		}
+		if len(dbFindings[0].Evidence) != 2 {
+			t.Errorf("expected 2 evidence items in grouped finding, got %d", len(dbFindings[0].Evidence))
+		}
+	})
 }
 
 func TestM1Engine_HostRuntimeRules_Mismatch(t *testing.T) {

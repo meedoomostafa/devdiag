@@ -60,30 +60,38 @@ func TestCollector_MissingKeys(t *testing.T) {
 
 func TestParseEnvFileKeys(t *testing.T) {
 	tests := []struct {
-		input string
-		want  []string
+		input       string
+		want        []string
+		wantIgnored int
 	}{
-		{"KEY=value\n", []string{"KEY"}},
-		{"EMPTY=\n", []string{"EMPTY"}},
-		{"QUOTED=\"abc def\"\n", []string{"QUOTED"}},
-		{"SINGLE='abc def'\n", []string{"SINGLE"}},
-		{"VALUE_WITH_EQUALS=a=b=c\n", []string{"VALUE_WITH_EQUALS"}},
-		{"export TOKEN=secret\n", []string{"TOKEN"}},
-		{"# comment\nKEY=val\n", []string{"KEY"}},
-		{"INVALID LINE\nKEY=val\n", []string{"KEY"}},
-		{"URL=postgres://user:pass@host:5432/db\n", []string{"URL"}},
+		{"KEY=value\n", []string{"KEY"}, 0},
+		{"EMPTY=\n", []string{"EMPTY"}, 0},
+		{"QUOTED=\"abc def\"\n", []string{"QUOTED"}, 0},
+		{"SINGLE='abc def'\n", []string{"SINGLE"}, 0},
+		{"VALUE_WITH_EQUALS=a=b=c\n", []string{"VALUE_WITH_EQUALS"}, 0},
+		{"export TOKEN=secret\n", []string{"TOKEN"}, 0},
+		{"# comment\nKEY=val\n", []string{"KEY"}, 0},
+		{"INVALID LINE\nKEY=val\n", []string{"KEY"}, 1},
+		{"URL=postgres://user:pass@host:5432/db\n", []string{"URL"}, 0},
+		{"123KEY=val\nKEY=val\n", []string{"KEY"}, 1},
+		{"MULTI_LINE=\"line1\nline2=val\nline3\"\nKEY=val\n", []string{"MULTI_LINE", "KEY"}, 0},
+		{"TAG: 3.19\n", []string{"TAG"}, 0},
+		{"TAG_COLON:alpine\n", []string{"TAG_COLON"}, 0},
 	}
 
 	for _, tt := range tests {
 		path := filepath.Join(t.TempDir(), ".env")
 		os.WriteFile(path, []byte(tt.input), 0644)
-		got, err := parseEnvFileKeys(path)
+		got, ignored, err := parseEnvFileKeys(path)
 		if err != nil {
 			t.Fatalf("parseEnvFileKeys error: %v", err)
 		}
 		if len(got) != len(tt.want) {
 			t.Errorf("parseEnvFileKeys(%q) = %v, want %v", tt.input, got, tt.want)
 			continue
+		}
+		if ignored != tt.wantIgnored {
+			t.Errorf("parseEnvFileKeys(%q) ignored count = %d, want %d", tt.input, ignored, tt.wantIgnored)
 		}
 		for i := range got {
 			if got[i] != tt.want[i] {

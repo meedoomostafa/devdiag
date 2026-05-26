@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -72,6 +73,36 @@ func TestCollector_PackageManager(t *testing.T) {
 	}
 }
 
+func TestCollector_NestedPackageJSONRuntime(t *testing.T) {
+	dir := t.TempDir()
+	appDir := filepath.Join(dir, "docs-site")
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "package.json"), []byte(`{"engines":{"node":">=24"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules", "ignored"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "node_modules", "ignored", "package.json"), []byte(`{"engines":{"node":">=1"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Collector{Root: dir}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+
+	assertRuntimeEvidence(t, res.Evidence, "docs-site/package.json", `engines: "node": ">=24"`)
+	for _, ev := range res.Evidence {
+		if strings.Contains(ev.Source, "node_modules") {
+			t.Fatalf("dependency package.json should not be collected: %v", res.Evidence)
+		}
+	}
+}
+
 func TestCollector_GlobalJSONDotnetSDK(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "global.json"), []byte(`{"sdk":{"version":"8.0.204"}}`), 0644)
@@ -91,6 +122,16 @@ func TestCollector_GlobalJSONDotnetSDK(t *testing.T) {
 	if !found {
 		t.Errorf("expected global.json dotnet evidence, got: %v", res.Evidence)
 	}
+}
+
+func assertRuntimeEvidence(t *testing.T, evidence []schema.Evidence, source, value string) {
+	t.Helper()
+	for _, ev := range evidence {
+		if ev.Source == source && ev.Value == value {
+			return
+		}
+	}
+	t.Fatalf("expected %s=%q evidence, got: %v", source, value, evidence)
 }
 
 func TestCollector_NoRuntimeFiles(t *testing.T) {
