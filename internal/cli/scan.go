@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,37 +10,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/meedoomostafa/devdiag/internal/collectors"
-	"github.com/meedoomostafa/devdiag/internal/collectors/cache"
-	cicollector "github.com/meedoomostafa/devdiag/internal/collectors/ci"
-	composecollector "github.com/meedoomostafa/devdiag/internal/collectors/compose"
-	composestatuscollector "github.com/meedoomostafa/devdiag/internal/collectors/composestatus"
-	configcollector "github.com/meedoomostafa/devdiag/internal/collectors/config"
-	cudacollector "github.com/meedoomostafa/devdiag/internal/collectors/cuda"
-	diskcollector "github.com/meedoomostafa/devdiag/internal/collectors/disk"
-	dockercollector "github.com/meedoomostafa/devdiag/internal/collectors/docker"
-	envcollector "github.com/meedoomostafa/devdiag/internal/collectors/env"
-	gitcollector "github.com/meedoomostafa/devdiag/internal/collectors/git"
-	gpucollector "github.com/meedoomostafa/devdiag/internal/collectors/gpu"
-	gpudockercollector "github.com/meedoomostafa/devdiag/internal/collectors/gpudocker"
-	hostcollector "github.com/meedoomostafa/devdiag/internal/collectors/host"
-	hostruncollector "github.com/meedoomostafa/devdiag/internal/collectors/hostruntime"
-	networkcollector "github.com/meedoomostafa/devdiag/internal/collectors/network"
-	permissioncollector "github.com/meedoomostafa/devdiag/internal/collectors/permission"
-	podmancollector "github.com/meedoomostafa/devdiag/internal/collectors/podman"
-	portcollector "github.com/meedoomostafa/devdiag/internal/collectors/port"
-	pythonmlcollector "github.com/meedoomostafa/devdiag/internal/collectors/pythonml"
-	repocollector "github.com/meedoomostafa/devdiag/internal/collectors/repo"
-	runtimecollector "github.com/meedoomostafa/devdiag/internal/collectors/runtime"
-	securitycollector "github.com/meedoomostafa/devdiag/internal/collectors/security"
-	systemdcollector "github.com/meedoomostafa/devdiag/internal/collectors/systemd"
+	"github.com/meedoomostafa/devdiag/internal/app"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
-	"github.com/meedoomostafa/devdiag/internal/findings"
-	"github.com/meedoomostafa/devdiag/internal/graph"
-	"github.com/meedoomostafa/devdiag/internal/rulepack"
-	"github.com/meedoomostafa/devdiag/internal/rules"
 	"github.com/meedoomostafa/devdiag/internal/schema"
-	"github.com/meedoomostafa/devdiag/internal/version"
 )
 
 var scanSaveReport bool
@@ -70,132 +43,24 @@ var scanCmd = &cobra.Command{
 
 		logger.Info("scan", fmt.Sprintf("scanning path=%s", absPath))
 
-		// Run all M1 repo collectors + M2 host collectors + self collector
-		runner := collectors.NewRunner()
 		ctx := cmd.Context()
-
-		// Pre-detect container signals for conditional M3 inclusion
-		repoHasDocker := repocollector.HasDockerSignal(absPath)
-		repoHasPodman := repocollector.HasPodmanSignal(absPath)
-		repoHasContainers := repoHasDocker || repoHasPodman
-
-		allCollectors := []collectors.Collector{
-			&configcollector.Collector{Root: absPath},
-			&repocollector.Collector{Root: absPath},
-			&envcollector.Collector{Root: absPath},
-			&composecollector.Collector{Root: absPath},
-			&gitcollector.Collector{Root: absPath},
-			&runtimecollector.Collector{Root: absPath},
-			&hostcollector.Collector{},
-			&hostruncollector.Collector{},
-			&diskcollector.Collector{Path: absPath},
-			&portcollector.Collector{},
-			&networkcollector.Collector{},
-			&systemdcollector.Collector{RepoExpectsDocker: repoHasDocker},
-			&securitycollector.Collector{Root: absPath},
-			&permissioncollector.Collector{Root: absPath},
-			&collectors.SelfCollector{},
+		opts := app.ScanOptions{
+			Path:         absPath,
+			Profile:      flagProfile,
+			RulePackPath: scanRulePackPath,
+			RedactLevel:  flagRedact,
+			CI:           scanCI,
 		}
 
-		// Conditionally include M3 container collectors
-		if repoHasContainers {
-			allCollectors = append(allCollectors,
-				&dockercollector.Collector{},
-				&podmancollector.Collector{},
-				&composestatuscollector.Collector{Root: absPath},
-			)
-		}
-
-		repoHasCI := repocollector.HasCISignal(absPath)
-
-		// Conditionally include CI collector when workflows exist or --ci forces CI evaluation.
-		if repoHasCI || scanCI {
-			allCollectors = append(allCollectors, &cicollector.Collector{Root: absPath})
-		}
-
-		// Conditionally include M6 collectors when --profile ai-ml is set
-		if flagProfile == "ai-ml" {
-			allCollectors = append(allCollectors,
-				&gpucollector.Collector{},
-				&cudacollector.Collector{},
-			)
-			// Python ML and cache only if repo signals exist, unless profile explicitly forces them
-			repoHasPython := repocollector.HasPythonSignal(absPath)
-			if repoHasPython || flagProfile == "ai-ml" {
-				allCollectors = append(allCollectors, &pythonmlcollector.Collector{})
-			}
-			allCollectors = append(allCollectors,
-				&gpudockercollector.Collector{},
-				&cache.Collector{RepoRoot: absPath},
-			)
-		}
-
-		collectorResults := runner.Run(ctx, allCollectors)
-
-		// Build snapshot
-		snapshotBuilder := graph.NewSnapshotBuilder()
-		snapshot := snapshotBuilder.Build(collectorResults)
-
-		// Evaluate M1 policies
-		engine := rules.NewM1Engine()
-		rawFindings, err := engine.Evaluate(snapshot)
+		report, err := app.Scan(ctx, opts, app.NoopSink{})
 		if err != nil {
-			logger.Error("policy", err.Error())
-			return fmt.Errorf("policy evaluation failed: %w", err)
-		}
-
-		// Evaluate M6 policies when profile is ai-ml
-		if flagProfile == "ai-ml" {
-			m6Engine := rules.NewM6Engine()
-			m6Findings, err := m6Engine.Evaluate(snapshot)
-			if err != nil {
-				logger.Error("m6-policy", err.Error())
-			} else {
-				rawFindings = append(rawFindings, m6Findings...)
-			}
-		}
-
-		// Evaluate M8 policies when CI workflows exist
-		if repoHasCI || scanCI {
-			m8Engine := rules.NewM8Engine()
-			m8Findings, err := m8Engine.Evaluate(snapshot)
-			if err != nil {
-				logger.Error("m8-policy", err.Error())
-			} else {
-				rawFindings = append(rawFindings, m8Findings...)
-			}
-		}
-		if scanRulePackPath != "" {
-			eval := rulepack.EvaluateRegoFile(ctx, scanRulePackPath, snapshot)
-			if !eval.Valid {
-				logger.Error("rule-pack", strings.Join(eval.Errors, "; "))
+			var rpe *app.RulePackError
+			if errors.As(err, &rpe) {
+				logger.Error("rule-pack", strings.Join(rpe.Errors, "; "))
 				return exitCodeError{code: exitcode.InvalidInput}
 			}
-			rawFindings = append(rawFindings, eval.Findings...)
-			collectorResults = append(collectorResults, schema.CollectorResult{
-				Name:   "rulepack",
-				Status: schema.CollectorOK,
-				Evidence: []schema.Evidence{
-					{Source: "rulepack_id", Value: eval.Pack.ID},
-					{Source: "rulepack_engine", Value: eval.Pack.Engine},
-					{Source: "rulepack_findings", Value: fmt.Sprintf("%d", len(eval.Findings))},
-				},
-			})
-		}
-
-		// Aggregate findings for stable ordering
-		aggregator := findings.NewAggregator()
-		sortedFindings := aggregator.Add(rawFindings)
-
-		report := &schema.Report{
-			SchemaVersion:   schema.SchemaVersion,
-			DevDiagVersion:  version.Version,
-			RunID:           generateRunID(),
-			RedactionStatus: string(redactEngine.Level),
-			Repo:            schema.RepoInfo{Root: absPath},
-			Host:            populateHostInfo(collectorResults),
-			Collectors:      collectorResults,
-			Findings:        sortedFindings,
+			logger.Error("policy", err.Error())
+			return fmt.Errorf("policy evaluation failed: %w", err)
 		}
 
 		renderer := pickRenderer(colorMode)
@@ -211,7 +76,7 @@ var scanCmd = &cobra.Command{
 			}
 		}
 
-		code := exitCodeFromResultsForCommand(cmd, sortedFindings, collectorResults, false)
+		code := exitCodeFromResultsForCommand(cmd, report.Findings, report.Collectors, false)
 		if code != exitcode.Success {
 			return exitCodeError{code: code}
 		}
