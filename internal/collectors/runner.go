@@ -22,6 +22,12 @@ func NewRunner() *Runner {
 	return &Runner{Timeout: defaultCollectorTimeout}
 }
 
+// Observer receives callbacks about collector execution progress.
+type Observer interface {
+	CollectorStarted(name string)
+	CollectorDone(result schema.CollectorResult, duration time.Duration)
+}
+
 type collectorTimeoutProvider interface {
 	Timeout() time.Duration
 }
@@ -38,6 +44,11 @@ type collectorOutcome struct {
 
 // Run executes each collector concurrently with the provided context and returns results.
 func (r *Runner) Run(ctx context.Context, collectors []Collector) []schema.CollectorResult {
+	return r.RunWithObserver(ctx, collectors, nil)
+}
+
+// RunWithObserver executes each collector concurrently and emits observer callbacks.
+func (r *Runner) RunWithObserver(ctx context.Context, collectors []Collector, observer Observer) []schema.CollectorResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -47,7 +58,15 @@ func (r *Runner) Run(ctx context.Context, collectors []Collector) []schema.Colle
 
 	for i, c := range collectors {
 		go func(idx int, col Collector) {
-			resultCh <- collectorRunResult{Index: idx, Result: r.runOne(ctx, col)}
+			start := time.Now()
+			if observer != nil {
+				observer.CollectorStarted(col.Name())
+			}
+			res := r.runOne(ctx, col)
+			if observer != nil {
+				observer.CollectorDone(res, time.Since(start))
+			}
+			resultCh <- collectorRunResult{Index: idx, Result: res}
 		}(i, c)
 	}
 

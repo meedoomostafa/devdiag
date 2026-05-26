@@ -3,6 +3,7 @@ package collectors
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -296,5 +297,103 @@ func TestRunner_UsesPerCollectorTimeoutOverride(t *testing.T) {
 	}
 	if results[0].TimeoutMs != 25 {
 		t.Fatalf("expected TimeoutMs = 25, got %d", results[0].TimeoutMs)
+	}
+}
+
+type recordingObserver struct {
+	started []string
+	done    []schema.CollectorResult
+	delays  []time.Duration
+	mu      sync.Mutex
+}
+
+func (o *recordingObserver) CollectorStarted(name string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.started = append(o.started, name)
+}
+
+func (o *recordingObserver) CollectorDone(result schema.CollectorResult, duration time.Duration) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.done = append(o.done, result)
+	o.delays = append(o.delays, duration)
+}
+
+func TestRunner_ObserverCalledForEachCollector(t *testing.T) {
+	runner := NewRunner()
+	observer := &recordingObserver{}
+	cols := []Collector{&okCollector{}, &okCollector{}}
+
+	results := runner.RunWithObserver(context.Background(), cols, observer)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	if len(observer.started) != 2 {
+		t.Fatalf("expected 2 started callbacks, got %d", len(observer.started))
+	}
+	if observer.started[0] != "ok" || observer.started[1] != "ok" {
+		t.Errorf("expected started names 'ok', got %v", observer.started)
+	}
+
+	if len(observer.done) != 2 {
+		t.Fatalf("expected 2 done callbacks, got %d", len(observer.done))
+	}
+	for i, res := range observer.done {
+		if res.Status != schema.CollectorOK {
+			t.Errorf("done[%d]: expected status ok, got %v", i, res.Status)
+		}
+	}
+	for i, d := range observer.delays {
+		if d < 0 {
+			t.Errorf("delay[%d] should be non-negative, got %v", i, d)
+		}
+	}
+}
+
+func TestRunner_ObserverCalledOnTimeout(t *testing.T) {
+	runner := NewRunner()
+	runner.Timeout = 25 * time.Millisecond
+	observer := &recordingObserver{}
+
+	done := make(chan []schema.CollectorResult, 1)
+	go func() {
+		done <- runner.RunWithObserver(context.Background(), []Collector{&slowCollector{}}, observer)
+	}()
+
+	var results []schema.CollectorResult
+	select {
+	case results = <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("runner did not enforce timeout")
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != schema.CollectorTimeout {
+		t.Fatalf("expected timeout, got %s", results[0].Status)
+	}
+
+	if len(observer.started) != 1 || observer.started[0] != "slow" {
+		t.Errorf("expected started ['slow'], got %v", observer.started)
+	}
+	if len(observer.done) != 1 {
+		t.Fatalf("expected 1 done callback, got %d", len(observer.done))
+	}
+	if observer.done[0].Status != schema.CollectorTimeout {
+		t.Errorf("expected done status timeout, got %v", observer.done[0].Status)
+	}
+}
+
+func TestRunner_RunDelegatesToRunWithObserver(t *testing.T) {
+	runner := NewRunner()
+	results := runner.Run(context.Background(), []Collector{&okCollector{}})
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != schema.CollectorOK {
+		t.Errorf("expected ok status, got %v", results[0].Status)
 	}
 }
