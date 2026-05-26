@@ -744,9 +744,91 @@ func TestScan_RulePackError(t *testing.T) {
 		t.Fatal("expected error for missing rule pack")
 	}
 
+	var rpe *RulePackError
+	if !errors.As(err, &rpe) {
+		t.Fatalf("expected RulePackError, got %T: %v", err, err)
+	}
+	if len(rpe.Errors) == 0 {
+		t.Error("expected RulePackError.Errors to be non-empty")
+	}
+
 	events := sink.Events()
 	if !hasEvent(events, EventScanFailed) {
 		t.Errorf("expected scan_failed event for missing rule pack, got types: %v", eventTypes(events))
+	}
+}
+
+func TestScan_M6ErrorTolerated(t *testing.T) {
+	sink := &RecordingSink{}
+	factory := &fakeCollectorFactory{
+		collectors: []collectors.Collector{
+			&fakeCollector{name: "gpu", result: schema.CollectorResult{Status: schema.CollectorOK}},
+		},
+		signals: RepoSignals{Root: "/tmp/test"},
+	}
+	engines := &fakeEngineFactory{
+		m1Findings: []schema.Finding{},
+		m6Err:      errors.New("m6 engine failure"),
+	}
+	scanner := newTestScanner(factory, engines)
+
+	report, err := scanner.Scan(context.Background(), ScanOptions{Path: ".", Profile: "ai-ml"}, sink)
+	if err != nil {
+		t.Fatalf("M6 error should be tolerated, got: %v", err)
+	}
+	if report == nil {
+		t.Fatal("expected report despite M6 error")
+	}
+
+	events := sink.Events()
+	m6ErrFound := false
+	for _, e := range events {
+		if e.RuleEngine == "m6" && e.Error != "" {
+			m6ErrFound = true
+		}
+	}
+	if !m6ErrFound {
+		t.Errorf("expected M6 rule_evaluated event with error, got events: %v", eventTypes(events))
+	}
+	if hasEvent(events, EventScanFailed) {
+		t.Error("M6 error should not emit scan_failed")
+	}
+}
+
+func TestScan_M8ErrorTolerated(t *testing.T) {
+	sink := &RecordingSink{}
+	factory := &fakeCollectorFactory{
+		collectors: []collectors.Collector{
+			&fakeCollector{name: "ci", result: schema.CollectorResult{Status: schema.CollectorOK}},
+		},
+		signals: RepoSignals{Root: "/tmp/test", HasCI: true},
+	}
+	engines := &fakeEngineFactory{
+		m1Findings: []schema.Finding{},
+		m8Err:      errors.New("m8 engine failure"),
+	}
+	scanner := newTestScanner(factory, engines)
+
+	report, err := scanner.Scan(context.Background(), ScanOptions{Path: "."}, sink)
+	if err != nil {
+		t.Fatalf("M8 error should be tolerated, got: %v", err)
+	}
+	if report == nil {
+		t.Fatal("expected report despite M8 error")
+	}
+
+	events := sink.Events()
+	m8ErrFound := false
+	for _, e := range events {
+		if e.RuleEngine == "m8" && e.Error != "" {
+			m8ErrFound = true
+		}
+	}
+	if !m8ErrFound {
+		t.Errorf("expected M8 rule_evaluated event with error, got events: %v", eventTypes(events))
+	}
+	if hasEvent(events, EventScanFailed) {
+		t.Error("M8 error should not emit scan_failed")
 	}
 }
 
