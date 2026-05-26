@@ -19,6 +19,9 @@ var scanSaveReport bool
 var scanCI bool
 var scanRulePackPath string
 
+// scanCmd is a thin wrapper around app.Scan.
+// Orchestration lives in internal/app; the CLI layer owns flags, rendering,
+// exit-code mapping, and explicit artifact persistence.
 var scanCmd = &cobra.Command{
 	Use:   "scan [path]",
 	Short: "Run a diagnostic scan on the given path",

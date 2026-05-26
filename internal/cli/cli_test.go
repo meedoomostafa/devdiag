@@ -1755,6 +1755,26 @@ func TestMarkdown_DoesNotExposeUnredactedSecrets(t *testing.T) {
 	}
 }
 
+func TestScanGitHubFormat_EmitsAnnotations(t *testing.T) {
+	stdout, _, code := runBinary("scan", ".", "--format", "github", "--fail-severity", "off")
+	if code != 0 {
+		t.Fatalf("unexpected exit code: %d", code)
+	}
+	// The github renderer emits ::error:: for high/critical and ::warning:: for medium.
+	// In a real repo there may be zero or more findings; we just verify the output
+	// contains valid workflow command syntax when findings are present, or is empty
+	// when no findings meet the severity threshold.
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "::error") && !strings.HasPrefix(line, "::warning") {
+			t.Errorf("github format line %q does not start with ::error:: or ::warning::", line)
+		}
+	}
+}
+
 func TestSeverityHigher_ExitCodeMapping(t *testing.T) {
 	// Verify the severity ordering that drives exit code 1.
 	if !severityHigher("critical", "info") {
