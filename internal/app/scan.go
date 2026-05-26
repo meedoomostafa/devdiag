@@ -50,6 +50,15 @@ type ScanOptions struct {
 	CI           bool
 }
 
+// RulePackError indicates an invalid or unprocessable rule pack.
+type RulePackError struct {
+	Errors []string
+}
+
+func (e *RulePackError) Error() string {
+	return fmt.Sprintf("rule pack validation failed: %s", strings.Join(e.Errors, "; "))
+}
+
 // RepoSignals holds repository signal detection results used for conditional
 // collector selection and rule evaluation.
 type RepoSignals struct {
@@ -188,27 +197,29 @@ func (s *Scanner) Scan(ctx context.Context, opts ScanOptions, sink EventSink) (*
 		m6Findings, err := m6Engine.Evaluate(snapshot)
 		if err != nil {
 			emit(Event{
-				Type:  EventScanFailed,
-				Error: err.Error(),
-				Err:   err,
+				Type:       EventRuleEvaluated,
+				RuleEngine: "m6",
+				Error:      err.Error(),
+				Err:        err,
+				Message:    fmt.Sprintf("M6 engine error: %s", err.Error()),
 			})
-			return nil, err
-		}
-		emit(Event{
-			Type:       EventRuleEvaluated,
-			RuleEngine: "m6",
-			Message:    fmt.Sprintf("M6 engine evaluated %d findings", len(m6Findings)),
-		})
-		for _, f := range m6Findings {
+		} else {
 			emit(Event{
-				Type:       EventFindingAdded,
-				FindingID:  f.ID,
-				Severity:   f.Severity,
-				Confidence: f.Confidence,
-				Message:    fmt.Sprintf("finding %s added", f.ID),
+				Type:       EventRuleEvaluated,
+				RuleEngine: "m6",
+				Message:    fmt.Sprintf("M6 engine evaluated %d findings", len(m6Findings)),
 			})
+			for _, f := range m6Findings {
+				emit(Event{
+					Type:       EventFindingAdded,
+					FindingID:  f.ID,
+					Severity:   f.Severity,
+					Confidence: f.Confidence,
+					Message:    fmt.Sprintf("finding %s added", f.ID),
+				})
+			}
+			allFindings = append(allFindings, m6Findings...)
 		}
-		allFindings = append(allFindings, m6Findings...)
 	}
 
 	// Evaluate M8 policies when CI workflows exist
@@ -217,34 +228,36 @@ func (s *Scanner) Scan(ctx context.Context, opts ScanOptions, sink EventSink) (*
 		m8Findings, err := m8Engine.Evaluate(snapshot)
 		if err != nil {
 			emit(Event{
-				Type:  EventScanFailed,
-				Error: err.Error(),
-				Err:   err,
+				Type:       EventRuleEvaluated,
+				RuleEngine: "m8",
+				Error:      err.Error(),
+				Err:        err,
+				Message:    fmt.Sprintf("M8 engine error: %s", err.Error()),
 			})
-			return nil, err
-		}
-		emit(Event{
-			Type:       EventRuleEvaluated,
-			RuleEngine: "m8",
-			Message:    fmt.Sprintf("M8 engine evaluated %d findings", len(m8Findings)),
-		})
-		for _, f := range m8Findings {
+		} else {
 			emit(Event{
-				Type:       EventFindingAdded,
-				FindingID:  f.ID,
-				Severity:   f.Severity,
-				Confidence: f.Confidence,
-				Message:    fmt.Sprintf("finding %s added", f.ID),
+				Type:       EventRuleEvaluated,
+				RuleEngine: "m8",
+				Message:    fmt.Sprintf("M8 engine evaluated %d findings", len(m8Findings)),
 			})
+			for _, f := range m8Findings {
+				emit(Event{
+					Type:       EventFindingAdded,
+					FindingID:  f.ID,
+					Severity:   f.Severity,
+					Confidence: f.Confidence,
+					Message:    fmt.Sprintf("finding %s added", f.ID),
+				})
+			}
+			allFindings = append(allFindings, m8Findings...)
 		}
-		allFindings = append(allFindings, m8Findings...)
 	}
 
 	// Evaluate external rule pack
 	if opts.RulePackPath != "" {
 		eval := rulepack.EvaluateRegoFile(ctx, opts.RulePackPath, snapshot)
 		if !eval.Valid {
-			err := fmt.Errorf("rule pack validation failed: %s", strings.Join(eval.Errors, "; "))
+			err := &RulePackError{Errors: eval.Errors}
 			emit(Event{
 				Type:  EventScanFailed,
 				Error: err.Error(),
