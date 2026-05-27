@@ -111,3 +111,26 @@ devdiag team bundle --run-id <run-id> --format json
 
 The bundle command is read-only. It reads saved artifacts and does not create,
 modify, upload, or delete project files.
+
+### Inspect TUI Smoke
+
+In an interactive terminal:
+
+```bash
+devdiag inspect .
+devdiag tui .
+```
+
+In a non-interactive terminal (should exit with code 2 and no control characters):
+
+```bash
+devdiag inspect . < /dev/null
+devdiag tui . < /dev/null
+```
+
+After running inspect, confirm scan output is unchanged:
+
+```bash
+devdiag scan . --format json --fail-severity off
+devdiag scan . --format ndjson --fail-severity off
+```
