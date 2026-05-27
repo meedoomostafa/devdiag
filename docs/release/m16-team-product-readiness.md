@@ -134,3 +134,10 @@ After running inspect, confirm scan output is unchanged:
 devdiag scan . --format json --fail-severity off
 devdiag scan . --format ndjson --fail-severity off
 ```
+
+Inspect behavior notes:
+
+- `inspect` is read-only. It does not apply fixes, edit files, or mutate project/host/container state.
+- It consumes `app.Scan` events and the final `schema.Report` directly. It does not shell out to `devdiag scan`.
+- `scan` remains the primary automation path. `inspect` is an optional interactive companion.
+- There is no fix-apply path inside the TUI.
