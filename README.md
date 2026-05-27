@@ -10,6 +10,12 @@ Run one command in a repo and get ranked, evidence-backed findings with safe nex
 devdiag scan .
 ```
 
+For an interactive exploration of findings and evidence:
+
+```bash
+devdiag inspect .
+```
+
 DevDiag is built for problems such as:
 
 - works-on-my-machine environment drift
@@ -24,6 +30,22 @@ DevDiag is built for problems such as:
 - CUDA, NVIDIA, PyTorch, TensorFlow, JAX, and container GPU diagnostics
 - package/build cache ownership and stale-cache evidence
 - safe fix planning, redacted support capsules, and trace-based evidence
+
+## Command Philosophy
+
+```text
+scan    -> produce reports (automation, scripts, CI)
+inspect -> interactively explore findings and evidence (read-only TUI)
+check   -> targeted domain checks with verbose evidence
+fix     -> deliberate dry-run and apply workflow outside the TUI
+```
+
+- `scan` is the primary automation path. It writes nothing unless `--save-report` is passed.
+- `inspect` is an optional interactive workflow. It consumes the same `app.Scan` events and `schema.Report` as the CLI, but never shells out to `devdiag scan`.
+- `check` is for deep domain investigation (containers, CI, GPU, security, etc.).
+- `fix` is separate and explicit. There is no fix-apply path inside the TUI.
+
+Plain `devdiag` shows normal Cobra help and does not auto-open the TUI.
 
 ## Build
 
@@ -76,14 +98,17 @@ curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
 devdiag doctor self
 devdiag scan . --format human
 devdiag scan . --format json
+devdiag scan . --format ndjson
 devdiag scan . --ci
 devdiag scan . --verbose
 devdiag scan . --save-report
-devdiag check env .
-devdiag check runtimes .
-devdiag check containers .
+devdiag inspect .
+devdiag tui .
+devdiag check env . --verbose
+devdiag check runtimes . --verbose
+devdiag check containers . --verbose
 devdiag check containers --gpu
-devdiag check security .
+devdiag check security . --verbose
 devdiag check ci .
 devdiag check gpu --python
 devdiag check cache .
@@ -217,6 +242,8 @@ An unavailable optional collector is reported as evidence but does not fail a sc
 DevDiag is local-first and non-mutating by default.
 
 - Collectors do not mutate system state.
+- `inspect` is read-only. It does not apply fixes, edit files, restart services,
+  or mutate containers, hosts, or remote targets.
 - Redaction is enabled by default.
 - No upload happens by default.
 - Support capsules are local files unless the user shares them.
@@ -247,6 +274,29 @@ Additional checks:
 ```bash
 /usr/local/go/bin/go vet ./...
 git diff --check
+```
+
+### Manual Inspect Verification
+
+When running in a TTY:
+
+```bash
+devdiag inspect .
+devdiag tui .
+```
+
+When running without a TTY (should fail cleanly with exit code 2):
+
+```bash
+devdiag inspect . < /dev/null
+devdiag tui . < /dev/null
+```
+
+After using `inspect`, confirm `scan` output remains unchanged:
+
+```bash
+devdiag scan . --format json --fail-severity off
+devdiag scan . --format ndjson --fail-severity off
 ```
 
 ## GitHub Action
