@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/meedoomostafa/devdiag/internal/app"
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -112,6 +114,7 @@ type scanSession struct {
 	report *schema.Report
 	err    error
 	done   chan struct{}
+	cancel context.CancelFunc
 }
 
 // Model is the Bubble Tea model for the inspect TUI.
@@ -163,7 +166,8 @@ func (m Model) StartScan() (Model, tea.Cmd) {
 	return m, startScan(m.opts)
 }
 
-// ReRun triggers a fresh scan.
+// ReRun triggers a fresh scan, cancelling any active scan first.
 func (m Model) ReRun() (Model, tea.Cmd) {
+	m.cancelScan()
 	return m.StartScan()
 }

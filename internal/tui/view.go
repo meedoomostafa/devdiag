@@ -36,8 +36,8 @@ var (
 		schema.SeverityCritical: lipgloss.Color("#FF0000"),
 		schema.SeverityHigh:     lipgloss.Color("#FF8C00"),
 		schema.SeverityMedium:   lipgloss.Color("#FFD700"),
-		schema.SeverityLow:     lipgloss.Color("#87CEEB"),
-		schema.SeverityInfo:    lipgloss.Color("#808080"),
+		schema.SeverityLow:      lipgloss.Color("#87CEEB"),
+		schema.SeverityInfo:     lipgloss.Color("#808080"),
 	}
 
 	helpStyle = lipgloss.NewStyle().
@@ -164,6 +164,11 @@ func (m Model) renderFindings() string {
 		m.height = 24
 	}
 
+	// Fallback for very small terminals: render a compact single-column view.
+	if m.width < 60 || m.height < 12 {
+		return m.renderCompact()
+	}
+
 	listWidth := m.width / 3
 	if listWidth < 25 {
 		listWidth = 25
@@ -187,6 +192,35 @@ func (m Model) renderFindings() string {
 	return lipgloss.JoinVertical(lipgloss.Left, title, body, footer)
 }
 
+// renderCompact shows a single-column stacked layout for small terminals.
+func (m Model) renderCompact() string {
+	var b strings.Builder
+	b.WriteString(appTitleStyle.Render(" DevDiag Inspect "))
+	b.WriteString("\n\n")
+
+	if m.selected < len(m.filtered) {
+		f := m.filtered[m.selected]
+		b.WriteString(fmt.Sprintf("%d/%d ", m.selected+1, len(m.filtered)))
+		b.WriteString(severityStyle(f.Finding.Severity).Render(string(f.Finding.Severity)))
+		b.WriteString(" ")
+		b.WriteString(lipgloss.NewStyle().Bold(true).Render(f.Finding.ID))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render(f.Finding.Title))
+		b.WriteString("\n\n")
+		b.WriteString(fmt.Sprintf("Confidence: %s (%.2f)  Domain: %s  Blast: %s  Mut: %s\n",
+			f.ConfidenceLabel, f.Finding.Confidence, f.Domain, f.BlastRadius, f.MutationRisk))
+		if f.Finding.Symptom != "" {
+			b.WriteString(wrapText(f.Finding.Symptom, m.width-2))
+			b.WriteString("\n\n")
+		}
+	} else {
+		b.WriteString("No findings.\n\n")
+	}
+
+	b.WriteString(helpStyle.Render("q:quit r:rerun ↑k:prev ↓j:next ?:help"))
+	return b.String()
+}
+
 func (m Model) renderList(width int) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Findings (%d)\n\n", len(m.filtered)))
@@ -206,7 +240,7 @@ func (m Model) renderList(width int) string {
 				title = title[:width-7] + "..."
 			}
 			if i == m.selected {
-				b.WriteString(selectedItemStyle.Width(width - 2).Render("  "+title))
+				b.WriteString(selectedItemStyle.Width(width - 2).Render("  " + title))
 				b.WriteString("\n")
 			} else {
 				b.WriteString("  " + helpStyle.Render(title))

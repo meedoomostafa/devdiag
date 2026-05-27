@@ -30,7 +30,7 @@ var inspectCmd = &cobra.Command{
 
 func runInspect(cmd *cobra.Command, args []string) error {
 	// Require a TTY for the interactive inspect workflow.
-	if !output.IsTTY(os.Stdout) {
+	if !output.IsTTY(os.Stdout) || !output.IsTTY(os.Stdin) {
 		return exitCodeError{code: exitcode.InvalidInput}
 	}
 

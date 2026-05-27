@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -456,5 +458,151 @@ func TestModel_WindowSize(t *testing.T) {
 	m = newM.(Model)
 	if m.width != 120 || m.height != 40 {
 		t.Errorf("size = %dx%d, want 120x40", m.width, m.height)
+	}
+}
+
+func TestModel_QuitCancelsScan(t *testing.T) {
+	m := NewModel(app.ScanOptions{Path: "."})
+	// Start a scan session with a cancellable context.
+	ctx, cancel := context.WithCancel(context.Background())
+	sess := &scanSession{
+		ch:     make(chan app.Event, 256),
+		done:   make(chan struct{}),
+		cancel: cancel,
+	}
+	m.session = sess
+	m.scanning = true
+
+	// Simulate pressing q.
+	newM, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil {
+		t.Fatal("expected quit command")
+	}
+	// Context should be cancelled.
+	select {
+	case <-ctx.Done():
+		// expected
+	default:
+		t.Error("expected scan context to be cancelled on quit")
+	}
+	_ = newM
+}
+
+func TestModel_RerunCancelsPreviousScan(t *testing.T) {
+	m := NewModel(app.ScanOptions{Path: "."})
+	ctx, cancel := context.WithCancel(context.Background())
+	sess := &scanSession{
+		ch:     make(chan app.Event, 256),
+		done:   make(chan struct{}),
+		cancel: cancel,
+	}
+	m.session = sess
+	m.scanning = true
+
+	newM, cmd := m.ReRun()
+	if !newM.scanning {
+		t.Error("expected scanning=true after ReRun")
+	}
+	if cmd == nil {
+		t.Error("expected non-nil cmd after ReRun")
+	}
+	select {
+	case <-ctx.Done():
+		// expected
+	default:
+		t.Error("expected previous scan context to be cancelled on rerun")
+	}
+}
+
+func TestModel_SmallTerminal_CompactView(t *testing.T) {
+	m := NewModel(app.ScanOptions{Path: "."})
+	m.scanning = false
+	m.findings = []InspectFinding{
+		{Finding: schema.Finding{ID: "F-TEST-001", Severity: schema.SeverityHigh, Title: "Test finding"}},
+	}
+	m.filtered = m.findings
+
+	// Very small terminal triggers compact view.
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
+	m = newM.(Model)
+	v := m.View()
+	if v == "" {
+		t.Fatal("compact view should not be empty")
+	}
+	// Should contain the finding ID, not a two-panel layout.
+	if !strings.Contains(v, "F-TEST-001") {
+		t.Error("compact view should contain finding ID")
+	}
+}
+
+func TestModel_LongEvidence_DoesNotPanic(t *testing.T) {
+	m := NewModel(app.ScanOptions{Path: "."})
+	m.scanning = false
+	longValue := strings.Repeat("a", 500)
+	m.findings = []InspectFinding{
+		{Finding: schema.Finding{
+			ID:       "F-TEST-001",
+			Severity: schema.SeverityHigh,
+			Title:    "Test",
+			Symptom:  strings.Repeat("x ", 200),
+			Evidence: []schema.Evidence{
+				{Source: "long", Value: longValue},
+			},
+			LikelyCauses: []string{strings.Repeat("cause ", 100)},
+		}},
+	}
+	m.filtered = m.findings
+	m.verbose = true
+	m.width = 80
+	m.height = 24
+
+	// Should not panic.
+	_ = m.View()
+}
+
+func TestModel_NoMutationKeybindings(t *testing.T) {
+	m := NewModel(app.ScanOptions{Path: "."})
+	m.scanning = false
+	m.findings = []InspectFinding{{Finding: schema.Finding{ID: "X"}}}
+	m.filtered = m.findings
+
+	// List of keys that should NOT produce a mutation action.
+	// We verify they don't crash and don't change findings/filtered.
+	mutationKeys := []string{"a", "d", "f", "x", "1", "2", "3"}
+	for _, k := range mutationKeys {
+		newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
+		newModel := newM.(Model)
+		if len(newModel.filtered) != len(m.filtered) {
+			t.Errorf("key %q changed filtered count", k)
+		}
+	}
+}
+
+func TestModel_SafeEventSink_NoPanicAfterClose(t *testing.T) {
+	sink := &safeEventSink{ch: make(chan app.Event, 4)}
+	sink.Emit(app.Event{Type: app.EventScanStarted})
+	sink.close()
+	// These should not panic.
+	sink.Emit(app.Event{Type: app.EventScanStarted})
+	sink.Emit(app.Event{Type: app.EventScanStarted})
+}
+
+func TestModel_ScanDone_WithEmptyFindings(t *testing.T) {
+	m := NewModel(app.ScanOptions{Path: "."})
+	report := &schema.Report{
+		Findings: []schema.Finding{},
+	}
+	newM, _ := m.Update(scanDoneMsg{report: report})
+	m = newM.(Model)
+	if m.scanning {
+		t.Error("expected scanning=false")
+	}
+	if len(m.findings) != 0 {
+		t.Errorf("expected 0 findings, got %d", len(m.findings))
+	}
+	// View should render empty state without panic.
+	v := m.View()
+	if v == "" {
+		t.Error("empty findings view should not be empty")
 	}
 }
