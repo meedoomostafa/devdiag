@@ -3653,3 +3653,34 @@ func tgzReadFile(path, name string) ([]byte, error) {
 		}
 	}
 }
+
+func TestInspect_NonTTY_ReturnsExitCode2(t *testing.T) {
+	// When stdout is not a TTY, inspect should fail with InvalidInput.
+	_, _, code := runBinaryWithEnv(
+		append(os.Environ(), "NO_COLOR=1"),
+		"inspect", ".",
+	)
+	if code != exitcode.InvalidInput.Int() {
+		t.Errorf("inspect non-tty exit code = %d, want %d", code, exitcode.InvalidInput.Int())
+	}
+}
+
+func TestInspect_AliasTUI_NonTTY_ReturnsExitCode2(t *testing.T) {
+	_, _, code := runBinaryWithEnv(
+		append(os.Environ(), "NO_COLOR=1"),
+		"tui", ".",
+	)
+	if code != exitcode.InvalidInput.Int() {
+		t.Errorf("tui non-tty exit code = %d, want %d", code, exitcode.InvalidInput.Int())
+	}
+}
+
+func TestInspect_Help_ReturnsExitCode0(t *testing.T) {
+	stdout, _, code := runBinary("inspect", "--help")
+	if code != 0 {
+		t.Fatalf("inspect --help exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "inspect") {
+		t.Error("inspect --help should mention inspect")
+	}
+}
