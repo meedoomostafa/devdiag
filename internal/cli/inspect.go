@@ -1,11 +1,9 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -63,29 +61,20 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	// We let the TUI handle scan errors; pre-flight validation is limited
 	// to what the CLI layer already enforces via PersistentPreRunE.
 
-	model := tui.NewModel(opts)
+	model := tui.NewModel(opts, buildRedactEngine())
 	p := tea.NewProgram(model, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	finalModel, err := p.Run()
+	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 
 	// After the TUI exits, optionally persist the report if requested.
 	// The TUI model itself does not own persistence; the CLI layer does.
 	if inspectSaveReport {
-		// We need to re-run app.Scan synchronously to get the report for saving.
-		// This is acceptable because save-report is an explicit, rare action.
-		report, err := app.Scan(cmd.Context(), opts, app.NoopSink{})
-		if err != nil {
-			var rpe *app.RulePackError
-			if errors.As(err, &rpe) {
-				logger.Error("rule-pack", strings.Join(rpe.Errors, "; "))
-				return exitCodeError{code: exitcode.InvalidInput}
+		if m, ok := finalModel.(tui.Model); ok && m.Report() != nil {
+			if err := persistReport(m.Report()); err != nil {
+				logger.Warn("inspect", fmt.Sprintf("failed to persist report: %v", err))
 			}
-			logger.Error("policy", err.Error())
-			return fmt.Errorf("policy evaluation failed: %w", err)
-		}
-		if err := persistReport(report); err != nil {
-			logger.Warn("inspect", fmt.Sprintf("failed to persist report: %v", err))
 		}
 	}
 

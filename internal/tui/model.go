@@ -2,9 +2,11 @@ package tui
 
 import (
 	"context"
+	"sort"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/meedoomostafa/devdiag/internal/app"
+	"github.com/meedoomostafa/devdiag/internal/redact"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
@@ -96,15 +98,14 @@ func sortFindingsBySeverity(findings []InspectFinding) []InspectFinding {
 	// stable sort by severity rank descending, then confidence descending
 	out := make([]InspectFinding, len(findings))
 	copy(out, findings)
-	for i := 0; i < len(out); i++ {
-		for j := i + 1; j < len(out); j++ {
-			ri := severityRank(out[i].Finding.Severity)
-			rj := severityRank(out[j].Finding.Severity)
-			if ri < rj || (ri == rj && out[i].Finding.Confidence < out[j].Finding.Confidence) {
-				out[i], out[j] = out[j], out[i]
-			}
+	sort.SliceStable(out, func(i, j int) bool {
+		ri := severityRank(out[i].Finding.Severity)
+		rj := severityRank(out[j].Finding.Severity)
+		if ri != rj {
+			return ri > rj
 		}
-	}
+		return out[i].Finding.Confidence > out[j].Finding.Confidence
+	})
 	return out
 }
 
@@ -129,6 +130,9 @@ type Model struct {
 	scanErr  error
 	report   *schema.Report
 
+	// Redaction
+	redactEngine *redact.Engine
+
 	// Findings state
 	findings     []InspectFinding
 	filtered     []InspectFinding
@@ -144,11 +148,17 @@ type Model struct {
 	height int
 }
 
-// NewModel creates a TUI model for the given scan options.
-func NewModel(opts app.ScanOptions) Model {
+// NewModel creates a TUI model for the given scan options and redaction engine.
+func NewModel(opts app.ScanOptions, engine *redact.Engine) Model {
 	return Model{
-		opts: opts,
+		opts:         opts,
+		redactEngine: engine,
 	}
+}
+
+// Report returns the final report from the TUI session.
+func (m Model) Report() *schema.Report {
+	return m.report
 }
 
 // StartScan initiates the background scan and returns the initial command.

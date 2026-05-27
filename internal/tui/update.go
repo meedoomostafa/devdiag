@@ -41,11 +41,8 @@ func (s *safeEventSink) Emit(e app.Event) {
 		s.mu.Unlock()
 		return
 	}
-	select {
-	case s.ch <- e:
-	default:
-	}
 	s.mu.Unlock()
+	s.ch <- e
 }
 
 func (s *safeEventSink) close() {
@@ -120,7 +117,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.report = msg.report
 		m.scanErr = msg.err
 		if msg.report != nil {
-			m.findings = sortFindingsBySeverity(BuildInspectFindings(msg.report))
+			report := msg.report
+			if m.redactEngine != nil {
+				report = m.redactEngine.RedactReport(msg.report)
+			}
+			m.findings = sortFindingsBySeverity(BuildInspectFindings(report))
 			m.filtered = ApplyFilters(m.findings, DefaultFilters())
 			m.selected = 0
 			m.scrollOffset = 0
@@ -197,11 +198,35 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.filterInput += string(msg.Runes)
 		return m, nil
 	}
-	if msg.String() == " " {
-		m.filterInput += " "
-		return m, nil
-	}
 	return m, nil
+}
+
+func (m *Model) maxVisibleItems() int {
+	maxItems := (m.height - 7) / 2
+	if maxItems < 1 {
+		maxItems = 1
+	}
+	return maxItems
+}
+
+func (m *Model) adjustScroll() {
+	maxItems := m.maxVisibleItems()
+	if m.selected < m.scrollOffset {
+		m.scrollOffset = m.selected
+	}
+	if m.selected >= m.scrollOffset+maxItems {
+		m.scrollOffset = m.selected - maxItems + 1
+	}
+	if m.scrollOffset < 0 {
+		m.scrollOffset = 0
+	}
+	if m.scrollOffset > len(m.filtered)-maxItems {
+		if len(m.filtered) > maxItems {
+			m.scrollOffset = len(m.filtered) - maxItems
+		} else {
+			m.scrollOffset = 0
+		}
+	}
 }
 
 func (m *Model) nextFinding() {
@@ -210,12 +235,14 @@ func (m *Model) nextFinding() {
 	}
 	if m.selected < len(m.filtered)-1 {
 		m.selected++
+		m.adjustScroll()
 	}
 }
 
 func (m *Model) prevFinding() {
 	if m.selected > 0 {
 		m.selected--
+		m.adjustScroll()
 	}
 }
 
