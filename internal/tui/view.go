@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -106,7 +107,13 @@ func (m Model) renderProgress() string {
 		}
 	}
 
-	for name, evt := range collectorStatus {
+	names := make([]string, 0, len(collectorStatus))
+	for name := range collectorStatus {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		evt := collectorStatus[name]
 		switch evt.Type {
 		case app.EventCollectorDone:
 			statusStr := string(evt.Status)
@@ -224,7 +231,22 @@ func (m Model) renderCompact() string {
 func (m Model) renderList(width int) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Findings (%d)\n\n", len(m.filtered)))
-	for i, f := range m.filtered {
+
+	maxItems := m.maxVisibleItems()
+	if maxItems < 1 {
+		maxItems = 1
+	}
+	start := m.scrollOffset
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxItems
+	if end > len(m.filtered) {
+		end = len(m.filtered)
+	}
+
+	for i := start; i < end; i++ {
+		f := m.filtered[i]
 		label := fmt.Sprintf("[%s]", f.Finding.Severity)
 		line := fmt.Sprintf("%-12s %s", label, f.Finding.ID)
 		if i == m.selected {

@@ -266,7 +266,7 @@ func TestModel_Navigation(t *testing.T) {
 }
 
 func TestModel_ReRun(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "/tmp"})
+	m := NewModel(app.ScanOptions{Path: "/tmp"}, nil)
 	m.scanning = false
 	m.findings = []InspectFinding{{Finding: schema.Finding{ID: "X"}}}
 	m.filtered = m.findings
@@ -284,7 +284,7 @@ func TestModel_ReRun(t *testing.T) {
 }
 
 func TestModel_EmptyStateViews(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	m.width = 80
 	m.height = 24
 
@@ -307,7 +307,7 @@ func TestModel_EmptyStateViews(t *testing.T) {
 }
 
 func TestModel_HelpToggle(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	m.width = 80
 	m.height = 24
 
@@ -331,7 +331,7 @@ func TestModel_HelpToggle(t *testing.T) {
 }
 
 func TestModel_KeyQuit(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}
 	_, cmd := m.Update(msg)
 	if cmd == nil {
@@ -340,7 +340,7 @@ func TestModel_KeyQuit(t *testing.T) {
 }
 
 func TestModel_KeyToggleVerbose(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	m.scanning = false
 	m.findings = []InspectFinding{{Finding: schema.Finding{ID: "X"}}}
 	m.filtered = m.findings
@@ -354,7 +354,7 @@ func TestModel_KeyToggleVerbose(t *testing.T) {
 }
 
 func TestModel_FilterMode(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	m.scanning = false
 	m.findings = []InspectFinding{
 		{Finding: schema.Finding{ID: "F-CI-001", Title: "CI drift", Severity: schema.SeverityMedium}},
@@ -382,7 +382,7 @@ func TestModel_FilterMode(t *testing.T) {
 }
 
 func TestModel_FilterMode_EscapeCancels(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	m.scanning = false
 	m.findings = []InspectFinding{
 		{Finding: schema.Finding{ID: "F-CI-001", Title: "CI drift", Severity: schema.SeverityMedium}},
@@ -404,7 +404,7 @@ func TestModel_FilterMode_EscapeCancels(t *testing.T) {
 }
 
 func TestModel_ScanEventAndDone(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 
 	// Simulate scan started
 	sess := &scanSession{ch: make(chan app.Event, 2), done: make(chan struct{})}
@@ -441,7 +441,7 @@ func TestModel_ScanEventAndDone(t *testing.T) {
 }
 
 func TestModel_ScanDoneError(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	newM, _ := m.Update(scanDoneMsg{err: &app.RulePackError{Errors: []string{"bad"}}})
 	m = newM.(Model)
 	if m.scanErr == nil {
@@ -453,7 +453,7 @@ func TestModel_ScanDoneError(t *testing.T) {
 }
 
 func TestModel_WindowSize(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	newM, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = newM.(Model)
 	if m.width != 120 || m.height != 40 {
@@ -462,7 +462,7 @@ func TestModel_WindowSize(t *testing.T) {
 }
 
 func TestModel_QuitCancelsScan(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	// Start a scan session with a cancellable context.
 	ctx, cancel := context.WithCancel(context.Background())
 	sess := &scanSession{
@@ -489,7 +489,7 @@ func TestModel_QuitCancelsScan(t *testing.T) {
 }
 
 func TestModel_RerunCancelsPreviousScan(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	sess := &scanSession{
 		ch:     make(chan app.Event, 256),
@@ -515,7 +515,7 @@ func TestModel_RerunCancelsPreviousScan(t *testing.T) {
 }
 
 func TestModel_SmallTerminal_CompactView(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	m.scanning = false
 	m.findings = []InspectFinding{
 		{Finding: schema.Finding{ID: "F-TEST-001", Severity: schema.SeverityHigh, Title: "Test finding"}},
@@ -536,7 +536,7 @@ func TestModel_SmallTerminal_CompactView(t *testing.T) {
 }
 
 func TestModel_LongEvidence_DoesNotPanic(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	m.scanning = false
 	longValue := strings.Repeat("a", 500)
 	m.findings = []InspectFinding{
@@ -561,7 +561,7 @@ func TestModel_LongEvidence_DoesNotPanic(t *testing.T) {
 }
 
 func TestModel_NoMutationKeybindings(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	m.scanning = false
 	m.findings = []InspectFinding{{Finding: schema.Finding{ID: "X"}}}
 	m.filtered = m.findings
@@ -588,7 +588,7 @@ func TestModel_SafeEventSink_NoPanicAfterClose(t *testing.T) {
 }
 
 func TestModel_ScanDone_WithEmptyFindings(t *testing.T) {
-	m := NewModel(app.ScanOptions{Path: "."})
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	report := &schema.Report{
 		Findings: []schema.Finding{},
 	}
