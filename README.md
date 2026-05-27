@@ -103,7 +103,7 @@ devdiag scan . --ci
 devdiag scan . --verbose
 devdiag scan . --save-report
 devdiag inspect .
-devdiag tui .
+devdiag tui .                       # alias for inspect
 devdiag check env . --verbose
 devdiag check runtimes . --verbose
 devdiag check containers . --verbose
