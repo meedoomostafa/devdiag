@@ -68,11 +68,13 @@ func runInspect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 
-	// After the TUI exits, optionally persist the report if requested.
+		// After the TUI exits, optionally persist the report if requested.
 	// The TUI model itself does not own persistence; the CLI layer does.
 	if inspectSaveReport {
 		if m, ok := finalModel.(tui.Model); ok && m.Report() != nil {
-			if err := persistReport(m.Report()); err != nil {
+			// Redact the final report using the same engine before persisting.
+			redacted := buildRedactEngine().RedactReport(m.Report())
+			if err := persistReport(redacted); err != nil {
 				logger.Warn("inspect", fmt.Sprintf("failed to persist report: %v", err))
 			}
 		}
