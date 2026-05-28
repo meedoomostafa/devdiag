@@ -9,14 +9,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
 // ExecutorOptions controls execution behavior.
 type ExecutorOptions struct {
-	Apply       bool
-	Fresh       bool
-	Interactive bool // true if stdin is a TTY
+	Apply           bool
+	Fresh           bool
+	Interactive     bool // true if stdin is a TTY
+	Redact          func(string) string
+	CaptureCapBytes int
 }
 
 // Executor applies fix proposals safely.
@@ -29,8 +32,29 @@ func NewExecutor(audit *AuditLog) *Executor {
 	return &Executor{audit: audit}
 }
 
+// PreflightAudit checks if the audit log is writable before mutation.
+func (e *Executor) PreflightAudit(proposal schema.FixProposal) error {
+	if e.audit == nil {
+		return nil
+	}
+	return e.audit.Write(schema.FixAuditEntry{
+		Timestamp: time.Now(),
+		RunID:     proposal.RunID,
+		FindingID: proposal.FindingID,
+		HintID:    proposal.HintID,
+		Class:     proposal.Class,
+		Source:    proposal.Source,
+		Note:      "audit_preflight",
+	})
+}
+
 // Execute runs a single fix proposal.
 func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opts ExecutorOptions) (*schema.FixExecution, error) {
+	redact := opts.Redact
+	if redact == nil {
+		redact = func(s string) string { return s }
+	}
+
 	// Always blocked
 	if proposal.Class == schema.FixBlocked {
 		if e.audit != nil {
@@ -63,6 +87,11 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 			})
 		}
 		return nil, nil
+	}
+
+	// For apply operations, ensure audit is writable first.
+	if err := e.PreflightAudit(proposal); err != nil {
+		return nil, fmt.Errorf("audit log unavailable, refusing apply: %w", err)
 	}
 
 	// Guarded fixes require fresh validation and TTY confirmation
@@ -166,12 +195,13 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 	}
 
 	cmd := exec.CommandContext(cmdCtx, bin, args...)
-	var stdoutBuf, stderrBuf strings.Builder
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
+	stdoutBuf := cmdrunner.NewCappedBuffer(opts.CaptureCapBytes)
+	stderrBuf := cmdrunner.NewCappedBuffer(opts.CaptureCapBytes)
+	cmd.Stdout = stdoutBuf
+	cmd.Stderr = stderrBuf
 	err := cmd.Run()
-	execution.Stdout = stdoutBuf.String()
-	execution.Stderr = stderrBuf.String()
+	execution.Stdout = redact(stdoutBuf.String())
+	execution.Stderr = redact(stderrBuf.String())
 	if err != nil {
 		execution.Success = false
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -179,7 +209,7 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 		} else {
 			execution.ExitCode = -1
 		}
-		execution.Error = err.Error()
+		execution.Error = redact(err.Error())
 	} else {
 		execution.Success = true
 		execution.ExitCode = 0
