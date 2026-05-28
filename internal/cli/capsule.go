@@ -5,37 +5,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/capsule"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/redact"
 	"github.com/meedoomostafa/devdiag/internal/repro"
 	"github.com/meedoomostafa/devdiag/internal/schema"
+	"github.com/meedoomostafa/devdiag/internal/trace"
 	"github.com/meedoomostafa/devdiag/internal/version"
 )
-
-var runIDAllowlist = regexp.MustCompile(`^[a-zA-Z0-9_:-]+$`)
-
-func validateRunID(id string) error {
-	if id == "" {
-		return fmt.Errorf("run-id must not be empty")
-	}
-	if strings.Contains(id, string(filepath.Separator)) || strings.Contains(id, "/") {
-		return fmt.Errorf("run-id must not contain path separators")
-	}
-	if strings.Contains(id, "..") {
-		return fmt.Errorf("run-id must not contain path traversal sequences")
-	}
-	if !runIDAllowlist.MatchString(id) {
-		return fmt.Errorf("run-id contains invalid characters (allowed: a-zA-Z0-9_:-)")
-	}
-	return nil
-}
 
 var capsuleRunID string
 
@@ -56,16 +37,22 @@ var capsuleCreateCmd = &cobra.Command{
 		}
 
 		// Resolve and validate run ID
+		base, err := artifact.DiscoverBase(".")
+		if err != nil {
+			logger.Error("capsule", "no saved report found; run 'devdiag scan --save-report' first")
+			return exitCodeError{code: exitcode.InvalidInput}
+		}
+
 		runID := capsuleRunID
 		if runID != "" {
-			if err := validateRunID(runID); err != nil {
+			if err := artifact.ValidateRunID(runID); err != nil {
 				logger.Error("capsule", err.Error())
 				return exitCodeError{code: exitcode.InvalidInput}
 			}
 		}
 		if runID == "" {
 			// Use latest run
-			latest, err := findLatestRunID()
+			latest, err := artifact.FindLatestRunID(base)
 			if err != nil {
 				logger.Error("capsule", fmt.Sprintf("no run ID specified and no runs found: %v", err))
 				return exitCodeError{code: exitcode.InvalidInput}
@@ -74,7 +61,7 @@ var capsuleCreateCmd = &cobra.Command{
 			logger.Info("capsule", fmt.Sprintf("using latest run: %s", runID))
 		}
 
-		runsDir := filepath.Join(".devdiag", "runs", runID)
+		runsDir := artifact.RunDir(base, runID)
 		if _, err := os.Stat(runsDir); os.IsNotExist(err) {
 			logger.Error("capsule", fmt.Sprintf("run not found: %s", runsDir))
 			return exitCodeError{code: exitcode.InvalidInput}
@@ -124,7 +111,14 @@ var capsuleCreateCmd = &cobra.Command{
 		addCapsuleCommandLog(builder, runsDir, "command.stderr.log", redactEngine)
 		tracePath := filepath.Join(runsDir, "trace-result.json")
 		if traceData, err := os.ReadFile(tracePath); err == nil {
-			builder.SetTraceArtifact(traceData)
+			var traceRes trace.Result
+			if err := json.Unmarshal(traceData, &traceRes); err == nil {
+				// Re-redact using current redact engine level
+				redactedTrace := trace.RedactResult(&traceRes, redactEngine)
+				if rtData, err := json.Marshal(redactedTrace); err == nil {
+					builder.SetTraceArtifact(rtData)
+				}
+			}
 		}
 		if err := builder.Build(outFile, reportForCapsule, reproForCapsule); err != nil {
 			logger.Error("capsule", fmt.Sprintf("build failed: %v", err))
@@ -208,26 +202,6 @@ func renderCapsuleInspect(cmd *cobra.Command, result *capsule.InspectResult) err
 		_, err := fmt.Fprint(cmd.OutOrStdout(), result.Summary())
 		return err
 	}
-}
-
-func findLatestRunID() (string, error) {
-	runsDir := filepath.Join(".devdiag", "runs")
-	entries, err := os.ReadDir(runsDir)
-	if err != nil {
-		return "", err
-	}
-	if len(entries) == 0 {
-		return "", fmt.Errorf("no runs found")
-	}
-	// Sort by name (which includes timestamp) and pick last
-	sort.Slice(entries, func(i, j int) bool {
-		return strings.Compare(entries[i].Name(), entries[j].Name()) < 0
-	})
-	latest := entries[len(entries)-1].Name()
-	if err := validateRunID(latest); err != nil {
-		return "", fmt.Errorf("latest run ID invalid: %w", err)
-	}
-	return latest, nil
 }
 
 func init() {

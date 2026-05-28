@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/capsule"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -31,21 +32,26 @@ var issueTemplateCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		redactEngine := buildRedactEngine()
 
+		base, err := artifact.DiscoverBase(".")
+		if err != nil {
+			return exitCodeError{code: exitcode.InvalidInput}
+		}
+
 		runID := issueRunID
 		if runID != "" {
-			if err := validateRunID(runID); err != nil {
+			if err := artifact.ValidateRunID(runID); err != nil {
 				return exitCodeError{code: exitcode.InvalidInput}
 			}
 		}
 		if runID == "" {
-			latest, err := findLatestRunID()
+			latest, err := artifact.FindLatestRunID(base)
 			if err != nil {
 				return exitCodeError{code: exitcode.InvalidInput}
 			}
 			runID = latest
 		}
 
-		report, err := loadSavedReport(runID)
+		report, err := loadSavedReport(base, runID)
 		if err != nil {
 			return exitCodeError{code: exitcode.InvalidInput}
 		}
@@ -96,8 +102,8 @@ type issueCapsuleSummary struct {
 
 type pathRedactor func(string, string) string
 
-func loadSavedReport(runID string) (*schema.Report, error) {
-	reportPath := filepath.Join(".devdiag", "runs", runID, "report.json")
+func loadSavedReport(base, runID string) (*schema.Report, error) {
+	reportPath := filepath.Join(artifact.RunDir(base, runID), "report.json")
 	data, err := os.ReadFile(reportPath)
 	if err != nil {
 		return nil, fmt.Errorf("read saved report: %w", err)

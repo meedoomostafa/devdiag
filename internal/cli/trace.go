@@ -3,19 +3,22 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
+	"context"
 
 	"github.com/spf13/cobra"
 
+	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/findings"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 	"github.com/meedoomostafa/devdiag/internal/trace"
 	"github.com/meedoomostafa/devdiag/internal/version"
 )
+
+var runTraceEBPF = trace.RunEBPF
 
 var (
 	flagTraceScope     string
@@ -78,7 +81,9 @@ then analyzes the trace output to produce diagnostic findings.`,
 		if res == nil {
 			logger.Info("trace", fmt.Sprintf("tracing command=%s backend=%s scopes=%v timeout=%s", command, backend, scopes, flagTraceTimeout))
 			if backend == trace.BackendEBPF {
-				res, err = trace.RunEBPF(cmd.Context(), scopes, command, commandArgs...)
+				tctx, cancel := context.WithTimeout(cmd.Context(), flagTraceTimeout)
+				defer cancel()
+				res, err = runTraceEBPF(tctx, scopes, command, commandArgs...)
 			} else {
 				runner := &trace.Runner{Timeout: flagTraceTimeout, MaxEvents: flagTraceMaxEvents}
 				res, err = runner.Run(cmd.Context(), scopes, command, commandArgs...)
@@ -162,25 +167,15 @@ then analyzes the trace output to produce diagnostic findings.`,
 		}
 
 		// Persist redacted report
-		if err := persistReport(redacted); err != nil {
+		if err := persistReport(".", redacted); err != nil {
 			logger.Warn("trace", fmt.Sprintf("failed to persist report: %v", err))
 		}
 
 		// Persist redacted trace result artifact for capsule integration.
-		// persistTraceResult writes to the run directory and latest convenience path.
-		// The capsule builder reads the run artifact and includes it as `snapshot/trace.json`.
-		// Use the same base directory as persistReport ("." for trace command).
 		if err := persistTraceResult(".", redacted.RunID, redactedResult); err != nil {
 			logger.Warn("trace", fmt.Sprintf("failed to persist trace result: %v", err))
 		}
 
-		// Exit code precedence:
-		// 1. Invalid input already handled above (2)
-		// 2. Strace unavailable / ptrace denied → 7
-		// 3. Traced command failure, timeout, signal death, or cancellation → 6 (ReproFailed)
-		// 4. Findings exist → 1
-		// 5. Partial trace due to limits → 3 (CollectorPartial)
-		// 6. Internal error → 8
 		if res.TraceUnavailable {
 			return exitCodeError{code: exitcode.TraceUnavailable}
 		}
@@ -206,9 +201,6 @@ func init() {
 	rootCmd.AddCommand(traceCmd)
 }
 
-// persistTraceResult writes the redacted trace result to .devdiag/runs/<runID>/trace-result.json
-// and .devdiag/latest/trace-result.json. Uses 0700 dir and 0600 file permissions.
-// Uses the same base directory resolution as persistReport (repo root or current directory).
 func persistTraceResult(base, runID string, res *trace.Result) error {
 	if base == "" {
 		base = "."
@@ -217,19 +209,22 @@ func persistTraceResult(base, runID string, res *trace.Result) error {
 	if err != nil {
 		return fmt.Errorf("marshal trace result: %w", err)
 	}
-	dir := filepath.Join(base, ".devdiag", "runs", runID)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	dir := artifact.RunDir(base, runID)
+	if err := artifact.MkdirPrivate(dir); err != nil {
 		return fmt.Errorf("create trace dir: %w", err)
 	}
 	path := filepath.Join(dir, "trace-result.json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := artifact.WriteFilePrivate(path, data); err != nil {
 		return fmt.Errorf("write trace result: %w", err)
 	}
+
+	// Also update the 'latest' convenience files.
+	// We want to mirror .devdiag/runs/LATEST -> .devdiag/latest
 	latestDir := filepath.Join(base, ".devdiag", "latest")
-	if err := os.MkdirAll(latestDir, 0o700); err != nil {
+	if err := artifact.MkdirPrivate(latestDir); err != nil {
 		return fmt.Errorf("create latest trace dir: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(latestDir, "trace-result.json"), data, 0o600); err != nil {
+	if err := artifact.WriteFilePrivate(filepath.Join(latestDir, "trace-result.json"), data); err != nil {
 		return fmt.Errorf("write latest trace result: %w", err)
 	}
 	return nil

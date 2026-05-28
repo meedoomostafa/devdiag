@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/rulepack"
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -27,11 +28,15 @@ var teamBundleCmd = &cobra.Command{
 		if teamRunID == "" {
 			return exitCodeError{code: exitcode.InvalidInput}
 		}
-		if err := validateRunID(teamRunID); err != nil {
+		base, err := artifact.DiscoverBase(".")
+		if err != nil {
+			return exitCodeError{code: exitcode.InvalidInput}
+		}
+		if err := artifact.ValidateRunID(teamRunID); err != nil {
 			return exitCodeError{code: exitcode.InvalidInput}
 		}
 		redactEngine := buildRedactEngine()
-		report, err := loadSavedReport(teamRunID)
+		report, err := loadSavedReport(base, teamRunID)
 		if err != nil {
 			return exitCodeError{code: exitcode.InvalidInput}
 		}
