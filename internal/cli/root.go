@@ -63,11 +63,14 @@ func init() {
 func Execute() int {
 	if err := rootCmd.Execute(); err != nil {
 		// Write error to stderr so it never contaminates JSON stdout
-		fmt.Fprintf(os.Stderr, "devdiag: %v\n", err)
 		var ec exitCodeError
 		if errors.As(err, &ec) {
+			if ec.code != exitcode.Success {
+				fmt.Fprintf(os.Stderr, "devdiag: %v\n", err)
+			}
 			return ec.Code()
 		}
+		fmt.Fprintf(os.Stderr, "devdiag: %v\n", err)
 		return exitcode.InternalError.Int()
 	}
 	return exitcode.Success.Int()
@@ -78,7 +81,7 @@ func validateFormat(v string) error {
 	case "human", "json", "ndjson", "markdown", "github":
 		return nil
 	}
-	return exitCodeError{code: exitcode.InvalidInput}
+	return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("invalid --format: %s (allowed: human, json, ndjson, markdown, github)", v)}
 }
 
 func validateRedact(v string) error {
@@ -86,7 +89,7 @@ func validateRedact(v string) error {
 	case "default", "strict", "off":
 		return nil
 	}
-	return exitCodeError{code: exitcode.InvalidInput}
+	return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("invalid --redact: %s (allowed: default, strict, off)", v)}
 }
 
 func validateColor(v string) error {
@@ -94,14 +97,14 @@ func validateColor(v string) error {
 	case "always", "auto", "never":
 		return nil
 	}
-	return exitCodeError{code: exitcode.InvalidInput}
+	return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("invalid --color: %s (allowed: always, auto, never)", v)}
 }
 
 func validateFailSeverity(v string) error {
 	if _, _, ok := parseFailSeverityThreshold(v); ok {
 		return nil
 	}
-	return exitCodeError{code: exitcode.InvalidInput}
+	return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("invalid --fail-severity: %s (allowed: off, info, low, medium, high, critical)", v)}
 }
 
 // buildRedactEngine creates the redaction engine from flags.
@@ -125,10 +128,14 @@ func buildLogger() *logging.Logger {
 
 // exitCodeError wraps an exit code for typed error handling.
 type exitCodeError struct {
-	code exitcode.Code
+	code    exitcode.Code
+	message string
 }
 
 func (e exitCodeError) Error() string {
+	if e.message != "" {
+		return e.message
+	}
 	return fmt.Sprintf("exit code %d", e.code)
 }
 
