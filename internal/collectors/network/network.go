@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 
@@ -28,21 +29,23 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		}
 	}
 
-	// NO_PROXY hints
-	if v := os.Getenv("NO_PROXY"); v != "" {
-		hosts := strings.Split(v, ",")
-		var hints []string
-		for _, h := range hosts {
-			h = strings.TrimSpace(h)
-			if h != "" {
-				hints = append(hints, h)
+	// NO_PROXY hints: emit count only for privacy
+	for _, key := range []string{"NO_PROXY", "no_proxy"} {
+		if v := os.Getenv(key); v != "" {
+			hosts := strings.Split(v, ",")
+			count := 0
+			for _, h := range hosts {
+				if strings.TrimSpace(h) != "" {
+					count++
+				}
 			}
-		}
-		if len(hints) > 0 {
-			evidence = append(evidence, schema.Evidence{
-				Source: "host_no_proxy",
-				Value:  strings.Join(hints, ", "),
-			})
+			if count > 0 {
+				evidence = append(evidence, schema.Evidence{
+					Source: "host_no_proxy",
+					Value:  fmt.Sprintf("entries=%d", count),
+				})
+				break
+			}
 		}
 	}
 
