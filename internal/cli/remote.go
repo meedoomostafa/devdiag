@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -359,6 +360,14 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 	}
 	applyRemoteK8sOptions(t)
 
+	// Validate cleanup mode
+	switch flagRemoteCleanup {
+	case "always", "never":
+	default:
+		logger.Error("remote.enter", fmt.Sprintf("invalid cleanup mode: %s (must be 'always' or 'never')", flagRemoteCleanup))
+		return exitCodeError{code: exitcode.InvalidInput}
+	}
+
 	sshOptions, err := buildRemoteSSHOptions()
 	if err != nil {
 		return err
@@ -535,92 +544,142 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 	}
 	applyRemoteK8sOptions(t)
 
+	if flagRemoteAll && flagRemoteSession != "" {
+		logger.Error("remote.clean", "cannot use --all with --session")
+		return exitCodeError{code: exitcode.InvalidInput}
+	}
+
 	sshOptions, err := buildRemoteSSHOptions()
 	if err != nil {
 		return err
 	}
 
-	logger.Info("remote.clean", fmt.Sprintf("target=%s session=%s", t.String(), flagRemoteSession))
+	logger.Info("remote.clean", fmt.Sprintf("target=%s session=%s all=%v", t.String(), flagRemoteSession, flagRemoteAll))
+
+	var manifests []*session.Manifest
+	if flagRemoteSession != "" {
+		cached, err := session.ReadCacheBySessionID(flagRemoteSession)
+		if err != nil {
+			logger.Error("remote.clean", fmt.Sprintf("session %s not found", flagRemoteSession))
+			return exitCodeError{code: exitcode.InvalidInput}
+		}
+		manifests = append(manifests, cached)
+	} else if flagRemoteAll {
+		list, err := session.ListCache(string(t.Kind), t.Raw)
+		if err != nil {
+			logger.Error("remote.clean", fmt.Sprintf("cache read failed: %v", err))
+			return exitCodeError{code: exitcode.InternalError}
+		}
+		manifests = list
+	} else {
+		cached, err := session.ReadCache(string(t.Kind), t.Raw)
+		if err != nil {
+			logger.Info("remote.clean", "no cached session found; nothing to clean")
+			result := render.NewDoctorResult(t)
+			result.DevDiagVersion = version.Version
+			result.RedactionStatus = string(redactEngine.Level)
+			result.Status = "cleaned"
+			result.Notes = append(result.Notes, "no cached session found; nothing to clean")
+			return outputRemoteResult(result, redactEngine, cmd)
+		}
+		manifests = append(manifests, cached)
+	}
+
+	if len(manifests) == 0 {
+		logger.Info("remote.clean", "no matching sessions found")
+		result := render.NewDoctorResult(t)
+		result.DevDiagVersion = version.Version
+		result.RedactionStatus = string(redactEngine.Level)
+		result.Status = "cleaned"
+		result.Notes = append(result.Notes, "no matching sessions found")
+		return outputRemoteResult(result, redactEngine, cmd)
+	}
+
+	if flagRemoteDryRun {
+		totalFiles := 0
+		for _, m := range manifests {
+			totalFiles += len(m.Files)
+		}
+		result := render.NewDoctorResult(t)
+		result.DevDiagVersion = version.Version
+		result.RedactionStatus = string(redactEngine.Level)
+		result.Status = "cleaned"
+		result.Notes = append(result.Notes, fmt.Sprintf("dry-run: would clean %d sessions (total %d files)", len(manifests), totalFiles))
+		return outputRemoteResult(result, redactEngine, cmd)
+	}
+
+	var tr transport.Transport
+	switch t.Kind {
+	case target.KindSSH:
+		tr = sshtransport.NewTransportWithOptions(t, nil, sshOptions)
+	case target.KindContainer:
+		tr, err = containertransport.NewTransport(t)
+	case target.KindK8s:
+		tr = k8stransport.NewTransport(t, t.ContainerName)
+	}
+	if err != nil {
+		logger.Error("remote.clean", fmt.Sprintf("transport failed: %v", err))
+		return exitCodeError{code: exitcode.ReproFailed}
+	}
+
+	ctx, cancel := contextWithTimeout(context.Background(), 60)
+	defer cancel()
+
+	successCount := 0
+	failCount := 0
+	unsafeCount := 0
+	var lastCleanErr error
+	for _, m := range manifests {
+		if err := cleanManifest(ctx, tr, m); err != nil {
+			logger.Warn("remote.clean", fmt.Sprintf("session %s cleanup failed: %v", m.SessionID, err))
+			if strings.Contains(err.Error(), "must be within") || strings.Contains(err.Error(), "root dir cannot be") {
+				unsafeCount++
+			}
+			failCount++
+			lastCleanErr = err
+		} else {
+			successCount++
+			m.Status = "cleaned"
+			_ = session.WriteCache(m)
+		}
+	}
 
 	result := render.NewDoctorResult(t)
 	result.DevDiagVersion = version.Version
 	result.RedactionStatus = string(redactEngine.Level)
 	result.Status = "cleaned"
-	result.SessionID = flagRemoteSession
-
-	// Read cached manifest: prefer session ID lookup if provided
-	var cached *session.Manifest
-	var cacheErr error
-	if flagRemoteSession != "" {
-		cached, cacheErr = session.ReadCacheBySessionID(flagRemoteSession)
-		if cacheErr != nil {
-			result.Notes = append(result.Notes, fmt.Sprintf("session %s not found", flagRemoteSession))
-			return outputRemoteResult(result, redactEngine, cmd)
-		}
-	} else {
-		cached, cacheErr = session.ReadCache(string(t.Kind), t.Raw)
-		if cacheErr != nil {
-			result.Notes = append(result.Notes, "no cached session found; nothing to clean")
-			return outputRemoteResult(result, redactEngine, cmd)
-		}
-	}
-
-	// Validate root dir
-	if err := session.ValidateRootDir(cached.RootDir, t.Kind); err != nil {
-		result.Status = "refused"
-		result.Findings = append(result.Findings, render.Finding{
-			ID: "F-REMOTE-005", Title: "Unsafe cleanup refused", Severity: "high", Message: err.Error(),
-		})
-		return outputRemoteResultWithExit(result, redactEngine, cmd, exitcode.UnsafeRefused)
-	}
-
-	if flagRemoteDryRun {
-		result.Notes = append(result.Notes, fmt.Sprintf("dry-run: would remove %d files from %s", len(cached.Files), cached.RootDir))
-		return outputRemoteResult(result, redactEngine, cmd)
-	}
-
-	// Perform cleanup via transport
-	var cleanErr error
-	switch t.Kind {
-	case target.KindSSH:
-		tr := sshtransport.NewTransportWithOptions(t, nil, sshOptions)
-		ctx, cancel := contextWithTimeout(context.Background(), 30)
-		defer cancel()
-		cleanErr = cleanManifest(ctx, tr, cached)
-	case target.KindContainer:
-		tr, err := containertransport.NewTransport(t)
-		if err != nil {
-			cleanErr = err
+	if failCount > 0 {
+		if successCount > 0 {
+			result.Status = "partial"
+		} else if unsafeCount > 0 {
+			result.Status = "refused"
 		} else {
-			ctx, cancel := contextWithTimeout(context.Background(), 30)
-			defer cancel()
-			cleanErr = cleanManifest(ctx, tr, cached)
+			result.Status = "failed"
 		}
-	case target.KindK8s:
-		tr := k8stransport.NewTransport(t, t.ContainerName)
-		ctx, cancel := contextWithTimeout(context.Background(), 30)
-		defer cancel()
-		cleanErr = cleanManifest(ctx, tr, cached)
-	}
-
-	if cleanErr != nil {
-		result.Status = "partial"
-		result.Findings = append(result.Findings, render.Finding{
-			ID: "F-REMOTE-010", Title: "Cleanup completed partially", Severity: "medium", Message: cleanErr.Error(),
-		})
-		result.Notes = append(result.Notes, fmt.Sprintf("cleanup error: %v", cleanErr))
-		result.CleanupCommand = fmt.Sprintf("devdiag remote clean %s --session %s", t.String(), cached.SessionID)
-		return outputRemoteResultWithExit(result, redactEngine, cmd, exitcode.CollectorPartial)
-	} else {
-		result.Notes = append(result.Notes, fmt.Sprintf("removed %d files from %s", len(cached.Files), cached.RootDir))
-		cached.Status = "cleaned"
-		if err := session.WriteCache(cached); err != nil {
-			logger.Warn("remote.clean", fmt.Sprintf("cache update failed: %v", err))
+		if unsafeCount > 0 {
+			result.Findings = append(result.Findings, render.Finding{
+				ID: "F-REMOTE-005", Title: "Unsafe cleanup refused", Severity: "high", Message: lastCleanErr.Error(),
+			})
+		} else {
+			result.Status = "partial"
+			result.Findings = append(result.Findings, render.Finding{
+				ID: "F-REMOTE-010", Title: "Cleanup completed partially", Severity: "medium", Message: lastCleanErr.Error(),
+			})
 		}
 	}
 
-	result.CleanupCommand = fmt.Sprintf("devdiag remote clean %s --session %s", t.String(), cached.SessionID)
-	return outputRemoteResult(result, redactEngine, cmd)
+	if err := outputRemoteResult(result, redactEngine, cmd); err != nil {
+		return err
+	}
+
+	if failCount > 0 {
+		if unsafeCount > 0 && successCount == 0 {
+			return exitCodeError{code: exitcode.UnsafeRefused}
+		}
+		return exitCodeError{code: exitcode.CollectorPartial}
+	}
+
+	return nil
 }
 
 func runRemoteStatus(cmd *cobra.Command, args []string) error {
