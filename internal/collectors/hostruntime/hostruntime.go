@@ -40,20 +40,13 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		if seen[rt.name] {
 			continue
 		}
-		seen[rt.name] = true
 
 		path, err := exec.LookPath(rt.binary)
 		if err != nil {
-			evidence = append(evidence, schema.Evidence{
-				Source: fmt.Sprintf("host_%s_path", rt.name),
-				Value:  "",
-			})
-			evidence = append(evidence, schema.Evidence{
-				Source: fmt.Sprintf("host_%s_missing", rt.name),
-				Value:  "true",
-			})
 			continue
 		}
+
+		seen[rt.name] = true
 
 		// Resolve absolute path; LookPath may return relative paths
 		absPath := path
@@ -93,6 +86,21 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 			Source: fmt.Sprintf("host_%s_version", rt.name),
 			Value:  version,
 		})
+	}
+
+	// For any required runtime that was not seen, mark as missing.
+	required := []string{"node", "python", "go", "rustc", "dotnet"}
+	for _, name := range required {
+		if !seen[name] {
+			evidence = append(evidence, schema.Evidence{
+				Source: fmt.Sprintf("host_%s_path", name),
+				Value:  "",
+			})
+			evidence = append(evidence, schema.Evidence{
+				Source: fmt.Sprintf("host_%s_missing", name),
+				Value:  "true",
+			})
+		}
 	}
 
 	return schema.CollectorResult{
