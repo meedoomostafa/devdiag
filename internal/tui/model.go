@@ -111,6 +111,7 @@ func sortFindingsBySeverity(findings []InspectFinding) []InspectFinding {
 
 // scanSession tracks a background scan and its results.
 type scanSession struct {
+	id     int
 	ch     chan app.Event
 	report *schema.Report
 	err    error
@@ -124,11 +125,12 @@ type Model struct {
 	opts app.ScanOptions
 
 	// Scan state
-	scanning bool
-	events   []app.Event
-	session  *scanSession
-	scanErr  error
-	report   *schema.Report
+	scanning  bool
+	events    []app.Event
+	session   *scanSession
+	sessionID int
+	scanErr   error
+	report    *schema.Report
 
 	// Redaction
 	redactEngine *redact.Engine
@@ -163,6 +165,7 @@ func (m Model) Report() *schema.Report {
 
 // StartScan initiates the background scan and returns the initial command.
 func (m Model) StartScan() (Model, tea.Cmd) {
+	m.sessionID++
 	m.scanning = true
 	m.events = nil
 	m.session = nil
@@ -173,7 +176,7 @@ func (m Model) StartScan() (Model, tea.Cmd) {
 	m.selected = 0
 	m.scrollOffset = 0
 
-	return m, startScan(m.opts)
+	return m, startScan(m.opts, m.sessionID)
 }
 
 // ReRun triggers a fresh scan, cancelling any active scan first.
