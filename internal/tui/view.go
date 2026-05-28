@@ -55,6 +55,9 @@ func severityStyle(s schema.Severity) lipgloss.Style {
 
 // View satisfies tea.Model.
 func (m Model) View() string {
+	if m.width < 40 || m.height < 8 {
+		return "Terminal too small"
+	}
 	if m.showHelp {
 		return m.renderHelp()
 	}
