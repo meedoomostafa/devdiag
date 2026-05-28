@@ -9,6 +9,10 @@ inputs:
     description: 'Diagnostic profile (e.g., ai-ml)'
     required: false
     default: ''
+  rule-pack:
+    description: 'Path to an external deterministic rule pack'
+    required: false
+    default: ''
   redact:
     description: 'Redaction level: default, strict, off'
     required: false
@@ -99,6 +103,10 @@ runs:
         if [ -n "$PROFILE" ]; then
           PROFILE_ARGS+=(--profile "$PROFILE")
         fi
+        RULE_PACK_ARGS=()
+        if [ -n "$RULE_PACK" ]; then
+          RULE_PACK_ARGS+=(--rule-pack "$RULE_PACK")
+        fi
         CI_ARGS=()
         if [ "$CI_ENABLED" = "true" ]; then
           CI_ARGS+=(--ci)
@@ -107,9 +115,9 @@ runs:
         REPORT_PATH="$REPORT_DIR/devdiag-report.json"
         mkdir -p "$REPORT_DIR"
         set +e
-        devdiag scan --format "$FORMAT" --redact "$REDACT" --fail-severity "$EFFECTIVE_FAIL_SEVERITY" "${PROFILE_ARGS[@]}" "${CI_ARGS[@]}" -- "$PATH_ARG"
+        devdiag scan --format "$FORMAT" --redact "$REDACT" --fail-severity "$EFFECTIVE_FAIL_SEVERITY" "${PROFILE_ARGS[@]}" "${RULE_PACK_ARGS[@]}" "${CI_ARGS[@]}" -- "$PATH_ARG"
         SCAN_EXIT=$?
-        devdiag scan --format json --redact "$REDACT" --fail-severity "$EFFECTIVE_FAIL_SEVERITY" "${PROFILE_ARGS[@]}" "${CI_ARGS[@]}" -- "$PATH_ARG" > "$REPORT_PATH"
+        devdiag scan --format json --redact "$REDACT" --fail-severity "$EFFECTIVE_FAIL_SEVERITY" "${PROFILE_ARGS[@]}" "${RULE_PACK_ARGS[@]}" "${CI_ARGS[@]}" -- "$PATH_ARG" > "$REPORT_PATH"
         JSON_EXIT=$?
         set -e
         if [ ! -s "$REPORT_PATH" ]; then
@@ -152,6 +160,7 @@ runs:
         FAIL_SEVERITY: ${{ inputs.fail-severity }}
         MASK_VALUES: ${{ inputs.mask-values }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        RULE_PACK: ${{ inputs.rule-pack }}
     - uses: actions/upload-artifact@v4
       if: always()
       with:
