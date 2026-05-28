@@ -4,6 +4,8 @@ set -euo pipefail
 REPO="${DEVDIAG_REPO:-meedoomostafa/devdiag}"
 VERSION="${DEVDIAG_INSTALL_VERSION:-v0.1.0}"
 BIN_DIR="${DEVDIAG_BIN_DIR:-}"
+SHA256="${DEVDIAG_ARCHIVE_SHA256:-}"
+REQUIRE_CHECKSUM="${DEVDIAG_REQUIRE_CHECKSUM:-0}"
 DRY_RUN=0
 
 usage() {
@@ -13,17 +15,19 @@ DevDiag installer for Linux.
 Builds DevDiag from the selected GitHub ref and installs the binary.
 
 Usage:
-  scripts/install.sh [--version <ref>] [--bin-dir <dir>] [--dry-run]
+  scripts/install.sh [--version <ref>] [--bin-dir <dir>] [--sha256 <hex>] [--dry-run]
 
 Environment:
   DEVDIAG_INSTALL_VERSION  Git ref to install. Default: v0.1.0
   DEVDIAG_BIN_DIR          Install directory. Default: /usr/local/bin if writable, else ~/.local/bin
   DEVDIAG_REPO             GitHub repo owner/name. Default: meedoomostafa/devdiag
+  DEVDIAG_ARCHIVE_SHA256   Expected SHA256 checksum of the source archive
+  DEVDIAG_REQUIRE_CHECKSUM If 1, fail if no checksum is provided
   GITHUB_TOKEN or GH_TOKEN GitHub token for private repository archive downloads
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | bash
-  curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | bash -s -- --bin-dir "$HOME/.local/bin"
+  curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | bash -s -- --sha256 <hex>
   DEVDIAG_INSTALL_VERSION=main bash scripts/install.sh --dry-run
 USAGE
 }
@@ -44,6 +48,14 @@ while [[ $# -gt 0 ]]; do
 				exit 2
 			}
 			BIN_DIR="$2"
+			shift 2
+			;;
+		--sha256)
+			[[ $# -ge 2 ]] || {
+				echo "--sha256 requires a value" >&2
+				exit 2
+			}
+			SHA256="$2"
 			shift 2
 			;;
 		--dry-run)
@@ -178,6 +190,21 @@ SRC_DIR="${TMP_DIR}/src"
 OUT="${TMP_DIR}/devdiag"
 
 download "${URL}" "${ARCHIVE}"
+
+if [[ -n "${SHA256}" ]]; then
+	echo "Verifying checksum..."
+	if command -v sha256sum >/dev/null 2>&1; then
+		echo "${SHA256}  ${ARCHIVE}" | sha256sum -c -
+	elif command -v shasum >/dev/null 2>&1; then
+		echo "${SHA256}  ${ARCHIVE}" | shasum -a 256 -c -
+	else
+		echo "warning: sha256sum or shasum not found; skipping checksum verification" >&2
+	fi
+elif [[ "${REQUIRE_CHECKSUM}" == "1" ]]; then
+	echo "error: DEVDIAG_REQUIRE_CHECKSUM=1 set but no checksum provided" >&2
+	exit 1
+fi
+
 mkdir -p "${SRC_DIR}"
 tar -xzf "${ARCHIVE}" -C "${SRC_DIR}" --strip-components=1
 
