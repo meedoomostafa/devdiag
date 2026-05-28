@@ -170,6 +170,10 @@ func (e *M6Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 				Symptom:      tool + " cache directory is not writable by current user",
 				LikelyCauses: []string{"Cache owned by root or another user"},
 				FixHints:     []string{"fix-cache-permissions"},
+				Evidence: []schema.Evidence{
+					{Source: "cache_tool", Value: tool},
+					{Source: "cache_path", Value: evMap[pathKey]},
+				},
 			})
 		}
 	}
@@ -179,7 +183,12 @@ func (e *M6Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 		uidKey := "cache_" + tool + "_owner_uid"
 		pathKey := "cache_" + tool + "_path"
 		if evMap[pathKey] != "" {
-			if uid, _ := strconv.Atoi(evMap[uidKey]); uid == 0 {
+			uidStr, ok := evMap[uidKey]
+			if !ok || uidStr == "" {
+				continue
+			}
+			uid, err := strconv.Atoi(uidStr)
+			if err == nil && uid == 0 {
 				findings = append(findings, schema.Finding{
 					ID:           "F-CACHE-002",
 					Title:        "Package cache appears root-owned",
@@ -188,6 +197,11 @@ func (e *M6Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 					Symptom:      tool + " cache directory is owned by root",
 					LikelyCauses: []string{"Cache was created by a previous sudo/root package-manager invocation"},
 					FixHints:     []string{"fix-cache-permissions"},
+					Evidence: []schema.Evidence{
+						{Source: "cache_tool", Value: tool},
+						{Source: "cache_path", Value: evMap[pathKey]},
+						{Source: "cache_owner_uid", Value: "0"},
+					},
 				})
 			}
 		}
