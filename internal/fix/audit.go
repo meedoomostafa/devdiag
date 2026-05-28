@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
@@ -22,13 +23,13 @@ func NewAuditLog(path string) *AuditLog {
 }
 
 // DefaultAuditLog returns an audit log at .devdiag/audit/audit.ndjson
-// relative to the current working directory.
+// relative to the discovered repository root.
 func DefaultAuditLog() *AuditLog {
-	cwd, err := os.Getwd()
+	base, err := artifact.DiscoverBase(".")
 	if err != nil {
-		cwd = "."
+		base = "."
 	}
-	return NewAuditLog(filepath.Join(cwd, ".devdiag", "audit", "audit.ndjson"))
+	return NewAuditLog(filepath.Join(base, ".devdiag", "audit", "audit.ndjson"))
 }
 
 // Write appends a single audit entry.
@@ -36,15 +37,21 @@ func (a *AuditLog) Write(entry schema.FixAuditEntry) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if err := os.MkdirAll(filepath.Dir(a.path), 0755); err != nil {
+	dir := filepath.Dir(a.path)
+	if err := os.MkdirAll(dir, artifact.DirPerm); err != nil {
 		return fmt.Errorf("create audit dir: %w", err)
 	}
+	// Force owner-only on directory in case it already existed
+	_ = os.Chmod(dir, artifact.DirPerm)
 
-	f, err := os.OpenFile(a.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(a.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, artifact.FilePerm)
 	if err != nil {
 		return fmt.Errorf("open audit log: %w", err)
 	}
 	defer f.Close()
+
+	// Ensure owner-only permissions on the file
+	_ = os.Chmod(a.path, artifact.FilePerm)
 
 	data, err := json.Marshal(entry)
 	if err != nil {

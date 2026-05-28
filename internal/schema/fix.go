@@ -69,4 +69,5 @@ type FixAuditEntry struct {
 	Execution    *FixExecution `json:"execution,omitempty"`
 	Refused      bool          `json:"refused,omitempty"`
 	RefuseReason string        `json:"refuse_reason,omitempty"`
+	Note         string        `json:"note,omitempty"`
 }
