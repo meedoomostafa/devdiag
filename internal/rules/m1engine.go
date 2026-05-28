@@ -2,7 +2,6 @@ package rules
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -165,11 +164,7 @@ func (e *M1Engine) composeRules(result schema.CollectorResult, collectors map[st
 		if envKeys[varName] {
 			continue
 		}
-		// 2. Defined in process environment
-		if _, ok := os.LookupEnv(varName); ok {
-			continue
-		}
-		// 3. Has a default or alternative form
+		// 2. Has a default or alternative form
 		if hasDefault {
 			continue
 		}
@@ -1127,9 +1122,10 @@ func (e *M1Engine) composeStatusRules(result schema.CollectorResult, collectors 
 	// Service not running
 	for _, ev := range result.Evidence {
 		if strings.HasSuffix(ev.Source, "_status") {
-			parts := strings.Split(ev.Source, "_")
-			if len(parts) >= 3 {
-				serviceName := parts[2]
+			// Source is compose_status_<service>_status
+			serviceName := strings.TrimPrefix(ev.Source, "compose_status_")
+			serviceName = strings.TrimSuffix(serviceName, "_status")
+			if serviceName != "" {
 				status := ev.Value
 				if status == "exited" || status == "dead" || status == "restarting" {
 					findings = append(findings, schema.Finding{
@@ -1153,9 +1149,10 @@ func (e *M1Engine) composeStatusRules(result schema.CollectorResult, collectors 
 	// Unhealthy services
 	for _, ev := range result.Evidence {
 		if strings.HasSuffix(ev.Source, "_health") {
-			parts := strings.Split(ev.Source, "_")
-			if len(parts) >= 3 {
-				serviceName := parts[2]
+			// Source is compose_status_<service>_health
+			serviceName := strings.TrimPrefix(ev.Source, "compose_status_")
+			serviceName = strings.TrimSuffix(serviceName, "_health")
+			if serviceName != "" {
 				if ev.Value == "unhealthy" {
 					findings = append(findings, schema.Finding{
 						ID:         "F-CONTAINER-001",
@@ -1178,9 +1175,10 @@ func (e *M1Engine) composeStatusRules(result schema.CollectorResult, collectors 
 	// Bind mount source missing
 	for _, ev := range result.Evidence {
 		if strings.HasSuffix(ev.Source, "_bind_mount_source") {
-			parts := strings.Split(ev.Source, "_")
-			if len(parts) >= 3 {
-				serviceName := parts[2]
+			// Source is compose_status_<service>_bind_mount_source
+			serviceName := strings.TrimPrefix(ev.Source, "compose_status_")
+			serviceName = strings.TrimSuffix(serviceName, "_bind_mount_source")
+			if serviceName != "" {
 				if strings.HasSuffix(ev.Value, "=false") {
 					sourcePath := strings.TrimSuffix(ev.Value, "=false")
 					findings = append(findings, schema.Finding{
