@@ -19,6 +19,7 @@ type RunRequest struct {
 	Timeout time.Duration
 	Redact  Redactor
 	Runner  cmdrunner.CommandRunner
+	RedactLevel string
 }
 
 type RunResult struct {
@@ -42,6 +43,7 @@ type SandboxRequest struct {
 	Run       RunRequest
 	Redact    Redactor
 	Runner    cmdrunner.CommandRunner
+	RedactLevel string
 }
 
 type SandboxResult struct {
@@ -76,6 +78,10 @@ func RunCommand(ctx context.Context, req RunRequest) RunResult {
 	stdout := redact(res.Stdout)
 	stderr := redact(res.Stderr)
 	findings := ClassifyPromptInjection(stdout + "\n" + stderr)
+	status := req.RedactLevel
+	if status == "" {
+		status = "default"
+	}
 	return RunResult{
 		SchemaVersion:   SchemaVersion,
 		Command:         req.Command,
@@ -87,7 +93,7 @@ func RunCommand(ctx context.Context, req RunRequest) RunResult {
 		StdoutPreview:   truncate(stdout, 8192),
 		StderrPreview:   truncate(stderr, 8192),
 		Findings:        findings,
-		RedactionStatus: "default",
+		RedactionStatus: status,
 	}
 }
 
@@ -104,13 +110,17 @@ func RunSandbox(ctx context.Context, req SandboxRequest) (result SandboxResult, 
 	if err != nil {
 		return SandboxResult{}, err
 	}
+	status := req.RedactLevel
+	if status == "" {
+		status = "default"
+	}
 	result = SandboxResult{
 		SchemaVersion:   SchemaVersion,
 		SandboxDir:      sandboxDir,
 		Kept:            req.Keep,
 		PatchPath:       redact(req.PatchPath),
 		CleanupStatus:   "pending",
-		RedactionStatus: "default",
+		RedactionStatus: status,
 	}
 	defer func() {
 		if req.Keep {
@@ -138,6 +148,7 @@ func RunSandbox(ctx context.Context, req SandboxRequest) (result SandboxResult, 
 	runReq.Dir = sandboxDir
 	runReq.Redact = redact
 	runReq.Runner = runner
+	runReq.RedactLevel = req.RedactLevel
 	runResult := RunCommand(ctx, runReq)
 	result.Run = &runResult
 	return result, nil
