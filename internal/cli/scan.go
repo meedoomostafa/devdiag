@@ -72,9 +72,9 @@ var scanCmd = &cobra.Command{
 			return err
 		}
 
-		// Persist reports only when explicitly requested. By default scan is read-only.
+				// Persist reports only when explicitly requested. By default scan is read-only.
 		if scanSaveReport {
-			if err := persistReport(report); err != nil {
+			if err := persistReport(redacted); err != nil {
 				logger.Warn("scan", fmt.Sprintf("failed to persist report: %v", err))
 			}
 		}
