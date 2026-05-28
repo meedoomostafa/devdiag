@@ -979,3 +979,34 @@ func TestEventObserver_CollectorDoneTimeout(t *testing.T) {
 		t.Errorf("expected duration 500ms, got %d", captured.DurationMs)
 	}
 }
+
+// nonThreadSafeSink is a sink that is NOT thread-safe for race detection.
+type nonThreadSafeSink struct {
+	counts map[string]int
+}
+
+func (s *nonThreadSafeSink) Emit(e Event) {
+	s.counts[string(e.Type)]++
+}
+
+func TestScan_ConcurrentEventSinkSafety(t *testing.T) {
+	// Setup multiple collectors to run in parallel
+	c1 := &fakeCollector{name: "c1", delay: 10 * time.Millisecond}
+	c2 := &fakeCollector{name: "c2", delay: 10 * time.Millisecond}
+
+	factory := &fakeCollectorFactory{
+		collectors: []collectors.Collector{c1, c2},
+	}
+	scanner := newTestScanner(factory, &fakeEngineFactory{})
+
+	// Use a non-thread-safe sink.
+	// app.Scan should wrap it in a MutexSink, preventing a race.
+	sink := &nonThreadSafeSink{
+		counts: make(map[string]int),
+	}
+
+	_, err := scanner.Scan(context.Background(), ScanOptions{}, sink)
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+}
