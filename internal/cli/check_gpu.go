@@ -80,7 +80,7 @@ var checkGPUCmd = &cobra.Command{
 			return err
 		}
 
-		code := exitCodeFromResults(sortedFindings, collectorResults, false)
+		code := exitCodeFromResultsForCommand(cmd, sortedFindings, collectorResults, false)
 		if code != exitcode.Success {
 			return exitCodeError{code: code}
 		}
