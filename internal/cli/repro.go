@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/graph"
 	"github.com/meedoomostafa/devdiag/internal/redact"
@@ -147,8 +147,9 @@ var reproCmd = &cobra.Command{
 }
 
 func writeReproArtifacts(runID string, report *schema.Report, result *repro.ReproResult, engine *redact.Engine) error {
-	runsDir := filepath.Join(".devdiag", "runs", runID)
-	if err := os.MkdirAll(filepath.Join(runsDir, "logs"), 0755); err != nil {
+	base := "."
+	runsDir := artifact.RunDir(base, runID)
+	if err := artifact.MkdirPrivate(filepath.Join(runsDir, "logs")); err != nil {
 		return err
 	}
 
@@ -157,7 +158,7 @@ func writeReproArtifacts(runID string, report *schema.Report, result *repro.Repr
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(runsDir, "report.json"), reportData, 0600); err != nil {
+	if err := artifact.WriteFilePrivate(filepath.Join(runsDir, "report.json"), reportData); err != nil {
 		return err
 	}
 
@@ -167,17 +168,17 @@ func writeReproArtifacts(runID string, report *schema.Report, result *repro.Repr
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(runsDir, "repro.json"), reproData, 0600); err != nil {
+	if err := artifact.WriteFilePrivate(filepath.Join(runsDir, "repro.json"), reproData); err != nil {
 		return err
 	}
 
 	// Captured logs (already redacted previews)
 	stdoutLog := engine.RedactString(result.StdoutPreview, "repro_stdout")
 	stderrLog := engine.RedactString(result.StderrPreview, "repro_stderr")
-	if err := os.WriteFile(filepath.Join(runsDir, "logs", "command.stdout.log"), []byte(stdoutLog), 0600); err != nil {
+	if err := artifact.WriteFilePrivate(filepath.Join(runsDir, "logs", "command.stdout.log"), []byte(stdoutLog)); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(runsDir, "logs", "command.stderr.log"), []byte(stderrLog), 0600); err != nil {
+	if err := artifact.WriteFilePrivate(filepath.Join(runsDir, "logs", "command.stderr.log"), []byte(stderrLog)); err != nil {
 		return err
 	}
 

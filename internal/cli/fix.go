@@ -15,6 +15,8 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/output"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 	"golang.org/x/term"
+	"github.com/meedoomostafa/devdiag/internal/app"
+	"github.com/meedoomostafa/devdiag/internal/artifact"
 )
 
 var (
@@ -56,22 +58,15 @@ var fixCmd = &cobra.Command{
 }
 
 func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger, colorMode output.ColorMode) error {
+	redactEngine := buildRedactEngine()
 	planner := fix.NewPlanner()
 	executor := fix.NewExecutor(fix.DefaultAuditLog())
 
-	// Load or generate report
-	report, source, runID, reportAge, err := resolveReport()
+	// Resolve and optionally scan
+	report, source, runID, reportAge, err := resolveReportWithFresh(cmd, logger)
 	if err != nil {
 		logger.Error("fix", fmt.Sprintf("cannot resolve report: %v", err))
 		return exitCodeError{code: exitcode.CollectorPartial}
-	}
-
-	if fixFresh {
-		// In M5, --fresh on fix does a targeted mini-scan. For now, we reuse
-		// the loaded report but mark source as fresh_scan since the user
-		// explicitly requested it. Future iterations can run targeted collectors.
-		source = schema.FixSourceFreshScan
-		reportAge = 0
 	}
 
 	proposals, err := planner.Resolve(report, fix.ResolveOptions{
@@ -118,6 +113,7 @@ func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger, colorM
 				Apply:       true,
 				Fresh:       fixFresh,
 				Interactive: isTTY(),
+				Redact:      func(s string) string { return redactEngine.RedactString(s, "fix_output") },
 			})
 			if err != nil {
 				logger.Error("fix", fmt.Sprintf("apply failed for %s: %v", p.HintID, err))
@@ -151,15 +147,10 @@ func filterProposalsByHint(proposals []schema.FixProposal, hint string) []schema
 func runFixList(cmd *cobra.Command, logger *logging.Logger, colorMode output.ColorMode) error {
 	planner := fix.NewPlanner()
 
-	report, source, runID, reportAge, err := resolveReport()
+	report, source, runID, reportAge, err := resolveReportWithFresh(cmd, logger)
 	if err != nil {
 		logger.Error("fix", fmt.Sprintf("cannot resolve report: %v", err))
 		return exitCodeError{code: exitcode.CollectorPartial}
-	}
-
-	if fixFresh {
-		source = schema.FixSourceFreshScan
-		reportAge = 0
 	}
 
 	proposals, err := planner.ListAll(report, source, runID, reportAge)
@@ -206,18 +197,47 @@ func runFixTemplates(cmd *cobra.Command, logger *logging.Logger, colorMode outpu
 	return nil
 }
 
+// resolveReportWithFresh resolves the report and optionally runs a fresh scan.
+func resolveReportWithFresh(cmd *cobra.Command, logger *logging.Logger) (*schema.Report, schema.FixSource, string, time.Duration, error) {
+	base, err := artifact.DiscoverBase(".")
+	if err != nil {
+		return nil, "", "", 0, fmt.Errorf("no saved report found; run 'devdiag scan --save-report' first")
+	}
+
+	if fixFresh {
+		logger.Info("fix", "running fresh scan before planning")
+		report, err := app.Scan(cmd.Context(), app.ScanOptions{
+			Path:        base,
+			Profile:     flagProfile,
+			RedactLevel: flagRedact,
+			CI:          false,
+		}, app.NoopSink{})
+		if err != nil {
+			return nil, "", "", 0, fmt.Errorf("fresh scan failed: %w", err)
+		}
+		return report, schema.FixSourceFreshScan, report.RunID, 0, nil
+	}
+
+	return resolveReport()
+}
+
 // resolveReport loads the latest saved report or returns an error.
 func resolveReport() (*schema.Report, schema.FixSource, string, time.Duration, error) {
+	base, err := artifact.DiscoverBase(".")
+	if err != nil {
+		return nil, "", "", 0, fmt.Errorf("no saved report found; run 'devdiag scan --save-report' first")
+	}
+
 	runID := fixRunID
 	if runID == "" {
-		latest, err := findLatestRunID()
+		latest, err := artifact.FindLatestRunID(base)
 		if err != nil {
-			return nil, "", "", 0, fmt.Errorf("no saved report found; run 'devdiag scan --save-report' first")
+			return nil, "", "", 0, fmt.Errorf("no saved report found: %w", err)
 		}
 		runID = latest
 	}
 
-	runsDir := filepath.Join(".devdiag", "runs", runID)
+	runsDir := artifact.RunDir(base, runID)
 	reportPath := filepath.Join(runsDir, "report.json")
 	info, err := os.Stat(reportPath)
 	if err != nil {
