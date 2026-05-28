@@ -20,6 +20,8 @@ type Result struct {
 	TimedOut         bool
 	NotFound         bool
 	PermissionDenied bool
+	StdoutTruncated  bool
+	StderrTruncated  bool
 }
 
 // CommandRunner abstracts external command execution for testability.
@@ -30,8 +32,10 @@ type CommandRunner interface {
 // RunOptions carries optional execution settings for callers that need a
 // working directory or stdin without bypassing CommandRunner.
 type RunOptions struct {
-	Dir   string
-	Stdin []byte
+	Dir           string
+	Stdin         []byte
+	StdoutCapBytes int
+	StderrCapBytes int
 }
 
 // OptionRunner is implemented by runners that support RunOptions.
@@ -71,14 +75,18 @@ func (r *RealRunner) RunWithOptions(ctx context.Context, opts RunOptions, name s
 	} else {
 		cmd.Stdin = nil
 	}
-	var stdoutBuf, stderrBuf bytes.Buffer
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
+
+	stdoutBuf := NewCappedBuffer(opts.StdoutCapBytes)
+	stderrBuf := NewCappedBuffer(opts.StderrCapBytes)
+	cmd.Stdout = stdoutBuf
+	cmd.Stderr = stderrBuf
 
 	err := cmd.Run()
 	res.Duration = time.Since(start)
-	res.Stdout = limitCapture(stdoutBuf.String())
-	res.Stderr = limitCapture(stderrBuf.String())
+	res.Stdout = stdoutBuf.String()
+	res.Stderr = stderrBuf.String()
+	res.StdoutTruncated = stdoutBuf.Truncated()
+	res.StderrTruncated = stderrBuf.Truncated()
 
 	if err == nil {
 		res.ExitCode = 0
@@ -128,13 +136,6 @@ func RunWithOptions(ctx context.Context, r CommandRunner, opts RunOptions, name 
 		return optionRunner.RunWithOptions(ctx, opts, name, args...)
 	}
 	return r.Run(ctx, name, args...)
-}
-
-func limitCapture(s string) string {
-	if len(s) > maxCaptureBytes {
-		return s[:maxCaptureBytes] + "\n... [output truncated]"
-	}
-	return s
 }
 
 func isPermissionDenied(stderr string) bool {
