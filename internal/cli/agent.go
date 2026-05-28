@@ -57,11 +57,12 @@ var agentRunCmd = &cobra.Command{
 		redactor := buildRedactEngine()
 		root, _ := os.Getwd()
 		result := agent.RunCommand(cmd.Context(), agent.RunRequest{
-			Command: args[0],
-			Args:    args[1:],
-			Dir:     root,
-			Timeout: agentTimeout,
-			Redact:  func(s string) string { return redactor.RedactString(s, "agent_run") },
+			Command:     args[0],
+			Args:        args[1:],
+			Dir:         root,
+			Timeout:     agentTimeout,
+			Redact:      func(s string) string { return redactor.RedactString(s, "agent_run") },
+			RedactLevel: string(redactor.Level),
 		})
 		if err := renderAgentValue(cmd, result); err != nil {
 			return err
@@ -91,10 +92,11 @@ var agentSandboxCmd = &cobra.Command{
 		}
 		redactor := buildRedactEngine()
 		result, err := agent.RunSandbox(cmd.Context(), agent.SandboxRequest{
-			Root:      root,
-			PatchPath: patchPath,
-			Keep:      agentKeep,
-			Redact:    func(s string) string { return redactor.RedactString(s, "agent_sandbox") },
+			Root:        root,
+			PatchPath:   patchPath,
+			Keep:        agentKeep,
+			Redact:      func(s string) string { return redactor.RedactString(s, "agent_sandbox") },
+			RedactLevel: string(redactor.Level),
 			Run: agent.RunRequest{
 				Command: args[0],
 				Args:    args[1:],
