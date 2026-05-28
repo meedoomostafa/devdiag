@@ -78,6 +78,41 @@ func ReadCache(kind, raw string) (*Manifest, error) {
 	return latest, nil
 }
 
+// ListCache returns all cached manifests matching the target.
+func ListCache(kind, raw string) ([]*Manifest, error) {
+	dir := CacheDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var results []*Manifest
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		// Filter by kind prefix
+		if !strings.HasPrefix(entry.Name(), kind+"_") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var m Manifest
+		if err := json.Unmarshal(data, &m); err != nil {
+			continue
+		}
+		if m.Target.Raw != raw {
+			continue
+		}
+		results = append(results, &m)
+	}
+	return results, nil
+}
+
 // ReadCacheBySessionID searches all cached manifests for the given session ID.
 func ReadCacheBySessionID(sessionID string) (*Manifest, error) {
 	dir := CacheDir()
