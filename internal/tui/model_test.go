@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -579,12 +580,65 @@ func TestModel_NoMutationKeybindings(t *testing.T) {
 }
 
 func TestModel_SafeEventSink_NoPanicAfterClose(t *testing.T) {
-	sink := &safeEventSink{ch: make(chan app.Event, 4)}
+	sink := &safeEventSink{
+		ch:   make(chan app.Event, 4),
+		done: make(chan struct{}),
+	}
 	sink.Emit(app.Event{Type: app.EventScanStarted})
-	sink.close()
+	sink.Close()
 	// These should not panic.
 	sink.Emit(app.Event{Type: app.EventScanStarted})
 	sink.Emit(app.Event{Type: app.EventScanStarted})
+}
+
+func TestSafeEventSink_UnblocksOnCloseWhenChannelFull(t *testing.T) {
+	sink := &safeEventSink{
+		ch:   make(chan app.Event, 1),
+		done: make(chan struct{}),
+	}
+	// Fill the channel
+	sink.Emit(app.Event{Type: app.EventScanStarted})
+
+	errCh := make(chan error, 1)
+	go func() {
+		// This should block initially, then unblock when Close() is called.
+		sink.Emit(app.Event{Type: app.EventCollectorStarted})
+		errCh <- nil
+	}()
+
+	sink.Close()
+
+	select {
+	case <-errCh:
+		// success
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Emit did not unblock after Close")
+	}
+}
+
+func TestSafeEventSink_EmitAfterCloseDoesNotPanic(t *testing.T) {
+	sink := &safeEventSink{
+		ch:   make(chan app.Event, 1),
+		done: make(chan struct{}),
+	}
+	sink.Close()
+	sink.Emit(app.Event{Type: app.EventScanStarted}) // should return immediately
+}
+
+func TestSafeEventSink_CloseWhileEmitDoesNotPanic(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		sink := &safeEventSink{
+			ch:   make(chan app.Event, 1),
+			done: make(chan struct{}),
+		}
+		go func() {
+			sink.Emit(app.Event{Type: app.EventScanStarted})
+			sink.Emit(app.Event{Type: app.EventScanStarted})
+		}()
+		go func() {
+			sink.Close()
+		}()
+	}
 }
 
 func TestModel_ScanDone_WithEmptyFindings(t *testing.T) {

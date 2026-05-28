@@ -27,31 +27,33 @@ type scanDoneMsg struct {
 	err    error
 }
 
-// safeEventSink wraps a channel with a mutex so Emit never panics
-// when the channel is closed (e.g. after scan cancellation).
+// safeEventSink ensures progress events never deadlock or panic, even
+// if the TUI exits or the scan is cancelled. Progress events are
+// best-effort after cancellation.
 type safeEventSink struct {
-	mu     sync.Mutex
-	ch     chan app.Event
-	closed bool
+	ch   chan app.Event
+	done chan struct{}
+	once sync.Once
 }
 
 func (s *safeEventSink) Emit(e app.Event) {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
+	select {
+	case <-s.done:
+		return
+	default:
+	}
+
+	select {
+	case s.ch <- e:
+	case <-s.done:
 		return
 	}
-	s.mu.Unlock()
-	s.ch <- e
 }
 
-func (s *safeEventSink) close() {
-	s.mu.Lock()
-	if !s.closed {
-		s.closed = true
-		close(s.ch)
-	}
-	s.mu.Unlock()
+func (s *safeEventSink) Close() {
+	s.once.Do(func() {
+		close(s.done)
+	})
 }
 
 // startScan begins app.Scan in a background goroutine and returns the
@@ -59,7 +61,10 @@ func (s *safeEventSink) close() {
 func startScan(opts app.ScanOptions) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(context.Background())
-		sink := &safeEventSink{ch: make(chan app.Event, 256)}
+		sink := &safeEventSink{
+			ch:   make(chan app.Event, 256),
+			done: make(chan struct{}),
+		}
 		sess := &scanSession{
 			ch:     sink.ch,
 			done:   make(chan struct{}),
@@ -67,7 +72,7 @@ func startScan(opts app.ScanOptions) tea.Cmd {
 		}
 		go func() {
 			sess.report, sess.err = app.Scan(ctx, opts, sink)
-			sink.close()
+			sink.Close()
 			close(sess.done)
 		}()
 		return scanStartedMsg{session: sess}
@@ -77,13 +82,25 @@ func startScan(opts app.ScanOptions) tea.Cmd {
 // nextEvent reads the next event from the scan session channel.
 func nextEvent(sess *scanSession) tea.Cmd {
 	return func() tea.Msg {
-		evt, ok := <-sess.ch
-		if !ok {
-			// Channel closed; wait for goroutine to set report/err.
-			<-sess.done
-			return scanDoneMsg{report: sess.report, err: sess.err}
+		select {
+		case evt, ok := <-sess.ch:
+			if !ok {
+				// sess.ch should not be closed while producers are active.
+				// If we hit this, it means something closed the channel unexpectedly.
+				<-sess.done
+				return scanDoneMsg{report: sess.report, err: sess.err}
+			}
+			return scanEventMsg{event: evt}
+		case <-sess.done:
+			// Scan goroutine finished or cancelled.
+			// Drain remaining events if any, otherwise return completion.
+			select {
+			case evt := <-sess.ch:
+				return scanEventMsg{event: evt}
+			default:
+				return scanDoneMsg{report: sess.report, err: sess.err}
+			}
 		}
-		return scanEventMsg{event: evt}
 	}
 }
 
