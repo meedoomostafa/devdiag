@@ -18,13 +18,15 @@ type scanStartedMsg struct {
 
 // scanEventMsg carries a single event from the scan.
 type scanEventMsg struct {
-	event app.Event
+	sessionID int
+	event     app.Event
 }
 
 // scanDoneMsg signals scan completion with the final report.
 type scanDoneMsg struct {
-	report *schema.Report
-	err    error
+	sessionID int
+	report    *schema.Report
+	err       error
 }
 
 // safeEventSink ensures progress events never deadlock or panic, even
@@ -58,7 +60,7 @@ func (s *safeEventSink) Close() {
 
 // startScan begins app.Scan in a background goroutine and returns the
 // session handle as a tea.Msg.
-func startScan(opts app.ScanOptions) tea.Cmd {
+func startScan(opts app.ScanOptions, sessionID int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(context.Background())
 		sink := &safeEventSink{
@@ -66,6 +68,7 @@ func startScan(opts app.ScanOptions) tea.Cmd {
 			done: make(chan struct{}),
 		}
 		sess := &scanSession{
+			id:     sessionID,
 			ch:     sink.ch,
 			done:   make(chan struct{}),
 			cancel: cancel,
@@ -88,17 +91,17 @@ func nextEvent(sess *scanSession) tea.Cmd {
 				// sess.ch should not be closed while producers are active.
 				// If we hit this, it means something closed the channel unexpectedly.
 				<-sess.done
-				return scanDoneMsg{report: sess.report, err: sess.err}
+				return scanDoneMsg{sessionID: sess.id, report: sess.report, err: sess.err}
 			}
-			return scanEventMsg{event: evt}
+			return scanEventMsg{sessionID: sess.id, event: evt}
 		case <-sess.done:
 			// Scan goroutine finished or cancelled.
 			// Drain remaining events if any, otherwise return completion.
 			select {
 			case evt := <-sess.ch:
-				return scanEventMsg{event: evt}
+				return scanEventMsg{sessionID: sess.id, event: evt}
 			default:
-				return scanDoneMsg{report: sess.report, err: sess.err}
+				return scanDoneMsg{sessionID: sess.id, report: sess.report, err: sess.err}
 			}
 		}
 	}
@@ -107,7 +110,7 @@ func nextEvent(sess *scanSession) tea.Cmd {
 // Init satisfies tea.Model.
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		startScan(m.opts),
+		startScan(m.opts, m.sessionID),
 	)
 }
 
@@ -126,10 +129,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nextEvent(msg.session)
 
 	case scanEventMsg:
+		if m.session == nil || msg.sessionID != m.session.id {
+			return m, nil
+		}
 		m.events = append(m.events, msg.event)
 		return m, nextEvent(m.session)
 
 	case scanDoneMsg:
+		if m.session == nil || msg.sessionID != m.session.id {
+			return m, nil
+		}
 		m.scanning = false
 		m.report = msg.report
 		m.scanErr = msg.err

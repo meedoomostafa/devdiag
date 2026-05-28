@@ -406,9 +406,10 @@ func TestModel_FilterMode_EscapeCancels(t *testing.T) {
 
 func TestModel_ScanEventAndDone(t *testing.T) {
 	m := NewModel(app.ScanOptions{Path: "."}, nil)
+	m.sessionID = 1
 
 	// Simulate scan started
-	sess := &scanSession{ch: make(chan app.Event, 2), done: make(chan struct{})}
+	sess := &scanSession{id: 1, ch: make(chan app.Event, 2), done: make(chan struct{})}
 	newM, _ := m.Update(scanStartedMsg{session: sess})
 	m = newM.(Model)
 	if !m.scanning {
@@ -416,7 +417,7 @@ func TestModel_ScanEventAndDone(t *testing.T) {
 	}
 
 	// Simulate event
-	newM, cmd := m.Update(scanEventMsg{event: app.Event{Type: app.EventCollectorStarted, Collector: "env"}})
+	newM, cmd := m.Update(scanEventMsg{sessionID: 1, event: app.Event{Type: app.EventCollectorStarted, Collector: "env"}})
 	m = newM.(Model)
 	if len(m.events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(m.events))
@@ -431,7 +432,7 @@ func TestModel_ScanEventAndDone(t *testing.T) {
 			{ID: "F-TEST-001", Severity: schema.SeverityHigh, Confidence: 0.9, Title: "Test"},
 		},
 	}
-	newM, _ = m.Update(scanDoneMsg{report: report})
+	newM, _ = m.Update(scanDoneMsg{sessionID: 1, report: report})
 	m = newM.(Model)
 	if m.scanning {
 		t.Error("expected scanning=false after scanDoneMsg")
@@ -441,9 +442,15 @@ func TestModel_ScanEventAndDone(t *testing.T) {
 	}
 }
 
+type someError string
+
+func (e someError) Error() string { return string(e) }
+
 func TestModel_ScanDoneError(t *testing.T) {
 	m := NewModel(app.ScanOptions{Path: "."}, nil)
-	newM, _ := m.Update(scanDoneMsg{err: &app.RulePackError{Errors: []string{"bad"}}})
+	m.sessionID = 1
+	m.session = &scanSession{id: 1}
+	newM, _ := m.Update(scanDoneMsg{sessionID: 1, err: someError("bad")})
 	m = newM.(Model)
 	if m.scanErr == nil {
 		t.Fatal("expected scanErr after failed scanDoneMsg")
