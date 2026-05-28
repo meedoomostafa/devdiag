@@ -193,7 +193,7 @@ func TestM1Engine_ComposeRules(t *testing.T) {
 		}
 	})
 
-	// 4. Defined in process env (should not emit finding)
+	// 4. Defined in process env (should no longer suppress)
 	t.Run("defined in process env", func(t *testing.T) {
 		const varName = "DB_IN_PROCESS_ENV_TEST"
 		t.Setenv(varName, "somevalue")
@@ -213,10 +213,14 @@ func TestM1Engine_ComposeRules(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		found := false
 		for _, f := range findings {
 			if f.ID == "F-ENV-002" && strings.Contains(f.Title, varName) {
-				t.Error("unexpected F-ENV-002 finding for DB_IN_PROCESS_ENV_TEST (defined in process environment)")
+				found = true
 			}
+		}
+		if !found {
+			t.Errorf("expected F-ENV-002 finding for %s (process environment should be ignored)", varName)
 		}
 	})
 
