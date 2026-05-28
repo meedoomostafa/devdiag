@@ -16,6 +16,14 @@ func TestValidatePath(t *testing.T) {
 		{"with traversal", "/repo", "../etc/passwd", true},
 		{"safe absolute", "", "/tmp/test.sh", false},
 		{"bad absolute", "", "/etc/passwd", true},
+		// RB-001 regression cases
+		{"traversal absolute allowed prefix", "", "/home/user/../../../etc/shadow", true},
+		{"prefix confusion home2", "", "/home2/foo", true},
+		{"prefix confusion tmp2", "", "/tmp2/foo", true},
+		{"relative traversal outside root", "/repo", "../../etc/passwd", true},
+		{"safe relative under root with dotdot", "/repo", "safe/../script.sh", false},
+		{"absolute path equal to /tmp", "", "/tmp", false},
+		{"root traversal escape", "/tmp/project", "../escape", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

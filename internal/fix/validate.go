@@ -18,35 +18,50 @@ var (
 // ValidatePath checks that a path is safe: not empty, not absolute unless within
 // a restricted set of system paths, and free of traversal.
 func ValidatePath(root, value string) (string, error) {
+	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", fmt.Errorf("path is empty")
 	}
-	// Reject path traversal components
-	for _, part := range strings.Split(filepath.Clean(value), string(filepath.Separator)) {
+
+	cleanValue := filepath.Clean(value)
+
+	// If absolute, allow only a few safe system paths
+	if filepath.IsAbs(cleanValue) {
+		allowedPrefixes := []string{"/tmp", "/var/tmp", "/dev/shm", "/home", "/usr/local"}
+		for _, prefix := range allowedPrefixes {
+			rel, err := filepath.Rel(prefix, cleanValue)
+			if err != nil {
+				continue
+			}
+			if rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)) {
+				return cleanValue, nil
+			}
+		}
+		return "", fmt.Errorf("absolute path not in allowed prefix: %s", value)
+	}
+
+	// Relative path: resolve against root if provided
+	if root != "" {
+		cleanRoot := filepath.Clean(root)
+		resolved := filepath.Join(cleanRoot, cleanValue)
+		rel, err := filepath.Rel(cleanRoot, resolved)
+		if err != nil {
+			return "", fmt.Errorf("could not resolve relative path: %w", err)
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			return "", fmt.Errorf("path contains traversal outside root: %s", value)
+		}
+		return resolved, nil
+	}
+
+	// If no root, still reject any traversal components in the relative path
+	for _, part := range strings.Split(cleanValue, string(filepath.Separator)) {
 		if part == ".." {
 			return "", fmt.Errorf("path contains traversal: %s", value)
 		}
 	}
-	// If absolute, allow only a few safe system paths
-	if filepath.IsAbs(value) {
-		allowedPrefixes := []string{"/tmp", "/var/tmp", "/dev/shm", "/home", "/usr/local"}
-		ok := false
-		for _, prefix := range allowedPrefixes {
-			if strings.HasPrefix(value, prefix+string(filepath.Separator)) || value == prefix {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			return "", fmt.Errorf("absolute path not in allowed prefix: %s", value)
-		}
-		return value, nil
-	}
-	// Relative path: resolve against root if provided
-	if root != "" {
-		return filepath.Join(root, value), nil
-	}
-	return value, nil
+
+	return cleanValue, nil
 }
 
 // ValidatePort checks that a string is a valid TCP/UDP port number.
