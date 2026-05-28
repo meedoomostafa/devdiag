@@ -132,13 +132,16 @@ func Scan(ctx context.Context, opts ScanOptions, sink EventSink) (*schema.Report
 
 // Scan orchestrates the full scan lifecycle and emits events to the sink.
 func (s *Scanner) Scan(ctx context.Context, opts ScanOptions, sink EventSink) (*schema.Report, error) {
+	if sink == nil {
+		sink = NoopSink{}
+	}
+	// Wrap sink in a MutexSink to ensure thread-safe emission from concurrent collectors.
+	sink = &MutexSink{sink: sink}
+
 	startTime := s.Now()
 	runID := s.RunID()
 
 	emit := func(e Event) {
-		if sink == nil {
-			return
-		}
 		if e.Timestamp.IsZero() {
 			e.Timestamp = s.Now()
 		}
