@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/meedoomostafa/devdiag/internal/app"
+	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
@@ -74,7 +74,7 @@ var scanCmd = &cobra.Command{
 
 				// Persist reports only when explicitly requested. By default scan is read-only.
 		if scanSaveReport {
-			if err := persistReport(redacted); err != nil {
+			if err := persistReport(absPath, redacted); err != nil {
 				logger.Warn("scan", fmt.Sprintf("failed to persist report: %v", err))
 			}
 		}
@@ -87,13 +87,12 @@ var scanCmd = &cobra.Command{
 	},
 }
 
-func persistReport(report *schema.Report) error {
-	base := report.Repo.Root
+func persistReport(base string, report *schema.Report) error {
 	if base == "" {
 		base = "."
 	}
-	runsDir := filepath.Join(base, ".devdiag", "runs", report.RunID)
-	if err := os.MkdirAll(runsDir, 0755); err != nil {
+	runsDir := artifact.RunDir(base, report.RunID)
+	if err := artifact.MkdirPrivate(runsDir); err != nil {
 		return fmt.Errorf("create runs dir: %w", err)
 	}
 	reportPath := filepath.Join(runsDir, "report.json")
@@ -101,7 +100,7 @@ func persistReport(report *schema.Report) error {
 	if err != nil {
 		return fmt.Errorf("marshal report: %w", err)
 	}
-	if err := os.WriteFile(reportPath, data, 0644); err != nil {
+	if err := artifact.WriteFilePrivate(reportPath, data); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}
 	return nil

@@ -74,7 +74,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 		if m, ok := finalModel.(tui.Model); ok && m.Report() != nil {
 			// Redact the final report using the same engine before persisting.
 			redacted := buildRedactEngine().RedactReport(m.Report())
-			if err := persistReport(redacted); err != nil {
+			if err := persistReport(absPath, redacted); err != nil {
 				logger.Warn("inspect", fmt.Sprintf("failed to persist report: %v", err))
 			}
 		}

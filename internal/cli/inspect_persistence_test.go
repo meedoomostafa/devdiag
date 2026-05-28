@@ -47,7 +47,7 @@ func TestInspectPersistenceLogic_Redacts(t *testing.T) {
 	engine := redact.NewEngine(redact.LevelDefault)
 	redacted := engine.RedactReport(report)
 	
-	err = persistReport(redacted)
+	err = persistReport(tmpDir, redacted)
 	if err != nil {
 		t.Fatalf("persistReport failed: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestInspectPersistenceLogic_RedactOff(t *testing.T) {
 	engine := redact.NewEngine(redact.LevelOff)
 	redacted := engine.RedactReport(report)
 	
-	err = persistReport(redacted)
+	err = persistReport(tmpDir, redacted)
 	if err != nil {
 		t.Fatal(err)
 	}
