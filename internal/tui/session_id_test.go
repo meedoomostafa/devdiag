@@ -9,7 +9,7 @@ import (
 
 func TestModel_SessionID_IgnoresStaleMessages(t *testing.T) {
 	m := Model{sessionID: 1}
-	
+
 	// 1. Setup Session 2 (Current)
 	sess2 := &scanSession{
 		id:   2,
@@ -19,7 +19,7 @@ func TestModel_SessionID_IgnoresStaleMessages(t *testing.T) {
 	m.session = sess2
 	m.sessionID = 2
 	m.scanning = true
-	
+
 	// 2. Send scanEventMsg from session 1 (Stale)
 	m2, _ := m.Update(scanEventMsg{sessionID: 1, event: app.Event{Message: "stale"}})
 	m = m2.(Model)
@@ -53,7 +53,7 @@ func TestModel_SessionID_IgnoresStaleMessages(t *testing.T) {
 	// 6. Reset for Error Test
 	m.scanning = true
 	m.scanErr = nil
-	
+
 	// 7. Send scanErrMsg from session 1 (Stale)
 	m6, _ := m.Update(scanDoneMsg{sessionID: 1, err: someError("stale")})
 	m = m6.(Model)

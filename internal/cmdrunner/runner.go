@@ -32,8 +32,8 @@ type CommandRunner interface {
 // RunOptions carries optional execution settings for callers that need a
 // working directory or stdin without bypassing CommandRunner.
 type RunOptions struct {
-	Dir           string
-	Stdin         []byte
+	Dir            string
+	Stdin          []byte
 	StdoutCapBytes int
 	StderrCapBytes int
 }

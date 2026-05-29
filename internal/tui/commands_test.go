@@ -9,15 +9,15 @@ import (
 
 // knownCommands is the set of real devdiag commands that may appear as hints.
 var knownCommands = map[string]bool{
-	"devdiag scan":              true,
-	"devdiag scan . --verbose":  true,
-	"devdiag check ci":          true,
-	"devdiag check containers":  true,
-	"devdiag check security":    true,
-	"devdiag check gpu":         true,
-	"devdiag check cache":       true,
-	"devdiag check ports":       true,
-	"devdiag fix":               true,
+	"devdiag scan":             true,
+	"devdiag scan . --verbose": true,
+	"devdiag check ci":         true,
+	"devdiag check containers": true,
+	"devdiag check security":   true,
+	"devdiag check gpu":        true,
+	"devdiag check cache":      true,
+	"devdiag check ports":      true,
+	"devdiag fix":              true,
 }
 
 func TestDeriveCommandHints_OnlyRealCommands(t *testing.T) {

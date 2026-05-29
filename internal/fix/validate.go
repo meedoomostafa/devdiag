@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	validEnvKeyRe    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	validEnvKeyRe      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	validServiceNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
 )
 
