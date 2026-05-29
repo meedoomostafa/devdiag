@@ -169,12 +169,17 @@ TARGET_DIR="$(default_bin_dir)"
 URL="$(archive_url)"
 
 if [[ "${DRY_RUN}" == "1" ]]; then
+	if [[ "${REQUIRE_CHECKSUM}" == "1" && -z "${SHA256}" ]]; then
+		echo "error: DEVDIAG_REQUIRE_CHECKSUM=1 set but no checksum provided" >&2
+		exit 1
+	fi
 	cat <<EOF
 repo=${REPO}
 version=${VERSION}
 archive=${URL}
 bin_dir=${TARGET_DIR}
 go=$(go version)
+checksum=${SHA256:-none}
 EOF
 	exit 0
 fi
