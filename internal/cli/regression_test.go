@@ -149,9 +149,16 @@ func TestFixFresh_StaleFindingNotApplied(t *testing.T) {
 func TestFixFresh_DisappearingFindingDoesNotApply(t *testing.T) {
 	dir := t.TempDir()
 
-	// 1. Saved report has F-AUTO-SAFE
+	// 1. Create a non-executable script
+	scriptPath := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho hi\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Saved report has F-AUTO-SAFE pointing to this script
 	writeSavedReport(t, dir, "old-run", schema.Report{
 		RunID: "old-run",
+		Repo:  schema.RepoInfo{Root: dir},
 		Findings: []schema.Finding{{
 			ID:       "F-AUTO-SAFE",
 			Title:    "Safe Finding",
@@ -160,10 +167,26 @@ func TestFixFresh_DisappearingFindingDoesNotApply(t *testing.T) {
 		}},
 	})
 
-	// 2. Setup mock scanner that returns NO findings
+	// 3. Setup mock scanner and restore state
 	oldScan := runFixFreshScan
 	t.Cleanup(func() { runFixFreshScan = oldScan })
 
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	oldFixFresh := fixFresh
+	oldFixApply := fixApply
+	oldFixHint := fixHint
+	t.Cleanup(func() {
+		fixFresh = oldFixFresh
+		fixApply = oldFixApply
+		fixHint = oldFixHint
+	})
+
+	// Setup mock scanner that returns NO findings
 	runFixFreshScan = func(ctx context.Context, opts app.ScanOptions, sink app.EventSink) (*schema.Report, error) {
 		return &schema.Report{
 			RunID:    "fresh-empty-run",
@@ -171,24 +194,35 @@ func TestFixFresh_DisappearingFindingDoesNotApply(t *testing.T) {
 		}, nil
 	}
 
-	// 3. Try to apply F-AUTO-SAFE with --fresh.
-	// It should find 0 proposals and NOT attempt to resolve against the saved report.
-	oldWD, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldWD)
+	// 4. Try to apply F-AUTO-SAFE with --fresh in-process
+	fixFresh = true
+	fixApply = true
+	fixHint = ""
 
-	stdout, stderr, code := runBinary("fix", "F-AUTO-SAFE", "--fresh", "--apply")
-	if code != 0 {
-		t.Fatalf("expected 0 code for disappearing finding, got %d. stderr: %s", code, stderr)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
 	}
 
-	if !strings.Contains(stdout, "No fix proposals for finding F-AUTO-SAFE") {
-		t.Errorf("expected 'No fix proposals' message, got: %s", stdout)
+	logger := buildLogger()
+	stdout := &strings.Builder{}
+	fixCmd.SetOut(stdout)
+
+	if err := runFix(fixCmd, "F-AUTO-SAFE", logger, buildColorMode()); err != nil {
+		t.Fatalf("runFix failed: %v", err)
 	}
 
-	// Double check that it didn't even try to plan (which would fail because script.sh doesn't exist)
-	if strings.Contains(stderr, "planning failed") {
-		t.Errorf("fresh scan fallback suspected; planning failed: %s", stderr)
+	got := stdout.String()
+	if !strings.Contains(got, "No fix proposals for finding F-AUTO-SAFE") {
+		t.Errorf("expected 'No fix proposals' message, got: %s", got)
+	}
+
+	// 5. Verify no mutation happened (script should still be 0644, not executable)
+	info, err := os.Stat(scriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0111 != 0 {
+		t.Errorf("script became executable; fallback suspected! perm: %o", info.Mode().Perm())
 	}
 }
 
