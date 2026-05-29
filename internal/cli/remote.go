@@ -947,6 +947,3 @@ func buildK8sProbeFindings(result *render.RemoteResult, probe *transport.RemoteP
 	}
 	return nil
 }
-
-// unused import placeholder to avoid compile errors during development.
-var _ = schema.SeverityInfo
