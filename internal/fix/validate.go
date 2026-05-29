@@ -43,6 +43,10 @@ func ValidatePath(root, value string) (string, error) {
 	// Relative path: resolve against root if provided
 	if root != "" {
 		cleanRoot := filepath.Clean(root)
+		if !filepath.IsAbs(cleanRoot) {
+			return "", fmt.Errorf("root must be absolute: %s", root)
+		}
+
 		resolved := filepath.Join(cleanRoot, cleanValue)
 		rel, err := filepath.Rel(cleanRoot, resolved)
 		if err != nil {

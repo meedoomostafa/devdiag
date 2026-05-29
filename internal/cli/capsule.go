@@ -106,7 +106,8 @@ var capsuleCreateCmd = &cobra.Command{
 		}
 		defer outFile.Close()
 		if err := os.Chmod(outPath, artifact.FilePerm); err != nil {
-			logger.Warn("capsule", fmt.Sprintf("failed to repair archive permissions: %v", err))
+			logger.Error("capsule", fmt.Sprintf("failed to repair archive permissions: %v", err))
+			return exitCodeError{code: exitcode.InternalError}
 		}
 
 		builder := capsule.NewBuilder(string(redactEngine.Level), version.Version)

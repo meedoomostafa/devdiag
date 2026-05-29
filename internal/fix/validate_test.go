@@ -24,6 +24,9 @@ func TestValidatePath(t *testing.T) {
 		{"safe relative under root with dotdot", "/repo", "safe/../script.sh", false},
 		{"absolute path equal to /tmp", "", "/tmp", false},
 		{"root traversal escape", "/tmp/project", "../escape", true},
+		{"relative root rejected", "../root", "script.sh", true},
+		{"relative path inside absolute root", "/home/user/app", "scripts/fix.sh", false},
+		{"relative path traversal outside absolute root", "/home/user/app", "../../etc/passwd", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
