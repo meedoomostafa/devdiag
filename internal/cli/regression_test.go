@@ -146,6 +146,52 @@ func TestFixFresh_StaleFindingNotApplied(t *testing.T) {
 	}
 }
 
+func TestFixFresh_DisappearingFindingDoesNotApply(t *testing.T) {
+	dir := t.TempDir()
+
+	// 1. Saved report has F-AUTO-SAFE
+	writeSavedReport(t, dir, "old-run", schema.Report{
+		RunID: "old-run",
+		Findings: []schema.Finding{{
+			ID:       "F-AUTO-SAFE",
+			Title:    "Safe Finding",
+			FixHints: []string{"chmod-script"},
+			Evidence: []schema.Evidence{{Source: "host_script_not_executable", Value: "script.sh"}},
+		}},
+	})
+
+	// 2. Setup mock scanner that returns NO findings
+	oldScan := runFixFreshScan
+	t.Cleanup(func() { runFixFreshScan = oldScan })
+
+	runFixFreshScan = func(ctx context.Context, opts app.ScanOptions, sink app.EventSink) (*schema.Report, error) {
+		return &schema.Report{
+			RunID:    "fresh-empty-run",
+			Findings: []schema.Finding{},
+		}, nil
+	}
+
+	// 3. Try to apply F-AUTO-SAFE with --fresh.
+	// It should find 0 proposals and NOT attempt to resolve against the saved report.
+	oldWD, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldWD)
+
+	stdout, stderr, code := runBinary("fix", "F-AUTO-SAFE", "--fresh", "--apply")
+	if code != 0 {
+		t.Fatalf("expected 0 code for disappearing finding, got %d. stderr: %s", code, stderr)
+	}
+
+	if !strings.Contains(stdout, "No fix proposals for finding F-AUTO-SAFE") {
+		t.Errorf("expected 'No fix proposals' message, got: %s", stdout)
+	}
+
+	// Double check that it didn't even try to plan (which would fail because script.sh doesn't exist)
+	if strings.Contains(stderr, "planning failed") {
+		t.Errorf("fresh scan fallback suspected; planning failed: %s", stderr)
+	}
+}
+
 func TestRemoteClean_SessionTargetMismatch(t *testing.T) {
 	dir := t.TempDir()
 
