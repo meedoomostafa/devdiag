@@ -107,4 +107,32 @@ func TestFindLatestRunID(t *testing.T) {
 	if got != "run1" {
 		t.Errorf("FindLatestRunID() with symlink = %v, want run1", got)
 	}
+
+	// Test unsafe symlink
+	os.Remove(filepath.Join(runs, "latest"))
+	if err := os.Symlink("../evil", filepath.Join(runs, "latest")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = FindLatestRunID(tmp)
+	if err == nil {
+		t.Error("FindLatestRunID() with traversal symlink expected error, got nil")
+	}
+
+	os.Remove(filepath.Join(runs, "latest"))
+	if err := os.Symlink("/tmp/evil", filepath.Join(runs, "latest")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = FindLatestRunID(tmp)
+	if err == nil {
+		t.Error("FindLatestRunID() with absolute external symlink expected error, got nil")
+	}
+
+	os.Remove(filepath.Join(runs, "latest"))
+	if err := os.Symlink("run/child", filepath.Join(runs, "latest")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = FindLatestRunID(tmp)
+	if err == nil {
+		t.Error("FindLatestRunID() with nested symlink expected error, got nil")
+	}
 }

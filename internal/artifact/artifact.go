@@ -69,15 +69,22 @@ func WriteFilePrivate(path string, data []byte) error {
 // FindLatestRunID returns the run ID pointed to by the latest symlink or the most recent directory.
 func FindLatestRunID(base string) (string, error) {
 	runs := RunsDir(base)
-	
+
 	// Try latest symlink first
 	latest := LatestLink(base)
 	if target, err := os.Readlink(latest); err == nil {
-		// symlink target might be relative to runs dir or absolute
+		targetID := target
 		if filepath.IsAbs(target) {
-			return filepath.Base(target), nil
+			rel, err := filepath.Rel(runs, target)
+			if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+				return "", fmt.Errorf("latest symlink points outside runs dir: %s", target)
+			}
+			targetID = rel
 		}
-		return target, nil
+		if err := ValidateRunID(targetID); err != nil {
+			return "", fmt.Errorf("invalid run ID in latest symlink: %w", err)
+		}
+		return targetID, nil
 	}
 
 	// Fallback to most recent directory by mod time
