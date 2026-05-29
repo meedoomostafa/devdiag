@@ -89,13 +89,14 @@ func init() {
 	remoteCmd.PersistentFlags().StringVar(&flagRemoteProfile, "profile", "minimal", "Remote profile to inject: minimal")
 	remoteCmd.PersistentFlags().StringVar(&flagRemoteSession, "session", "", "Session ID for targeted operations")
 	remoteCmd.PersistentFlags().BoolVar(&flagRemoteDryRun, "dry-run", false, "Show planned operations without executing")
-	remoteCmd.PersistentFlags().BoolVar(&flagRemoteKeep, "keep", false, "Keep remote files after shell exits (enter only)")
-	remoteCmd.PersistentFlags().StringVar(&flagRemoteCleanup, "cleanup", "always", "Cleanup mode: always, never")
 	remoteCmd.PersistentFlags().BoolVar(&flagRemoteAll, "all", false, "Clean all sessions for the target")
 	remoteCmd.PersistentFlags().StringVar(&flagRemoteSSHIdentityFile, "ssh-identity-file", "", "SSH identity file for remote SSH targets")
 	remoteCmd.PersistentFlags().StringVar(&flagRemoteSSHKnownHostsFile, "ssh-known-hosts-file", "", "SSH known_hosts file for remote SSH targets")
 	remoteCmd.PersistentFlags().StringVar(&flagRemoteSSHStrictHostKeyChecking, "ssh-strict-host-key-checking", "", "SSH StrictHostKeyChecking value: yes, no, accept-new, ask")
 	remoteCmd.PersistentFlags().StringVar(&flagRemoteK8sContainer, "k8s-container", "", "Kubernetes container name for multi-container pods")
+
+	remoteEnterCmd.Flags().BoolVar(&flagRemoteKeep, "keep", false, "Keep remote files after shell exits (enter only)")
+	remoteEnterCmd.Flags().StringVar(&flagRemoteCleanup, "cleanup", "always", "Cleanup mode: always, never")
 
 	remoteCmd.AddCommand(remoteDoctorCmd)
 	remoteCmd.AddCommand(remoteSyncCmd)
