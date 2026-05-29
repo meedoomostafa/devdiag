@@ -27,6 +27,8 @@ var (
 	fixHint      string
 	fixList      bool
 	fixTemplates bool
+	fixCI        bool
+	fixRulePack  string
 )
 
 var fixCmd = &cobra.Command{
@@ -207,10 +209,11 @@ func resolveReportWithFresh(cmd *cobra.Command, logger *logging.Logger) (*schema
 	if fixFresh {
 		logger.Info("fix", "running fresh scan before planning")
 		report, err := app.Scan(cmd.Context(), app.ScanOptions{
-			Path:        base,
-			Profile:     flagProfile,
-			RedactLevel: flagRedact,
-			CI:          false,
+			Path:         base,
+			Profile:      flagProfile,
+			RulePackPath: fixRulePack,
+			RedactLevel:  flagRedact,
+			CI:           fixCI,
 		}, app.NoopSink{})
 		if err != nil {
 			return nil, "", "", 0, fmt.Errorf("fresh scan failed: %w", err)
@@ -290,5 +293,7 @@ func init() {
 	fixCmd.Flags().StringVar(&fixHint, "hint", "", "Fix hint ID to apply when a finding has multiple proposals")
 	fixCmd.Flags().BoolVar(&fixList, "list", false, "List all fix proposals from report")
 	fixCmd.Flags().BoolVar(&fixTemplates, "templates", false, "List registry templates")
+	fixCmd.Flags().BoolVar(&fixCI, "ci", false, "Force CI/local parity collection and evaluation for fresh scan")
+	fixCmd.Flags().StringVar(&fixRulePack, "rule-pack", "", "Evaluate an external deterministic rule pack for fresh scan")
 	rootCmd.AddCommand(fixCmd)
 }
