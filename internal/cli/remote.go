@@ -563,6 +563,11 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 			logger.Error("remote.clean", fmt.Sprintf("session %s not found", flagRemoteSession))
 			return exitCodeError{code: exitcode.InvalidInput}
 		}
+		// Verify target mismatch
+		if cached.Target.Kind != t.Kind || cached.Target.Raw != t.Raw || cached.Target.ContainerName != t.ContainerName {
+			logger.Error("remote.clean", fmt.Sprintf("session %s does not match target %s", flagRemoteSession, t.String()))
+			return exitCodeError{code: exitcode.InvalidInput}
+		}
 		manifests = append(manifests, cached)
 	} else if flagRemoteAll {
 		list, err := session.ListCache(string(t.Kind), t.Raw)
