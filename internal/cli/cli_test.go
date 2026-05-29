@@ -1527,8 +1527,6 @@ func TestFixApplyGuardedProposalRequiresTTY(t *testing.T) {
 	// Since TestFixApplyGuardedProposalRequiresTTY uses a mock finding that is NOT in built-in rules,
 	// we should probably NOT use --fresh in this specific test unless we set up a real finding.
 	// But the goal is to test guarded refusal.
-	// Let's use a real finding that always exists or just don't use --fresh and expect "requires --fresh" refusal.
-
 	_, stderr, code := runBinaryInDir(dir, "fix", "F-SVC-001", "--apply", "--format", "json")
 	if code != exitcode.UnsafeRefused.Int() {
 		t.Fatalf("fix --apply guarded exit code = %d, want %d; stderr=%s", code, exitcode.UnsafeRefused.Int(), stderr)
