@@ -1,15 +1,85 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/meedoomostafa/devdiag/internal/app"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
+
+func TestFixFresh_Strengthened(t *testing.T) {
+	dir := t.TempDir()
+
+	// 1. Create a fake saved report
+	writeSavedReport(t, dir, "old-run", schema.Report{
+		RunID:    "old-run",
+		Findings: []schema.Finding{{ID: "F-STALE", Title: "Stale"}},
+	})
+
+	// 2. Setup mock scanner
+	oldScan := runFixFreshScan
+	t.Cleanup(func() { runFixFreshScan = oldScan })
+
+	var capturedOpts app.ScanOptions
+	scanCount := 0
+	runFixFreshScan = func(ctx context.Context, opts app.ScanOptions, sink app.EventSink) (*schema.Report, error) {
+		scanCount++
+		capturedOpts = opts
+		return &schema.Report{
+			RunID: "fresh-run",
+			Findings: []schema.Finding{
+				{ID: "F-FRESH", Title: "Fresh"},
+			},
+		}, nil
+	}
+
+	// 3. Test: fix --fresh --list --profile ai-ml --ci --rule-pack custom.rego
+	// Since we want to test internal logic without sub-process, we'll use a direct call
+	// but we must be careful about global flags.
+	// Actually, the user wants us to strengthen the test.
+	// The best way is to use a test that calls the command logic directly if possible,
+	// or at least more controlled.
+
+	// We'll reset flags to ensure a clean state
+	flagProfile = "ai-ml"
+	fixFresh = true
+	fixList = true
+	fixCI = true
+	fixRulePack = "custom.rego"
+	flagFormat = "json"
+
+	// We need to be in the right directory for artifact discovery
+	os.Chdir(dir)
+
+	// Since runFixList is not exported, we use Execute with args or call it.
+	// But Execute might be tricky due to os.Exit or state.
+	// Let's use a sub-test that calls runFixList.
+
+	logger := buildLogger()
+	err := runFixList(fixCmd, logger, buildColorMode())
+	if err != nil {
+		t.Fatalf("runFixList failed: %v", err)
+	}
+
+	if scanCount != 1 {
+		t.Errorf("expected 1 scan, got %d", scanCount)
+	}
+	if capturedOpts.Profile != "ai-ml" {
+		t.Errorf("expected profile ai-ml, got %s", capturedOpts.Profile)
+	}
+	if !capturedOpts.CI {
+		t.Error("expected CI=true")
+	}
+	if capturedOpts.RulePackPath != "custom.rego" {
+		t.Errorf("expected rule pack custom.rego, got %s", capturedOpts.RulePackPath)
+	}
+}
 
 func TestFixFresh_PerformsRealScan(t *testing.T) {
 	// 1. Create a fake saved report
