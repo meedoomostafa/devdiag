@@ -1,12 +1,12 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"time"
-	"context"
 
 	"github.com/spf13/cobra"
 

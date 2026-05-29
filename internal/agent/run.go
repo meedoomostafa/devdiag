@@ -13,12 +13,12 @@ import (
 )
 
 type RunRequest struct {
-	Command string
-	Args    []string
-	Dir     string
-	Timeout time.Duration
-	Redact  Redactor
-	Runner  cmdrunner.CommandRunner
+	Command     string
+	Args        []string
+	Dir         string
+	Timeout     time.Duration
+	Redact      Redactor
+	Runner      cmdrunner.CommandRunner
 	RedactLevel string
 }
 
@@ -37,12 +37,12 @@ type RunResult struct {
 }
 
 type SandboxRequest struct {
-	Root      string
-	PatchPath string
-	Keep      bool
-	Run       RunRequest
-	Redact    Redactor
-	Runner    cmdrunner.CommandRunner
+	Root        string
+	PatchPath   string
+	Keep        bool
+	Run         RunRequest
+	Redact      Redactor
+	Runner      cmdrunner.CommandRunner
 	RedactLevel string
 }
 

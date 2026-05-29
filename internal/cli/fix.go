@@ -9,14 +9,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/meedoomostafa/devdiag/internal/app"
+	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/fix"
 	"github.com/meedoomostafa/devdiag/internal/logging"
 	"github.com/meedoomostafa/devdiag/internal/output"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 	"golang.org/x/term"
-	"github.com/meedoomostafa/devdiag/internal/app"
-	"github.com/meedoomostafa/devdiag/internal/artifact"
 )
 
 var (
