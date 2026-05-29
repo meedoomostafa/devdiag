@@ -198,6 +198,7 @@ func redactReproResult(result *repro.ReproResult, engine *redact.Engine) *repro.
 		return nil
 	}
 	redacted := *result
+	redacted.Command = engine.RedactString(result.Command, "repro_command")
 	redacted.Args = redactArgs(result.Args, engine)
 	redacted.WorkingDir = engine.RedactString(result.WorkingDir, "repro_working_dir")
 	redacted.StdoutPreview = engine.RedactString(result.StdoutPreview, "repro_stdout")

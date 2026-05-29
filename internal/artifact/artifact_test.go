@@ -72,6 +72,46 @@ func TestWriteFilePrivate(t *testing.T) {
 	}
 }
 
+func TestMkdirPrivate_RepairsExistingPermissiveDir(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "permissive")
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MkdirPrivate(path); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0700 {
+		t.Errorf("DirPerm = %o, want 0700", perm)
+	}
+}
+
+func TestWriteFilePrivate_RepairsExistingPermissiveFile(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "permissive.txt")
+	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := WriteFilePrivate(path, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("FilePerm = %o, want 0600", perm)
+	}
+}
+
 func TestFindLatestRunID(t *testing.T) {
 	tmp := t.TempDir()
 	runs := filepath.Join(tmp, ".devdiag", "runs")

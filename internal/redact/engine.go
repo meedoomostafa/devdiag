@@ -57,6 +57,9 @@ func (e *Engine) RedactReport(r *schema.Report) *schema.Report {
 	for i, c := range r.Collectors {
 		redacted.Collectors[i] = e.redactCollector(c)
 	}
+	if r.Repro != nil {
+		redacted.Repro = e.redactInterface(r.Repro, "report_repro").(map[string]interface{})
+	}
 	// Redact top-level repo/host fields that contain paths
 	redacted.Repo.Root = e.RedactString(r.Repo.Root, "repo_root")
 	redacted.Host.OS = e.RedactString(r.Host.OS, "host_os")
@@ -118,4 +121,29 @@ func (e *Engine) redactFix(fix schema.Fix) schema.Fix {
 		redacted.Rollback[j] = e.RedactString(r, "fix_rollback")
 	}
 	return redacted
+}
+
+func (e *Engine) redactInterface(v interface{}, sourceType string) interface{} {
+	if v == nil {
+		return nil
+	}
+
+	switch val := v.(type) {
+	case string:
+		return e.RedactString(val, sourceType)
+	case map[string]interface{}:
+		res := make(map[string]interface{}, len(val))
+		for k, v := range val {
+			res[k] = e.redactInterface(v, sourceType)
+		}
+		return res
+	case []interface{}:
+		res := make([]interface{}, len(val))
+		for i, v := range val {
+			res[i] = e.redactInterface(v, sourceType)
+		}
+		return res
+	default:
+		return v
+	}
 }

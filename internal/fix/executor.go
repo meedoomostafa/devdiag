@@ -67,7 +67,7 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 				Source:       proposal.Source,
 				DryRun:       !opts.Apply,
 				Refused:      true,
-				RefuseReason: proposal.BlockedReason,
+				RefuseReason: redact(proposal.BlockedReason),
 			})
 		}
 		return nil, fmt.Errorf("fix is blocked: %s", proposal.BlockedReason)
@@ -107,7 +107,7 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 					Source:       proposal.Source,
 					DryRun:       false,
 					Refused:      true,
-					RefuseReason: "guarded fix requires --fresh or fresh scan",
+					RefuseReason: redact("guarded fix requires --fresh or fresh scan"),
 				})
 			}
 			return nil, fmt.Errorf("guarded fix requires --fresh")
@@ -124,7 +124,7 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 						Source:       proposal.Source,
 						DryRun:       false,
 						Refused:      true,
-						RefuseReason: "user declined confirmation",
+						RefuseReason: redact("user declined confirmation"),
 					})
 				}
 				return nil, fmt.Errorf("user declined confirmation")
@@ -140,7 +140,7 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 					Source:       proposal.Source,
 					DryRun:       false,
 					Refused:      true,
-					RefuseReason: "guarded fix requires interactive TTY",
+					RefuseReason: redact("guarded fix requires interactive TTY"),
 				})
 			}
 			return nil, fmt.Errorf("guarded fix requires interactive TTY")
@@ -159,7 +159,7 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 				Source:       proposal.Source,
 				DryRun:       false,
 				Refused:      true,
-				RefuseReason: "manual fix is not executable",
+				RefuseReason: redact("manual fix is not executable"),
 			})
 		}
 		return nil, fmt.Errorf("manual fix cannot be applied automatically")
