@@ -1,11 +1,11 @@
 package output
 
 import (
-"bytes"
-"strings"
-"testing"
+	"bytes"
+	"strings"
+	"testing"
 
-"github.com/meedoomostafa/devdiag/internal/schema"
+	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
 func TestGitHubRenderer_EmitsErrorForHighSeverity(t *testing.T) {

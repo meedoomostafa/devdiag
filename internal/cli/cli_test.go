@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/meedoomostafa/devdiag/internal/capsule"
 	"github.com/meedoomostafa/devdiag/internal/artifact"
+	"github.com/meedoomostafa/devdiag/internal/capsule"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/remote/session"
 	"github.com/meedoomostafa/devdiag/internal/remote/target"

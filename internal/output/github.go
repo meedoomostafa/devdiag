@@ -1,11 +1,11 @@
 package output
 
 import (
-"fmt"
-"io"
-"strings"
+	"fmt"
+	"io"
+	"strings"
 
-"github.com/meedoomostafa/devdiag/internal/schema"
+	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
 // GitHubRenderer emits GitHub Actions workflow commands (::error::, ::warning::).

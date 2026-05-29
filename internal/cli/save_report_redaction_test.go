@@ -16,10 +16,10 @@ func TestScanSaveReport_RedactsPersistedFile(t *testing.T) {
 
 	secret := "secret-token-12345"
 	trigger := "--token=" + secret
-	
+
 	rulePackDir := filepath.Join(tmpDir, "rules")
 	os.MkdirAll(rulePackDir, 0755)
-	
+
 	regoFile := filepath.Join(rulePackDir, "leak.rego")
 	regoContent := `package devdiag.m1
 findings contains f if {
@@ -33,7 +33,7 @@ findings contains f if {
 	if err := os.WriteFile(regoFile, []byte(regoContent), 0644); err != nil {
 		t.Fatal(err)
 	}
-	
+
 	yamlFile := filepath.Join(rulePackDir, "rulepack.yaml")
 	yamlContent := `schema_version: "1"
 id: "leak-test"
@@ -74,7 +74,7 @@ rules:
 	// 2. Run with redaction OFF
 	os.RemoveAll(filepath.Join(tmpDir, ".devdiag"))
 	stdout, stderr, code = runBinaryInDir(tmpDir, "scan", ".", "--save-report", "--rule-pack", yamlFile, "--redact", "off")
-	
+
 	entries, _ = os.ReadDir(runsDir)
 	reportPath = filepath.Join(runsDir, entries[0].Name(), "report.json")
 	data, _ = os.ReadFile(reportPath)

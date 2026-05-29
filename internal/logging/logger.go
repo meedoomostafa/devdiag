@@ -35,17 +35,17 @@ var levelOrder = map[Level]int{
 
 // Logger writes structured logs to stderr.
 type Logger struct {
-	mu         sync.Mutex
-	out        io.Writer
-	minLevel   Level
+	mu           sync.Mutex
+	out          io.Writer
+	minLevel     Level
 	redactEngine *redact.Engine
 }
 
 // New creates a Logger that writes to stderr.
 func New(minLevel Level, engine *redact.Engine) *Logger {
 	return &Logger{
-		out:        os.Stderr,
-		minLevel:   minLevel,
+		out:          os.Stderr,
+		minLevel:     minLevel,
 		redactEngine: engine,
 	}
 }
@@ -53,8 +53,8 @@ func New(minLevel Level, engine *redact.Engine) *Logger {
 // WithWriter returns a Logger that writes to w (used in tests).
 func (l *Logger) WithWriter(w io.Writer) *Logger {
 	return &Logger{
-		out:        w,
-		minLevel:   l.minLevel,
+		out:          w,
+		minLevel:     l.minLevel,
 		redactEngine: l.redactEngine,
 	}
 }
@@ -102,10 +102,10 @@ func levelAbbrev(l Level) string {
 func (l *Logger) Trace(event, msg string)  { l.log(LevelTrace, event, msg) }
 func (l *Logger) Debug(event, msg string)  { l.log(LevelDebug, event, msg) }
 func (l *Logger) Info(event, msg string)   { l.log(LevelInfo, event, msg) }
-func (l *Logger) Notice(event, msg string)  { l.log(LevelNotice, event, msg) }
+func (l *Logger) Notice(event, msg string) { l.log(LevelNotice, event, msg) }
 func (l *Logger) Warn(event, msg string)   { l.log(LevelWarn, event, msg) }
 func (l *Logger) Error(event, msg string)  { l.log(LevelError, event, msg) }
-func (l *Logger) Fatal(event, msg string)   { l.log(LevelFatal, event, msg) }
+func (l *Logger) Fatal(event, msg string)  { l.log(LevelFatal, event, msg) }
 
 // SetMinLevel updates the minimum log level.
 func (l *Logger) SetMinLevel(level Level) {

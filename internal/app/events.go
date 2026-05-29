@@ -76,7 +76,7 @@ func (s *ChannelSink) Emit(e Event) {
 // RecordingSink records all events for later inspection.
 type RecordingSink struct {
 	mu     sync.Mutex
-events []Event
+	events []Event
 }
 
 // Emit implements EventSink.

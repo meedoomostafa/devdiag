@@ -23,7 +23,6 @@ import (
 	containertransport "github.com/meedoomostafa/devdiag/internal/remote/transport/container"
 	k8stransport "github.com/meedoomostafa/devdiag/internal/remote/transport/k8s"
 	sshtransport "github.com/meedoomostafa/devdiag/internal/remote/transport/ssh"
-	"github.com/meedoomostafa/devdiag/internal/schema"
 	"github.com/meedoomostafa/devdiag/internal/version"
 )
 
