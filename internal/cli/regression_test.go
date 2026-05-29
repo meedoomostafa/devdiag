@@ -22,9 +22,30 @@ func TestFixFresh_Strengthened(t *testing.T) {
 		Findings: []schema.Finding{{ID: "F-STALE", Title: "Stale"}},
 	})
 
-	// 2. Setup mock scanner
+	// 2. Setup mock scanner and restore state
 	oldScan := runFixFreshScan
 	t.Cleanup(func() { runFixFreshScan = oldScan })
+
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	oldProfile := flagProfile
+	oldFixFresh := fixFresh
+	oldFixList := fixList
+	oldFixCI := fixCI
+	oldFixRulePack := fixRulePack
+	oldFormat := flagFormat
+	t.Cleanup(func() {
+		flagProfile = oldProfile
+		fixFresh = oldFixFresh
+		fixList = oldFixList
+		fixCI = oldFixCI
+		fixRulePack = oldFixRulePack
+		flagFormat = oldFormat
+	})
 
 	var capturedOpts app.ScanOptions
 	scanCount := 0
@@ -39,14 +60,7 @@ func TestFixFresh_Strengthened(t *testing.T) {
 		}, nil
 	}
 
-	// 3. Test: fix --fresh --list --profile ai-ml --ci --rule-pack custom.rego
-	// Since we want to test internal logic without sub-process, we'll use a direct call
-	// but we must be careful about global flags.
-	// Actually, the user wants us to strengthen the test.
-	// The best way is to use a test that calls the command logic directly if possible,
-	// or at least more controlled.
-
-	// We'll reset flags to ensure a clean state
+	// 3. Test internal logic with direct call
 	flagProfile = "ai-ml"
 	fixFresh = true
 	fixList = true
@@ -54,16 +68,12 @@ func TestFixFresh_Strengthened(t *testing.T) {
 	fixRulePack = "custom.rego"
 	flagFormat = "json"
 
-	// We need to be in the right directory for artifact discovery
-	os.Chdir(dir)
-
-	// Since runFixList is not exported, we use Execute with args or call it.
-	// But Execute might be tricky due to os.Exit or state.
-	// Let's use a sub-test that calls runFixList.
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
 
 	logger := buildLogger()
-	err := runFixList(fixCmd, logger, buildColorMode())
-	if err != nil {
+	if err := runFixList(fixCmd, logger, buildColorMode()); err != nil {
 		t.Fatalf("runFixList failed: %v", err)
 	}
 
@@ -79,6 +89,9 @@ func TestFixFresh_Strengthened(t *testing.T) {
 	if capturedOpts.RulePackPath != "custom.rego" {
 		t.Errorf("expected rule pack custom.rego, got %s", capturedOpts.RulePackPath)
 	}
+	if capturedOpts.RedactLevel != flagRedact {
+		t.Errorf("expected redact level %s, got %s", flagRedact, capturedOpts.RedactLevel)
+	}
 }
 
 func TestFixFresh_PerformsRealScan(t *testing.T) {
@@ -89,9 +102,8 @@ func TestFixFresh_PerformsRealScan(t *testing.T) {
 		Findings: []schema.Finding{{ID: "F-STALE", Title: "Stale"}},
 	})
 
-	// 2. ResolveReportWithFresh should use app.Scan
-	// Since we can't easily mock app.Scan for runBinaryInDir (which runs a sub-process),
-	// we'll check the source in the output.
+	// 2. ResolveReportWithFresh should use app.Scan.
+	// Since runBinaryInDir runs a sub-process, we'll check the source in the output.
 
 	stdout, stderr, code := runBinaryInDir(dir, "fix", "--fresh", "--list", "--format", "json")
 	if code != 0 {
