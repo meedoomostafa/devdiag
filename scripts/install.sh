@@ -198,7 +198,8 @@ if [[ -n "${SHA256}" ]]; then
 	elif command -v shasum >/dev/null 2>&1; then
 		echo "${SHA256}  ${ARCHIVE}" | shasum -a 256 -c -
 	else
-		echo "warning: sha256sum or shasum not found; skipping checksum verification" >&2
+		echo "error: sha256sum or shasum not found; cannot verify checksum" >&2
+		exit 1
 	fi
 elif [[ "${REQUIRE_CHECKSUM}" == "1" ]]; then
 	echo "error: DEVDIAG_REQUIRE_CHECKSUM=1 set but no checksum provided" >&2
