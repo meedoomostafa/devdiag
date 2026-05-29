@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -78,11 +79,21 @@ func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger, colorM
 		ReportAge: reportAge,
 	})
 	if err != nil {
+		if fixFresh && strings.Contains(err.Error(), "not found in report") {
+			fmt.Fprintf(cmd.OutOrStdout(), "No fix proposals for finding %s.\n", findingID)
+			return nil
+		}
 		logger.Error("fix", fmt.Sprintf("planning failed: %v", err))
 		return exitCodeError{code: exitcode.InternalError}
 	}
 
 	if len(proposals) == 0 {
+		if fixFresh {
+			// In fresh scan mode, if finding no longer exists, we don't treat it as an error
+			// for apply/list, just report it.
+			fmt.Fprintf(cmd.OutOrStdout(), "No fix proposals for finding %s.\n", findingID)
+			return nil
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "No fix proposals for finding %s.\n", findingID)
 		return nil
 	}
@@ -199,6 +210,8 @@ func runFixTemplates(cmd *cobra.Command, logger *logging.Logger, colorMode outpu
 	return nil
 }
 
+var runFixFreshScan = app.Scan
+
 // resolveReportWithFresh resolves the report and optionally runs a fresh scan.
 func resolveReportWithFresh(cmd *cobra.Command, logger *logging.Logger) (*schema.Report, schema.FixSource, string, time.Duration, error) {
 	base, err := artifact.DiscoverBase(".")
@@ -208,7 +221,7 @@ func resolveReportWithFresh(cmd *cobra.Command, logger *logging.Logger) (*schema
 
 	if fixFresh {
 		logger.Info("fix", "running fresh scan before planning")
-		report, err := app.Scan(cmd.Context(), app.ScanOptions{
+		report, err := runFixFreshScan(cmd.Context(), app.ScanOptions{
 			Path:         base,
 			Profile:      flagProfile,
 			RulePackPath: fixRulePack,
