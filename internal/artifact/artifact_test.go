@@ -135,4 +135,27 @@ func TestFindLatestRunID(t *testing.T) {
 	if err == nil {
 		t.Error("FindLatestRunID() with nested symlink expected error, got nil")
 	}
+
+	// Test latest -> latest (loop or self-reference)
+	os.Remove(filepath.Join(runs, "latest"))
+	if err := os.Symlink("latest", filepath.Join(runs, "latest")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = FindLatestRunID(tmp)
+	if err == nil {
+		t.Error("FindLatestRunID() with latest -> latest expected error, got nil")
+	}
+
+	// Test latest -> run.with.dot
+	if err := os.MkdirAll(filepath.Join(runs, "run.with.dot"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(runs, "latest"))
+	if err := os.Symlink("run.with.dot", filepath.Join(runs, "latest")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = FindLatestRunID(tmp)
+	if err == nil {
+		t.Error("FindLatestRunID() with dots in symlink target expected error, got nil")
+	}
 }
