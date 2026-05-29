@@ -216,7 +216,7 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 	}
 
 	if e.audit != nil {
-		_ = e.audit.Write(schema.FixAuditEntry{
+		if err := e.audit.Write(schema.FixAuditEntry{
 			Timestamp: time.Now(),
 			RunID:     proposal.RunID,
 			FindingID: proposal.FindingID,
@@ -225,7 +225,15 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 			Source:    proposal.Source,
 			DryRun:    false,
 			Execution: execution,
-		})
+		}); err != nil {
+			msg := fmt.Sprintf("failed to write final audit entry: %v", err)
+			if execution.Error != "" {
+				execution.Error += "; " + msg
+			} else {
+				execution.Error = msg
+			}
+			execution.Success = false
+		}
 	}
 
 	if !execution.Success {
