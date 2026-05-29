@@ -55,7 +55,10 @@ func DiscoverBase(start string) (string, error) {
 
 // MkdirPrivate creates a directory with owner-only permissions.
 func MkdirPrivate(path string) error {
-	return os.MkdirAll(path, DirPerm)
+	if err := os.MkdirAll(path, DirPerm); err != nil {
+		return err
+	}
+	return os.Chmod(path, DirPerm)
 }
 
 // WriteFilePrivate writes a file with owner-only permissions.
@@ -63,7 +66,10 @@ func WriteFilePrivate(path string, data []byte) error {
 	if err := MkdirPrivate(filepath.Dir(path)); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, FilePerm)
+	if err := os.WriteFile(path, data, FilePerm); err != nil {
+		return err
+	}
+	return os.Chmod(path, FilePerm)
 }
 
 // FindLatestRunID returns the run ID pointed to by the latest symlink or the most recent directory.

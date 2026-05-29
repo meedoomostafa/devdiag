@@ -20,6 +20,7 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/remote/session"
 	"github.com/meedoomostafa/devdiag/internal/remote/target"
+	"github.com/meedoomostafa/devdiag/internal/repro"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 	"github.com/meedoomostafa/devdiag/internal/trace"
 	"gopkg.in/yaml.v3"
@@ -3190,6 +3191,40 @@ func TestCapsuleCreateIncludesRunTraceArtifact(t *testing.T) {
 	}
 }
 
+func TestCapsuleCreate_PrivateArchivePermissions(t *testing.T) {
+	dir := t.TempDir()
+	runID := "perm-capsule-test"
+	runsDir := filepath.Join(dir, ".devdiag", "runs", runID)
+	if err := os.MkdirAll(runsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	report := schema.Report{
+		SchemaVersion:  schema.SchemaVersion,
+		DevDiagVersion: "test",
+		RunID:          runID,
+	}
+	data, _ := json.Marshal(report)
+	os.WriteFile(filepath.Join(runsDir, "report.json"), data, 0600)
+
+	oldWD, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(oldWD)
+
+	_, stderr, code := runBinary("capsule", "create", "--run-id", runID)
+	if code != 0 {
+		t.Fatalf("capsule create failed: %s", stderr)
+	}
+
+	outPath := "support-" + runID + ".devdiag.tgz"
+	info, err := os.Stat(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("CapsulePerm = %o, want 0600", perm)
+	}
+}
+
 func TestCapsuleCreateJSON_ReturnsMachineReadableOutput(t *testing.T) {
 	dir := t.TempDir()
 	runID := "json-capsule-test"
@@ -3224,6 +3259,24 @@ func TestCapsuleCreateJSON_ReturnsMachineReadableOutput(t *testing.T) {
 	}
 	if result["capsule_path"] != "support-"+runID+".devdiag.tgz" {
 		t.Fatalf("capsule_path = %v", result["capsule_path"])
+	}
+}
+
+func TestReproRedaction_RedactsCommandField(t *testing.T) {
+	eng := buildRedactEngine()
+	// Force level to default
+	eng.Level = "default"
+	res := &repro.ReproResult{
+		Command: "SECRET_KEY=123",
+		Args:    []string{"API_KEY=456"},
+	}
+
+	redacted := redactReproResult(res, eng)
+	if strings.Contains(redacted.Command, "123") {
+		t.Errorf("ReproResult.Command not redacted: %s", redacted.Command)
+	}
+	if strings.Contains(redacted.Args[0], "456") {
+		t.Errorf("ReproResult.Args not redacted: %v", redacted.Args)
 	}
 }
 

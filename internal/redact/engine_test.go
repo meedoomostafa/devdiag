@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -165,6 +166,56 @@ func TestRedactReport_DoesNotMutateOriginal(t *testing.T) {
 	}
 	if redacted == original {
 		t.Error("RedactReport returned the same pointer, expected a copy")
+	}
+}
+
+func TestRedactReport_RedactsReproMapRecursively(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	report := &schema.Report{
+		Repro: map[string]interface{}{
+			"command": "API_KEY=secret123",
+			"env": map[string]interface{}{
+				"URL": "https://user:password@github.com",
+			},
+			"args": []interface{}{
+				"PASSWORD=secret789",
+			},
+			"ok": true,
+		},
+	}
+
+	redacted := e.RedactReport(report)
+	repro := redacted.Repro
+
+	if strings.Contains(repro["command"].(string), "secret") {
+		t.Error("Repro command not redacted")
+	}
+	env := repro["env"].(map[string]interface{})
+	if strings.Contains(env["URL"].(string), "password") {
+		t.Errorf("Repro env value not redacted: %v", env["URL"])
+	}
+	args := repro["args"].([]interface{})
+	if strings.Contains(args[0].(string), "secret") {
+		t.Error("Repro args value not redacted")
+	}
+	if repro["ok"] != true {
+		t.Error("Boolean value in repro map mutated")
+	}
+}
+
+func TestRedactReport_RedactsReproMapRecursively_Guaranteed(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	report := &schema.Report{
+		Repro: map[string]interface{}{
+			"env": map[string]interface{}{
+				"URL": "https://user:password@github.com",
+			},
+		},
+	}
+	redacted := e.RedactReport(report)
+	env := redacted.Repro["env"].(map[string]interface{})
+	if strings.Contains(env["URL"].(string), "password") {
+		t.Errorf("Guaranteed repro env value not redacted: %v", env["URL"])
 	}
 }
 

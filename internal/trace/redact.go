@@ -18,13 +18,22 @@ func RedactResult(res *Result, eng *redact.Engine) *Result {
 	out.Events = make([]Event, len(res.Events))
 	for i, ev := range res.Events {
 		out.Events[i] = ev
-		// Do NOT redact Syscall, Error, PID, Timestamp, Duration
+		// Do NOT redact Syscall, PID, Timestamp, Duration
+		out.Events[i].Error = eng.RedactString(ev.Error, "trace_error")
 		out.Events[i].Args = make([]string, len(ev.Args))
 		for j, a := range ev.Args {
 			out.Events[i].Args[j] = eng.RedactString(a, "trace_arg")
 		}
 		out.Events[i].Result = eng.RedactString(ev.Result, "trace_result")
 	}
+	out.CapabilityEvidence = make([]TraceEvidence, len(res.CapabilityEvidence))
+	for i, ev := range res.CapabilityEvidence {
+		out.CapabilityEvidence[i] = TraceEvidence{
+			Source: eng.RedactString(ev.Source, "trace_evidence_source"),
+			Value:  eng.RedactString(ev.Value, "trace_evidence_value"),
+		}
+	}
+	out.UnavailableReason = eng.RedactString(res.UnavailableReason, "trace_unavailable_reason")
 	out.Notes = make([]string, len(res.Notes))
 	for i, n := range res.Notes {
 		out.Notes[i] = eng.RedactString(n, "trace_note")

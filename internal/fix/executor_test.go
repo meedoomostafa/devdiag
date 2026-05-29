@@ -206,3 +206,28 @@ func TestConfirmTTY(t *testing.T) {
 	// but we can test that the function signature exists.
 	_ = confirmTTY
 }
+
+func TestAuditLog_RedactsRefuseReason(t *testing.T) {
+	tmpDir := t.TempDir()
+	auditPath := filepath.Join(tmpDir, "audit.ndjson")
+	executor := NewExecutor(NewAuditLog(auditPath))
+
+	proposal := schema.FixProposal{
+		FindingID:     "F1",
+		Class:         schema.FixBlocked,
+		BlockedReason: "API_KEY=secret123",
+	}
+
+	_, _ = executor.Execute(context.Background(), proposal, ExecutorOptions{
+		Apply:  true,
+		Redact: func(s string) string { return strings.ReplaceAll(s, "secret123", "<redacted>") },
+	})
+
+	data, _ := os.ReadFile(auditPath)
+	if strings.Contains(string(data), "secret123") {
+		t.Errorf("audit log leaked secret in RefuseReason: %s", data)
+	}
+	if !strings.Contains(string(data), "redacted") {
+		t.Errorf("audit log missing redaction in RefuseReason: %s", data)
+	}
+}

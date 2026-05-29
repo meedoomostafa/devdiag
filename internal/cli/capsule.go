@@ -99,12 +99,15 @@ var capsuleCreateCmd = &cobra.Command{
 
 		// Build capsule
 		outPath := fmt.Sprintf("support-%s.devdiag.tgz", runID)
-		outFile, err := os.Create(outPath)
+		outFile, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, artifact.FilePerm)
 		if err != nil {
 			logger.Error("capsule", fmt.Sprintf("create output: %v", err))
 			return exitCodeError{code: exitcode.InternalError}
 		}
 		defer outFile.Close()
+		if err := os.Chmod(outPath, artifact.FilePerm); err != nil {
+			logger.Warn("capsule", fmt.Sprintf("failed to repair archive permissions: %v", err))
+		}
 
 		builder := capsule.NewBuilder(string(redactEngine.Level), version.Version)
 		addCapsuleCommandLog(builder, runsDir, "command.stdout.log", redactEngine)
