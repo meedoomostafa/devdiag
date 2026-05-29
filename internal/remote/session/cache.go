@@ -24,9 +24,11 @@ func CacheDir() string {
 // WriteCache writes a manifest to the local session cache keyed by session ID.
 func WriteCache(manifest *Manifest) error {
 	dir := CacheDir()
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("mkdir cache: %w", err)
 	}
+	// Repair existing dir permissions
+	_ = os.Chmod(dir, 0700)
 
 	filename := fmt.Sprintf("%s_%s.json", manifest.Target.Kind, manifest.SessionID)
 	path := filepath.Join(dir, filename)
@@ -35,9 +37,11 @@ func WriteCache(manifest *Manifest) error {
 	if err != nil {
 		return fmt.Errorf("marshal manifest: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write cache: %w", err)
 	}
+	// Repair existing file permissions in case WriteFile didn't change them for existing file
+	_ = os.Chmod(path, 0600)
 	return nil
 }
 
