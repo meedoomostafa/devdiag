@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -40,6 +41,25 @@ var checkCmd = &cobra.Command{
 var flagCheckContainersGPU bool
 
 type compositePolicyEngine []rules.PolicyEngine
+
+type scopedPolicyEngine struct {
+	engine rules.PolicyEngine
+	prefix string
+}
+
+func (e scopedPolicyEngine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding, error) {
+	findings, err := e.engine.Evaluate(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	var filtered []schema.Finding
+	for _, f := range findings {
+		if strings.HasPrefix(strings.ToUpper(f.ID), e.prefix) {
+			filtered = append(filtered, f)
+		}
+	}
+	return filtered, nil
+}
 
 func (e compositePolicyEngine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding, error) {
 	var all []schema.Finding
@@ -156,7 +176,9 @@ var checkPortsCmd = &cobra.Command{
 	Use:   "ports [path]",
 	Short: "Check port conflicts with compose declarations",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: makeCheckRun(func() rules.PolicyEngine { return rules.NewM1Engine() }, func(path string) []collectors.Collector {
+	RunE: makeCheckRun(func() rules.PolicyEngine {
+		return scopedPolicyEngine{engine: rules.NewM1Engine(), prefix: "F-PORT-"}
+	}, func(path string) []collectors.Collector {
 		return []collectors.Collector{
 			&envcollector.Collector{Root: path},
 			&composecollector.Collector{Root: path},

@@ -271,3 +271,32 @@ func TestRemoteClean_SessionTargetMismatch(t *testing.T) {
 		t.Errorf("expected mismatch error in stderr, got: %s", stderr)
 	}
 }
+
+func TestCheckPorts_DoesNotEmitGeneralEnvFindings(t *testing.T) {
+	dir := t.TempDir()
+	
+	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte("DB_HOST=\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	composeContent := `
+services:
+  web:
+    image: nginx
+    ports:
+      - "80:80"
+    environment:
+      - DB_HOST=${DB_HOST}
+`
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(composeContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := runBinaryInDir(dir, "check", "ports", ".", "--format", "json")
+	if code != 0 && code != 1 && code != 3 {
+		t.Fatalf("unexpected exit code %d, stderr: %s", code, stderr)
+	}
+
+	if strings.Contains(stdout, "F-ENV-001") {
+		t.Errorf("check ports should not emit general env finding F-ENV-001, got: %s", stdout)
+	}
+}
