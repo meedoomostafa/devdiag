@@ -215,7 +215,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	case "0":
 		m.activeFilters.Domain = ""
-		m.statusBarMsg = "Filter cleared"
+		m.statusBarMsg = "Domain filter cleared"
 		m = m.applyActiveFilters()
 		return m, nil
 	case "1":

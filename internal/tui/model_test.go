@@ -801,8 +801,8 @@ func TestTuiDomainFilters(t *testing.T) {
 	if len(m0.filtered) != 3 {
 		t.Errorf("expected all 3 findings after clearing domain filter, got %d", len(m0.filtered))
 	}
-	if !strings.Contains(m0.statusBarMsg, "Filter cleared") {
-		t.Errorf("expected status bar 'Filter cleared', got %q", m0.statusBarMsg)
+	if !strings.Contains(m0.statusBarMsg, "Domain filter cleared") {
+		t.Errorf("expected status bar 'Domain filter cleared', got %q", m0.statusBarMsg)
 	}
 }
 
@@ -875,5 +875,39 @@ func TestReportModelRerunDisabled(t *testing.T) {
 	}
 	if !strings.Contains(newM.statusBarMsg, "Rerun disabled") {
 		t.Errorf("expected status bar warning message, got %q", newM.statusBarMsg)
+	}
+}
+
+func TestTuiTraceDomainFilter(t *testing.T) {
+	report := &schema.Report{
+		Findings: []schema.Finding{
+			{
+				ID:       "F-TRACE-UNAVAILABLE-001",
+				Title:    "Trace backend unavailable",
+				Severity: schema.SeverityMedium,
+			},
+			{
+				ID:       "F-ENV-001",
+				Title:    "Missing Env Key",
+				Severity: schema.SeverityMedium,
+			},
+		},
+	}
+	m := NewReportModel(report, "test-report.json", ModeReport, nil, false)
+	if len(m.filtered) != 2 {
+		t.Fatalf("expected 2 findings initially, got %d", len(m.filtered))
+	}
+
+	// Press 6 (trace filter)
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}})
+	mTrace := newM.(Model)
+	if mTrace.activeFilters.Domain != "trace" {
+		t.Errorf("expected activeFilters.Domain = trace, got %q", mTrace.activeFilters.Domain)
+	}
+	if len(mTrace.filtered) != 1 || mTrace.filtered[0].Finding.ID != "F-TRACE-UNAVAILABLE-001" {
+		t.Errorf("expected 1 trace finding, got %v", mTrace.filtered)
+	}
+	if !strings.Contains(mTrace.statusBarMsg, "Filter: trace") {
+		t.Errorf("expected status bar message with 'Filter: trace', got %q", mTrace.statusBarMsg)
 	}
 }

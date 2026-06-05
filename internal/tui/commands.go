@@ -47,6 +47,9 @@ func deriveDomain(f schema.Finding) string {
 	if strings.Contains(id, "-CONFIG-") {
 		return "config"
 	}
+	if strings.Contains(id, "-TRACE-") {
+		return "trace"
+	}
 	// fallback to layers
 	for _, l := range f.Layers {
 		l = strings.ToLower(l)
