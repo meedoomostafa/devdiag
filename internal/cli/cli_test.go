@@ -410,6 +410,9 @@ func TestGitHubActionMetadataSupportsArtifactsSummaryAndConfigurableFindings(t *
 	if action.Outputs["report-path"].Value != "${{ steps.devdiag.outputs.report-path }}" {
 		t.Fatalf("report-path output should map to devdiag step output, got %q", action.Outputs["report-path"].Value)
 	}
+	if action.Outputs["summary-written"].Value != "${{ steps.devdiag.outputs.summary-written }}" {
+		t.Fatalf("summary-written output should map to devdiag step output, got %q", action.Outputs["summary-written"].Value)
+	}
 
 	var devdiagRun string
 	var artifactStepFound bool
@@ -439,6 +442,7 @@ func TestGitHubActionMetadataSupportsArtifactsSummaryAndConfigurableFindings(t *
 	for _, want := range []string{
 		"GITHUB_OUTPUT",
 		"GITHUB_STEP_SUMMARY",
+		"SUMMARY_WRITTEN",
 		"FAIL_ON_FINDINGS",
 		"FAIL_SEVERITY",
 		"MASK_VALUES",
@@ -448,6 +452,8 @@ func TestGitHubActionMetadataSupportsArtifactsSummaryAndConfigurableFindings(t *
 		"--ci",
 		"devdiag scan --format \"$FORMAT\"",
 		"devdiag scan --format json",
+		"grep -q \"### DevDiag scan\" \"$GITHUB_STEP_SUMMARY\"",
+		"summary-written=$SUMMARY_WRITTEN",
 	} {
 		if !strings.Contains(devdiagRun, want) {
 			t.Fatalf("devdiag action run script missing %q:\n%s", want, devdiagRun)
@@ -475,8 +481,9 @@ func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 		"mask-values: secret123",
 		"artifact-name: devdiag-report-${{ matrix.go-version }}",
 		"actions/download-artifact@v5",
+		"steps.allow.outputs.summary-written",
 		"jq -e '.schema_version and .collectors and .findings'",
-		"grep -q '<redacted>'",
+		"jq -e '.. | strings | select(contains(\"<redacted>\"))'",
 		"! grep -q 'secret123'",
 		"continue-on-error: true",
 		"fail-on-findings: 'true'",
