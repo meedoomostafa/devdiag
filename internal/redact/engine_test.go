@@ -29,11 +29,15 @@ func TestRedactString_GitRemote(t *testing.T) {
 }
 
 func TestRedactString_HomeDir(t *testing.T) {
+	if homeDir == "" {
+		t.Skip("HOME is not set")
+	}
 	e := NewEngine(LevelDefault)
-	input := "/home/medo/.config/devdiag/settings.json"
+	input := homeDir + "/.config/devdiag/settings.json"
 	got := e.RedactString(input, "path")
-	if got == input {
-		t.Errorf("RedactString() did not redact home dir: %q", got)
+	want := "~/.config/devdiag/settings.json"
+	if got != want {
+		t.Errorf("RedactString() = %q, want %q", got, want)
 	}
 }
 
