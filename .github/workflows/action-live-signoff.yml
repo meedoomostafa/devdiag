@@ -67,7 +67,7 @@ jobs:
           test -n "$report_path"
           test -f "$report_path"
           grep -q '### DevDiag scan' "$GITHUB_STEP_SUMMARY"
-          grep -q '<redacted>' "$report_path"
+          jq -e '.. | strings | select(contains("<redacted>"))' "$report_path" >/dev/null
           ! grep -q 'secret123' "$report_path"
           jq -e '.schema_version and .collectors and .findings' "$report_path"
           sha256sum "$report_path" | tee "$RUNNER_TEMP/devdiag-report.sha256"
@@ -82,7 +82,7 @@ jobs:
           downloaded="$RUNNER_TEMP/devdiag-action-download/devdiag-report.json"
           test -f "$downloaded"
           jq -e '.schema_version and .collectors and .findings' "$downloaded"
-          grep -q '<redacted>' "$downloaded"
+          jq -e '.. | strings | select(contains("<redacted>"))' "$downloaded" >/dev/null
           ! grep -q 'secret123' "$downloaded"
           sha256sum "$downloaded"
       - id: threshold
