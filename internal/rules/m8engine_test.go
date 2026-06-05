@@ -379,7 +379,7 @@ func TestM8Engine_ServiceMatchIgnoresCIJobSegment(t *testing.T) {
 	assertNoFindingM8(t, findings, "F-CI-SERVICE-002")
 }
 
-func TestM8Engine_ComposeServiceMissingInCI(t *testing.T) {
+func TestM8Engine_SuppressesComposeServiceMissingWhenCIDefinesNoServices(t *testing.T) {
 	e := NewM8Engine()
 	snapshot := graph.NormalizedSnapshot{
 		Collectors: []schema.CollectorResult{
@@ -396,6 +396,30 @@ func TestM8Engine_ComposeServiceMissingInCI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertNoFindingM8(t, findings, "F-CI-SERVICE-002")
+}
+
+func TestM8Engine_ComposeServiceMissingInCIWhenCIHasServices(t *testing.T) {
+	e := NewM8Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_service__test__postgres__image", Value: "postgres:15"},
+				{Source: "ci_service__test__postgres__host_port", Value: "5432"},
+			}},
+			{Name: "compose", Evidence: []schema.Evidence{
+				{Source: "compose_service__postgres__image", Value: "postgres:15"},
+				{Source: "compose_service__postgres__host_port", Value: "5432"},
+				{Source: "compose_service__redis__image", Value: "redis:7"},
+				{Source: "compose_service__redis__host_port", Value: "6379"},
+			}},
+		},
+	}
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoFindingM8(t, findings, "F-CI-SERVICE-001")
 	assertFindingM8(t, findings, "F-CI-SERVICE-002")
 }
 
@@ -768,6 +792,40 @@ func TestM8Engine_GroupsMissingRuntimePinBySetupAction(t *testing.T) {
 	if got := countFindingM8(findings, "F-CI-PACKAGE-001"); got != 1 {
 		t.Fatalf("F-CI-PACKAGE-001 count = %d, want 1; findings=%v", got, findings)
 	}
+}
+
+func TestM8Engine_GroupsMissingRuntimePinAcrossMatrixVersions(t *testing.T) {
+	e := NewM8Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_setup__test__matrix_0__setup_python__python_version", Value: "3.10"},
+				{Source: "ci_setup__test__matrix_1__setup_python__python_version", Value: "3.11"},
+				{Source: "ci_setup__lint__0__setup_python__python_version", Value: "3.11"},
+			}},
+			{Name: "runtime", Evidence: []schema.Evidence{}},
+		},
+	}
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countFindingM8(findings, "F-CI-PACKAGE-001"); got != 1 {
+		t.Fatalf("F-CI-PACKAGE-001 count = %d, want 1; findings=%v", got, findings)
+	}
+	for _, f := range findings {
+		if f.ID != "F-CI-PACKAGE-001" {
+			continue
+		}
+		if !strings.Contains(f.Symptom, "3.10, 3.11") {
+			t.Fatalf("finding symptom should summarize matrix values, got %q", f.Symptom)
+		}
+		if len(f.Evidence) != 3 {
+			t.Fatalf("finding should keep all setup evidence, got %d: %v", len(f.Evidence), f.Evidence)
+		}
+		return
+	}
+	t.Fatal("missing F-CI-PACKAGE-001")
 }
 
 func TestM8Engine_IgnoresOpaqueMatrixExpressionWhenConcreteMatrixValueExists(t *testing.T) {

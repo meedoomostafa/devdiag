@@ -151,8 +151,7 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 		}
 		localRT := localRuntimes[actionName]
 		if localRT == "" {
-			key := actionName + "\x00" + ciVal
-			missingRuntimePinEvidence[key] = append(missingRuntimePinEvidence[key], ev)
+			missingRuntimePinEvidence[actionName] = append(missingRuntimePinEvidence[actionName], ev)
 			continue
 		}
 		if !versionsCompatible(localRT, ciVal) {
@@ -174,18 +173,14 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 	}
 	for _, key := range sortedKeys(missingRuntimePinEvidence) {
 		evidence := missingRuntimePinEvidence[key]
-		parts := strings.SplitN(key, "\x00", 2)
-		actionName := parts[0]
-		ciVal := ""
-		if len(parts) == 2 {
-			ciVal = parts[1]
-		}
+		actionName := key
+		ciVals := summarizeEvidenceValues(evidence)
 		findings = append(findings, schema.Finding{
 			ID:         "F-CI-PACKAGE-001",
 			Title:      fmt.Sprintf("CI uses %s but repo has no local runtime pin", actionName),
 			Severity:   schema.SeverityLow,
 			Confidence: 0.5,
-			Symptom:    fmt.Sprintf("CI configures %s=%s but no .nvmrc/.python-version/go.mod version matches", actionName, ciVal),
+			Symptom:    fmt.Sprintf("CI configures %s=%s but no .nvmrc/.python-version/go.mod version matches", actionName, ciVals),
 			Evidence:   evidence,
 			LikelyCauses: []string{
 				"Add a local runtime pin file so dev and CI stay in sync",
@@ -328,21 +323,23 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 		}
 	}
 
-	for name, composeService := range composeServices {
-		if _, ok := ciServices[name]; ok {
-			continue
+	if len(ciServices) > 0 {
+		for name, composeService := range composeServices {
+			if _, ok := ciServices[name]; ok {
+				continue
+			}
+			findings = append(findings, schema.Finding{
+				ID:         "F-CI-SERVICE-002",
+				Title:      fmt.Sprintf("Local compose service %s is not defined in CI", name),
+				Severity:   schema.SeverityLow,
+				Confidence: 0.5,
+				Symptom:    fmt.Sprintf("Local compose defines service %s but CI does not define a matching service", name),
+				Evidence:   composeService.Evidence,
+				LikelyCauses: []string{
+					"CI workflow may not start a local dependency required during development",
+				},
+			})
 		}
-		findings = append(findings, schema.Finding{
-			ID:         "F-CI-SERVICE-002",
-			Title:      fmt.Sprintf("Local compose service %s is not defined in CI", name),
-			Severity:   schema.SeverityLow,
-			Confidence: 0.5,
-			Symptom:    fmt.Sprintf("Local compose defines service %s but CI does not define a matching service", name),
-			Evidence:   composeService.Evidence,
-			LikelyCauses: []string{
-				"CI workflow may not start a local dependency required during development",
-			},
-		})
 	}
 
 	// Check container vs devcontainer drift
@@ -440,6 +437,22 @@ func summarizeKeysForTitle(keys []string) string {
 		return strings.Join(keys, ", ")
 	}
 	return fmt.Sprintf("%s, and %d more", strings.Join(keys[:maxKeysInTitle], ", "), len(keys)-maxKeysInTitle)
+}
+
+func summarizeEvidenceValues(evidence []schema.Evidence) string {
+	values := make(map[string]bool)
+	for _, ev := range evidence {
+		value := strings.TrimSpace(ev.Value)
+		if value == "" {
+			continue
+		}
+		values[value] = true
+	}
+	keys := sortedKeys(values)
+	if len(keys) == 0 {
+		return "unknown"
+	}
+	return summarizeKeysForTitle(keys)
 }
 
 func envKeyEvidence(source string, keys []string) []schema.Evidence {

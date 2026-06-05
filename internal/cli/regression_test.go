@@ -228,36 +228,43 @@ func TestFixFresh_DisappearingFindingDoesNotApply(t *testing.T) {
 
 func TestRemoteClean_SessionTargetMismatch(t *testing.T) {
 	dir := t.TempDir()
-
-	// Actually we need to use internal/remote/session.WriteCache but we can just write the file to the mock cache dir
 	cacheDir := filepath.Join(dir, "cache")
 	os.MkdirAll(cacheDir, 0700)
+	t.Setenv("XDG_CACHE_HOME", cacheDir)
 
-	// We need to set XDG_CACHE_HOME for the test
-	t.Setenv("XDG_CACHE_HOME", dir)
-
-	// Write a fake manifest file
-	// filename := fmt.Sprintf("%s_%s.json", manifest.Target.Kind, manifest.SessionID)
-	// path := filepath.Join(dir, "devdiag", "remote", "sessions", filename)
-	realCacheDir := filepath.Join(dir, "devdiag", "remote", "sessions")
+	realCacheDir := filepath.Join(cacheDir, "devdiag", "remote", "sessions")
 	os.MkdirAll(realCacheDir, 0700)
 
+	sessionID := "20260516T203500Z_sessionA"
+	// filename format: <kind>_<sessionID>.json
+	filename := "ssh_" + sessionID + ".json"
+	path := filepath.Join(realCacheDir, filename)
 	manifestData := `{
-		"session_id": "session-A",
+		"schema_version": "0.1",
+		"session_id": "` + sessionID + `",
 		"target": {
 			"kind": "ssh",
 			"raw": "user@host-A",
-			"host": "host-A"
+			"host": "host-A",
+			"port": 22
 		},
-		"root_dir": "/tmp/devdiag-remote/session-A",
+		"root_dir": "~/.devdiag/remote/` + sessionID + `",
 		"status": "active"
 	}`
-	os.WriteFile(filepath.Join(realCacheDir, "ssh_session-A.json"), []byte(manifestData), 0600)
+	if err := os.WriteFile(path, []byte(manifestData), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Double check file exists
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("file not written: %v", err)
+	}
 
 	// 2. Try to clean target B with session A
-	_, stderr, code := runBinary("remote", "clean", "user@host-B", "--session", "session-A")
+	env := append(os.Environ(), "XDG_CACHE_HOME="+cacheDir)
+	_, stderr, code := runBinaryWithEnv(env, "remote", "clean", "user@host-B", "--session", sessionID)
 	if code != exitcode.InvalidInput.Int() {
-		t.Fatalf("expected exit code %d for mismatch, got %d", exitcode.InvalidInput.Int(), code)
+		t.Fatalf("expected exit code %d for mismatch, got %d. stderr: %s", exitcode.InvalidInput.Int(), code, stderr)
 	}
 
 	if !strings.Contains(stderr, "does not match target") {

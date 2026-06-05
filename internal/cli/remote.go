@@ -331,7 +331,7 @@ func runRemoteSync(cmd *cobra.Command, args []string) error {
 		// Write remote manifest via container exec
 		data, _ := json.MarshalIndent(manifest, "", "  ")
 		res, err := tr.Run(ctx, transport.RemoteCommand{
-			Args:  []string{"sh", "-lc", "cat > '" + filepath.Join(remoteDir, "manifest.json") + "'"},
+			Args:  []string{"sh", "-lc", "cat > " + session.ShellQuote(filepath.Join(remoteDir, "manifest.json"))},
 			Stdin: data,
 		})
 		if err != nil || res.ExitCode != 0 {
@@ -564,7 +564,7 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 			return exitCodeError{code: exitcode.InvalidInput}
 		}
 		// Verify target mismatch
-		if cached.Target.Kind != t.Kind || cached.Target.Raw != t.Raw || cached.Target.ContainerName != t.ContainerName {
+		if !target.SameTarget(cached.Target, *t) {
 			logger.Error("remote.clean", fmt.Sprintf("session %s does not match target %s", flagRemoteSession, t.String()))
 			return exitCodeError{code: exitcode.InvalidInput}
 		}
@@ -575,7 +575,12 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 			logger.Error("remote.clean", fmt.Sprintf("cache read failed: %v", err))
 			return exitCodeError{code: exitcode.InternalError}
 		}
-		manifests = list
+		// ListCache already filters by Kind and Raw, but we use SameTarget for strict verification.
+		for _, m := range list {
+			if target.SameTarget(m.Target, *t) {
+				manifests = append(manifests, m)
+			}
+		}
 	} else {
 		cached, err := session.ReadCache(string(t.Kind), t.Raw)
 		if err != nil {
@@ -587,7 +592,18 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 			result.Notes = append(result.Notes, "no cached session found; nothing to clean")
 			return outputRemoteResult(result, redactEngine, cmd)
 		}
-		manifests = append(manifests, cached)
+		if target.SameTarget(cached.Target, *t) {
+			manifests = append(manifests, cached)
+		} else {
+			// No info log here, just return early as "nothing to clean" if we found something that didn't match.
+			// This matches ReadCache failure behavior for the user.
+			result := render.NewDoctorResult(t)
+			result.DevDiagVersion = version.Version
+			result.RedactionStatus = string(redactEngine.Level)
+			result.Status = "cleaned"
+			result.Notes = append(result.Notes, "no cached session found; nothing to clean")
+			return outputRemoteResult(result, redactEngine, cmd)
+		}
 	}
 
 	if len(manifests) == 0 {
@@ -798,7 +814,7 @@ func cleanManifest(ctx context.Context, tr transport.Transport, manifest *sessio
 	// Remove empty directories bottom-up
 	rootDir := session.ShellPath(manifest.RootDir)
 	res, err := tr.Run(ctx, transport.RemoteCommand{
-		Args: []string{"sh", "-lc", "cd " + rootDir + " 2>/dev/null && rmdir $(find . -type d -empty | sort -r) 2>/dev/null || true"},
+		Args: []string{"sh", "-lc", "cd " + session.ShellQuote(rootDir) + " 2>/dev/null && rmdir $(find . -type d -empty | sort -r) 2>/dev/null || true"},
 	})
 	if err != nil {
 		lastErr = err
@@ -817,7 +833,7 @@ func writeRemoteManifest(ctx context.Context, t *target.Target, manifest *sessio
 	remotePath := session.ShellPath(filepath.Join(manifest.RootDir, "manifest.json"))
 	// Write manifest using cat over ssh
 	res, err := tr.Run(ctx, transport.RemoteCommand{
-		Args:  []string{"sh", "-lc", "cat > " + remotePath},
+		Args:  []string{"sh", "-lc", "cat > " + session.ShellQuote(remotePath)},
 		Stdin: data,
 	})
 	if err != nil {

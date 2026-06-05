@@ -5,11 +5,72 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/meedoomostafa/devdiag/internal/remote/target"
 )
+
+var sessionIDRe = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z_[A-Za-z0-9][A-Za-z0-9_-]{5,63}$`)
+
+// ValidateSessionID ensures a session ID matches the expected format.
+func ValidateSessionID(id string) error {
+	if !sessionIDRe.MatchString(id) {
+		return fmt.Errorf("invalid session ID format: %q", id)
+	}
+	return nil
+}
+
+// ValidateManifest checks that a manifest is consistent and safe.
+func ValidateManifest(m *Manifest) error {
+	if err := ValidateManifestIdentity(m); err != nil {
+		return err
+	}
+	if err := ValidateRootDir(m.RootDir, m.Target.Kind); err != nil {
+		return fmt.Errorf("invalid root dir in manifest: %w", err)
+	}
+	for _, f := range m.Files {
+		if err := ValidateManagedPath(m.RootDir, f.Path); err != nil {
+			return fmt.Errorf("invalid managed path %q in manifest: %w", f.Path, err)
+		}
+	}
+
+	return nil
+}
+
+// ValidateManifestIdentity checks cache lookup fields without validating cleanup
+// paths. Explicit cleanup commands must be able to load unsafe manifests so the
+// safety checks can refuse them with the documented exit code.
+func ValidateManifestIdentity(m *Manifest) error {
+	if m == nil {
+		return fmt.Errorf("manifest must not be nil")
+	}
+	if m.SchemaVersion != "0.1" {
+		return fmt.Errorf("unsupported manifest schema version: %q", m.SchemaVersion)
+	}
+	if err := ValidateSessionID(m.SessionID); err != nil {
+		return err
+	}
+	if m.Target.Raw == "" {
+		return fmt.Errorf("manifest target must not be empty")
+	}
+	switch m.Target.Kind {
+	case target.KindSSH, target.KindContainer, target.KindK8s:
+		// OK
+	default:
+		return fmt.Errorf("unsupported target kind %q", m.Target.Kind)
+	}
+
+	switch m.Status {
+	case "active", "cleaned", "partial", "failed", "":
+		// OK
+	default:
+		return fmt.Errorf("unsupported status %q", m.Status)
+	}
+
+	return nil
+}
 
 // GenerateID creates a unique session identifier.
 func GenerateID() string {

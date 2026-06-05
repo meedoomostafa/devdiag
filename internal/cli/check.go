@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -68,9 +67,10 @@ func makeCheckRun(engineFactory func() rules.PolicyEngine, collectorsList func(s
 		if len(args) > 0 {
 			scanPath = args[0]
 		}
-		absPath, err := filepath.Abs(scanPath)
+		absPath, err := resolveExistingDirectory(scanPath)
 		if err != nil {
-			absPath = scanPath
+			logger.Error("check", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
 		}
 
 		logger.Info("check", fmt.Sprintf("checking path=%s", absPath))

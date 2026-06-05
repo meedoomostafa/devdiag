@@ -307,6 +307,63 @@ func TestModel_EmptyStateViews(t *testing.T) {
 	}
 }
 
+func TestModel_ProgressViewShowsCollectorSummaryAndPartialStatus(t *testing.T) {
+	m := NewModel(app.ScanOptions{Path: "/repo"}, nil)
+	m.width = 100
+	m.height = 30
+	m.scanning = true
+	m.events = []app.Event{
+		{Type: app.EventCollectorStarted, Collector: "env"},
+		{Type: app.EventCollectorDone, Collector: "env", Status: schema.CollectorOK},
+		{Type: app.EventCollectorStarted, Collector: "compose_status"},
+		{Type: app.EventCollectorDone, Collector: "compose_status", Status: schema.CollectorPartial},
+		{Type: app.EventCollectorStarted, Collector: "runtime"},
+	}
+
+	v := m.View()
+	for _, want := range []string{
+		"scanning /repo",
+		"Collectors: 2 done, 1 running, 1 need review",
+		"[ok]     env",
+		"[partial] compose_status",
+		"[run]    runtime",
+	} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("progress view missing %q:\n%s", want, v)
+		}
+	}
+}
+
+func TestModel_ProgressViewUsesDefaultPath(t *testing.T) {
+	m := NewModel(app.ScanOptions{}, nil)
+	m.width = 100
+	m.height = 30
+	m.scanning = true
+
+	v := m.View()
+	if !strings.Contains(v, "scanning .") {
+		t.Fatalf("progress view should use default path, got:\n%s", v)
+	}
+}
+
+func TestModel_SpinnerTickOnlySchedulesWhileScanning(t *testing.T) {
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
+	m.scanning = true
+
+	msg := m.spinner.Tick()
+	newM, cmd := m.Update(msg)
+	if cmd == nil {
+		t.Fatal("expected spinner to keep ticking while scanning")
+	}
+
+	stopped := newM.(Model)
+	stopped.scanning = false
+	_, cmd = stopped.Update(stopped.spinner.Tick())
+	if cmd != nil {
+		t.Fatal("expected no spinner tick command after scan stops")
+	}
+}
+
 func TestModel_HelpToggle(t *testing.T) {
 	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	m.width = 80

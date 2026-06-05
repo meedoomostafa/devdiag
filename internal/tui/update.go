@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/meedoomostafa/devdiag/internal/app"
@@ -109,8 +110,12 @@ func nextEvent(sess *scanSession) tea.Cmd {
 
 // Init satisfies tea.Model.
 func (m Model) Init() tea.Cmd {
+	if len(m.spinner.Spinner.Frames) == 0 {
+		m.spinner = newProgressSpinner()
+	}
 	return tea.Batch(
 		startScan(m.opts, m.sessionID),
+		m.spinner.Tick,
 	)
 }
 
@@ -153,6 +158,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scrollOffset = 0
 		}
 		return m, nil
+
+	case spinner.TickMsg:
+		if !m.scanning {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)

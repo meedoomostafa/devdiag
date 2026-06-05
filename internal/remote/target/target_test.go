@@ -106,6 +106,46 @@ func TestParse(t *testing.T) {
 			raw:     "",
 			wantErr: true,
 		},
+		{
+			name:    "ssh URL with password",
+			raw:     "ssh://user:pass@host",
+			wantErr: true,
+		},
+		{
+			name:    "host with leading dash",
+			raw:     "-host",
+			wantErr: true,
+		},
+		{
+			name:    "host with whitespace",
+			raw:     "host name",
+			wantErr: true,
+		},
+		{
+			name:    "host with control char",
+			raw:     "host\x01",
+			wantErr: true,
+		},
+		{
+			name:    "host with backtick",
+			raw:     "host`",
+			wantErr: true,
+		},
+		{
+			name:    "host with quote",
+			raw:     "host'",
+			wantErr: true,
+		},
+		{
+			name:    "container with leading dash",
+			raw:     "container:-abc",
+			wantErr: true,
+		},
+		{
+			name:    "k8s pod with leading dash",
+			raw:     "k8s:default/-pod",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -168,5 +208,25 @@ func TestTargetString(t *testing.T) {
 				t.Errorf("String() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSameTarget(t *testing.T) {
+	t1, _ := Parse("user@host:22")
+	t2, _ := Parse("ssh://user@host")
+	if !SameTarget(*t1, *t2) {
+		t.Errorf("expected t1 and t2 to be same target, got %v and %v", t1, t2)
+	}
+
+	t3, _ := Parse("container:abc")
+	if SameTarget(*t1, *t3) {
+		t.Error("expected ssh and container targets to differ")
+	}
+
+	t4, _ := Parse("k8s:ns/pod")
+	t5, _ := Parse("k8s:ns/pod")
+	t5.ContainerName = "sidecar"
+	if SameTarget(*t4, *t5) {
+		t.Error("expected k8s targets with different container names to differ")
 	}
 }

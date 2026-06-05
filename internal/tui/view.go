@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/meedoomostafa/devdiag/internal/app"
@@ -15,35 +16,49 @@ var (
 	appTitleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("#FAFAFA")).
-			Background(lipgloss.Color("#7D56F4")).
+			Background(lipgloss.Color("#2E3440")).
 			Padding(0, 1)
 
 	listStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#6C6C6C")).
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color("#4C566A")).
 			Padding(0, 1)
 
 	detailStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#6C6C6C")).
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color("#4C566A")).
 			Padding(0, 1)
 
 	selectedItemStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("#FAFAFA")).
-				Background(lipgloss.Color("#7D56F4"))
+				Foreground(lipgloss.Color("#ECEFF4")).
+				Background(lipgloss.Color("#3B4252"))
+
+	accentStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#A3BE8C"))
 
 	severityColors = map[schema.Severity]lipgloss.Color{
-		schema.SeverityCritical: lipgloss.Color("#FF0000"),
-		schema.SeverityHigh:     lipgloss.Color("#FF8C00"),
-		schema.SeverityMedium:   lipgloss.Color("#FFD700"),
-		schema.SeverityLow:      lipgloss.Color("#87CEEB"),
-		schema.SeverityInfo:     lipgloss.Color("#808080"),
+		schema.SeverityCritical: lipgloss.Color("#BF616A"),
+		schema.SeverityHigh:     lipgloss.Color("#D08770"),
+		schema.SeverityMedium:   lipgloss.Color("#EBCB8B"),
+		schema.SeverityLow:      lipgloss.Color("#88C0D0"),
+		schema.SeverityInfo:     lipgloss.Color("#81A1C1"),
 	}
 
 	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#A0A0A0"))
+			Foreground(lipgloss.Color("#A7ADB8"))
+
+	mutedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#7D8796"))
 )
+
+func newProgressSpinner() spinner.Model {
+	return spinner.New(
+		spinner.WithSpinner(spinner.Line),
+		spinner.WithStyle(accentStyle),
+	)
+}
 
 func severityStyle(s schema.Severity) lipgloss.Style {
 	c, ok := severityColors[s]
@@ -94,7 +109,7 @@ func (m Model) renderProgress() string {
 	var b strings.Builder
 	b.WriteString(appTitleStyle.Render(" DevDiag Inspect "))
 	b.WriteString("\n\n")
-	b.WriteString("Scanning...\n\n")
+	b.WriteString(fmt.Sprintf("%s scanning %s\n", m.spinner.View(), mutedStyle.Render(m.scanDisplayPath())))
 
 	collectorStatus := make(map[string]app.Event)
 	for _, e := range m.events {
@@ -110,6 +125,7 @@ func (m Model) renderProgress() string {
 		}
 	}
 
+	var doneCount, activeCount, partialCount int
 	names := make([]string, 0, len(collectorStatus))
 	for name := range collectorStatus {
 		names = append(names, name)
@@ -117,16 +133,20 @@ func (m Model) renderProgress() string {
 	sort.Strings(names)
 	for _, name := range names {
 		evt := collectorStatus[name]
-		switch evt.Type {
-		case app.EventCollectorDone:
-			statusStr := string(evt.Status)
-			if statusStr == "" {
-				statusStr = "done"
+		if evt.Type == app.EventCollectorDone {
+			doneCount++
+			if evt.Status == schema.CollectorPartial || evt.Status == schema.CollectorTimeout || evt.Status == schema.CollectorPermissionDenied || evt.Status == schema.CollectorUnavailable || evt.Status == schema.CollectorFailed {
+				partialCount++
 			}
-			b.WriteString(fmt.Sprintf("  ● %-12s [%s]\n", name, statusStr))
-		default:
-			b.WriteString(fmt.Sprintf("  ○ %-12s [pending]\n", name))
+			continue
 		}
+		activeCount++
+	}
+	b.WriteString(fmt.Sprintf("Collectors: %d done, %d running, %d need review\n\n", doneCount, activeCount, partialCount))
+
+	for _, name := range names {
+		evt := collectorStatus[name]
+		b.WriteString(fmt.Sprintf("  %-8s %s\n", collectorStatusLabel(evt), name))
 	}
 
 	if len(m.events) > 0 {
@@ -140,6 +160,36 @@ func (m Model) renderProgress() string {
 	b.WriteString("\n\n")
 	b.WriteString(helpStyle.Render("q:quit"))
 	return b.String()
+}
+
+func collectorStatusLabel(evt app.Event) string {
+	if evt.Type != app.EventCollectorDone {
+		return mutedStyle.Render("[run]")
+	}
+	switch evt.Status {
+	case "", schema.CollectorOK:
+		return accentStyle.Render("[ok]")
+	case schema.CollectorPartial:
+		return severityStyle(schema.SeverityMedium).Render("[partial]")
+	case schema.CollectorTimeout:
+		return severityStyle(schema.SeverityMedium).Render("[timeout]")
+	case schema.CollectorPermissionDenied:
+		return severityStyle(schema.SeverityHigh).Render("[denied]")
+	case schema.CollectorUnavailable:
+		return mutedStyle.Render("[unavail]")
+	case schema.CollectorFailed:
+		return severityStyle(schema.SeverityHigh).Render("[failed]")
+	default:
+		return mutedStyle.Render("[" + string(evt.Status) + "]")
+	}
+}
+
+func (m Model) scanDisplayPath() string {
+	path := strings.TrimSpace(m.opts.Path)
+	if path == "" {
+		return "."
+	}
+	return path
 }
 
 func (m Model) renderError() string {

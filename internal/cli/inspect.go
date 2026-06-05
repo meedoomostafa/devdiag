@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -42,9 +41,10 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
 		scanPath = args[0]
 	}
-	absPath, err := filepath.Abs(scanPath)
+	absPath, err := resolveExistingDirectory(scanPath)
 	if err != nil {
-		absPath = scanPath
+		logger.Error("inspect", err.Error())
+		return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
 	}
 
 	logger.Info("inspect", fmt.Sprintf("scanning path=%s", absPath))
