@@ -423,7 +423,7 @@ func TestGitHubActionMetadataSupportsArtifactsSummaryAndConfigurableFindings(t *
 			}
 			devdiagRun = step.Run
 		}
-		if step.Uses == "actions/upload-artifact@v4" {
+		if step.Uses == "actions/upload-artifact@v7" {
 			artifactStepFound = true
 			if step.If != "always()" {
 				t.Fatalf("upload-artifact if = %q, want always()", step.If)
@@ -460,7 +460,7 @@ func TestGitHubActionMetadataSupportsArtifactsSummaryAndConfigurableFindings(t *
 		}
 	}
 	if !artifactStepFound {
-		t.Fatal("action.yml missing actions/upload-artifact@v4 step")
+		t.Fatal("action.yml missing actions/upload-artifact@v7 step")
 	}
 }
 
@@ -480,7 +480,7 @@ func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 		"fail-severity: critical",
 		"mask-values: secret123",
 		"artifact-name: devdiag-report-${{ matrix.go-version }}",
-		"actions/download-artifact@v5",
+		"actions/download-artifact@v8",
 		"steps.allow.outputs.summary-written",
 		"jq -e '.schema_version and .collectors and .findings'",
 		"jq -e '.. | strings | select(contains(\"<redacted>\"))'",
