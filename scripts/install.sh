@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="${DEVDIAG_REPO:-meedoomostafa/devdiag}"
-VERSION="${DEVDIAG_INSTALL_VERSION:-v0.2.1}"
+VERSION="${DEVDIAG_INSTALL_VERSION:-latest}"
 BIN_DIR="${DEVDIAG_BIN_DIR:-}"
 SHA256="${DEVDIAG_ARCHIVE_SHA256:-}"
 REQUIRE_CHECKSUM="${DEVDIAG_REQUIRE_CHECKSUM:-0}"
@@ -18,7 +18,7 @@ Usage:
   scripts/install.sh [--version <ref>] [--bin-dir <dir>] [--sha256 <hex>] [--dry-run]
 
 Environment:
-  DEVDIAG_INSTALL_VERSION  Git ref to install. Default: v0.2.1
+  DEVDIAG_INSTALL_VERSION  Git ref to install. Default: latest
   DEVDIAG_BIN_DIR          Install directory. Default: /usr/local/bin if writable, else ~/.local/bin
   DEVDIAG_REPO             GitHub repo owner/name. Default: meedoomostafa/devdiag
   DEVDIAG_ARCHIVE_SHA256   Expected SHA256 checksum of the source archive
@@ -26,10 +26,9 @@ Environment:
   GITHUB_TOKEN or GH_TOKEN GitHub token for private repository archive downloads
 
 Examples:
-  curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.1/scripts/install.sh
+  curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
   bash install.sh
-  bash install.sh --sha256 <hex>
-  DEVDIAG_INSTALL_VERSION=main bash scripts/install.sh --dry-run
+  DEVDIAG_INSTALL_VERSION=v0.2.2 bash install.sh
 USAGE
 }
 
@@ -74,6 +73,49 @@ while [[ $# -gt 0 ]]; do
 			;;
 	esac
 done
+
+resolve_latest_version() {
+	local api="https://api.github.com/repos/${REPO}/releases/latest"
+	local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+	local json
+
+	if command -v curl >/dev/null 2>&1; then
+		if [[ -n "${token}" ]]; then
+			json="$(curl -fsSL \
+				-H "Accept: application/vnd.github+json" \
+				-H "Authorization: Bearer ${token}" \
+				"${api}")"
+		else
+			json="$(curl -fsSL \
+				-H "Accept: application/vnd.github+json" \
+				"${api}")"
+		fi
+	elif command -v wget >/dev/null 2>&1; then
+		if [[ -n "${token}" ]]; then
+			json="$(wget --header="Accept: application/vnd.github+json" \
+				--header="Authorization: Bearer ${token}" \
+				-qO- "${api}")"
+		else
+			json="$(wget --header="Accept: application/vnd.github+json" \
+				-qO- "${api}")"
+		fi
+	else
+		echo "missing required command: curl or wget" >&2
+		exit 127
+	fi
+
+	printf '%s\n' "${json}" \
+		| sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+		| head -n1
+}
+
+if [[ "${VERSION}" == "latest" ]]; then
+	VERSION="$(resolve_latest_version)"
+	if [[ -z "${VERSION}" ]]; then
+		echo "error: could not resolve latest DevDiag release" >&2
+		exit 1
+	fi
+fi
 
 need() {
 	if ! command -v "$1" >/dev/null 2>&1; then
