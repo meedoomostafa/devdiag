@@ -50,6 +50,39 @@ func TestCollector_Collect(t *testing.T) {
 	}
 }
 
+func TestCollector_OnlyRequiresExecBitForDirectPackageScripts(t *testing.T) {
+	tmpDir := t.TempDir()
+	pkgJSON := `{"scripts":{"test":"node ./test.js","setup":"./setup.sh","deploy":"NODE_ENV=prod ./deploy.sh && node ./test.js"}}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(pkgJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "test.js"), []byte("console.log('ok')"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "setup.sh"), []byte("#!/bin/sh\necho ok"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "deploy.sh"), []byte("#!/bin/sh\necho ok"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Collector{Root: tmpDir}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+
+	if hasEvidence(res.Evidence, "host_script_not_executable", "test.js") {
+		t.Fatalf("node-invoked script should not require executable bit: %v", res.Evidence)
+	}
+	if !hasEvidence(res.Evidence, "host_script_not_executable", "setup.sh") {
+		t.Fatalf("directly invoked script should require executable bit: %v", res.Evidence)
+	}
+	if !hasEvidence(res.Evidence, "host_script_not_executable", "deploy.sh") {
+		t.Fatalf("env-prefixed direct script should require executable bit: %v", res.Evidence)
+	}
+}
+
 func TestCollector_Writable(t *testing.T) {
 	tmpDir := t.TempDir()
 	c := &Collector{Root: tmpDir}
@@ -88,4 +121,13 @@ func TestCollector_NoTempFilesCreated(t *testing.T) {
 	if afterCount != beforeCount {
 		t.Errorf("collector created files in target dir: before=%d after=%d", beforeCount, afterCount)
 	}
+}
+
+func hasEvidence(evidence []schema.Evidence, source, value string) bool {
+	for _, ev := range evidence {
+		if ev.Source == source && ev.Value == value {
+			return true
+		}
+	}
+	return false
 }

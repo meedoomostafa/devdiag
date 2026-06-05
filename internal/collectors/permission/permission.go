@@ -99,24 +99,90 @@ func findPackageJSONScripts(root string) []string {
 
 	seen := map[string]bool{}
 	for _, cmd := range pkg.Scripts {
-		// Extract simple local file references from commands
-		// e.g. "./bin/setup.sh", "../bin/build.sh"
-		for _, field := range strings.Fields(cmd) {
-			field = strings.Trim(field, `"'`)
-			if strings.HasPrefix(field, "./") {
-				path := strings.TrimPrefix(field, "./")
-				if path != "" && !seen[path] {
-					seen[path] = true
-					scripts = append(scripts, path)
-				}
-			} else if strings.HasPrefix(field, "../") {
-				// Preserve parent-directory traversal
-				if !seen[field] {
-					seen[field] = true
-					scripts = append(scripts, field)
-				}
+		for _, script := range directPackageScriptExecutables(cmd) {
+			if script != "" && !seen[script] {
+				seen[script] = true
+				scripts = append(scripts, script)
 			}
 		}
 	}
 	return scripts
+}
+
+func directPackageScriptExecutables(cmd string) []string {
+	var scripts []string
+	commandPosition := true
+	for _, field := range strings.Fields(cmd) {
+		field = strings.Trim(field, `"'`)
+		if field == "" {
+			continue
+		}
+		if isShellCommandSeparator(field) {
+			commandPosition = true
+			continue
+		}
+		if commandPosition && isEnvAssignment(field) {
+			continue
+		}
+		candidate, separatorAfter := trimTrailingCommandSeparator(field)
+		if commandPosition {
+			if script, ok := localScriptRef(candidate); ok {
+				scripts = append(scripts, script)
+			}
+		}
+		commandPosition = separatorAfter
+	}
+	return scripts
+}
+
+func localScriptRef(field string) (string, bool) {
+	if strings.HasPrefix(field, "./") {
+		path := strings.TrimPrefix(field, "./")
+		return path, path != ""
+	}
+	if strings.HasPrefix(field, "../") {
+		return field, true
+	}
+	return "", false
+}
+
+func isShellCommandSeparator(field string) bool {
+	switch field {
+	case "&&", "||", ";", "|":
+		return true
+	default:
+		return false
+	}
+}
+
+func trimTrailingCommandSeparator(field string) (string, bool) {
+	for _, suffix := range []string{"&&", "||", ";", "|"} {
+		if strings.HasSuffix(field, suffix) && len(field) > len(suffix) {
+			return strings.TrimSuffix(field, suffix), true
+		}
+	}
+	return field, false
+}
+
+func isEnvAssignment(field string) bool {
+	if strings.HasPrefix(field, "-") {
+		return false
+	}
+	idx := strings.Index(field, "=")
+	if idx <= 0 {
+		return false
+	}
+	key := field[:idx]
+	for i, r := range key {
+		if i == 0 {
+			if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r == '_') {
+				return false
+			}
+			continue
+		}
+		if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_') {
+			return false
+		}
+	}
+	return true
 }
