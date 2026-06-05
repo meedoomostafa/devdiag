@@ -26,8 +26,9 @@ Environment:
   GITHUB_TOKEN or GH_TOKEN GitHub token for private repository archive downloads
 
 Examples:
-  curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh | bash
-  curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh | bash -s -- --sha256 <hex>
+  curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh
+  bash install.sh
+  bash install.sh --sha256 <hex>
   DEVDIAG_INSTALL_VERSION=main bash scripts/install.sh --dry-run
 USAGE
 }

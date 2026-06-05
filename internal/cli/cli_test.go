@@ -596,7 +596,7 @@ func TestReadmeAdvertisesCurlInstall(t *testing.T) {
 	}
 	readme := string(data)
 	for _, want := range []string{
-		"curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh | bash",
+		"curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh",
 		"DEVDIAG_INSTALL_VERSION",
 		"scripts/install.sh",
 	} {

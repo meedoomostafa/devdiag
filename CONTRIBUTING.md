@@ -58,23 +58,24 @@ XDG_CACHE_HOME=/tmp/devdiag-cache \
 Install from the release tag:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh | bash
+curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh
+bash install.sh
 ```
 
 Use a user-local install directory when `/usr/local/bin` is not writable:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh | \
-  bash -s -- --bin-dir "$HOME/.local/bin"
+curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh
+bash install.sh --bin-dir "$HOME/.local/bin"
 ```
 
 When the repository is private, use an authenticated raw download and pass the
 same token through for the archive download:
 
 ```bash
-curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
-  https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh | \
-  GITHUB_TOKEN="$GITHUB_TOKEN" bash
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -o install.sh \
+  https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh
+GITHUB_TOKEN="$GITHUB_TOKEN" bash install.sh
 ```
 
 ## Windows setup
