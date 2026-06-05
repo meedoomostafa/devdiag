@@ -664,7 +664,7 @@ func TestModel_NoMutationKeybindings(t *testing.T) {
 
 	// List of keys that should NOT produce a mutation action.
 	// We verify they don't crash and don't change findings/filtered.
-	mutationKeys := []string{"a", "d", "f", "x", "1", "2", "3"}
+	mutationKeys := []string{"a", "d", "f", "x"}
 	for _, k := range mutationKeys {
 		newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
 		newModel := newM.(Model)
@@ -753,5 +753,127 @@ func TestModel_ScanDone_WithEmptyFindings(t *testing.T) {
 	v := m.View()
 	if v == "" {
 		t.Error("empty findings view should not be empty")
+	}
+}
+
+func TestTuiDomainFilters(t *testing.T) {
+	report := &schema.Report{
+		Findings: []schema.Finding{
+			{ID: "F-ENV-001", Title: "Missing Env Key", Severity: schema.SeverityMedium},
+			{ID: "F-CI-001", Title: "CI Drift", Severity: schema.SeverityMedium},
+			{ID: "F-CONTAINER-001", Title: "Outdated Image", Severity: schema.SeverityMedium},
+		},
+	}
+	m := NewReportModel(report, "test-report.json", ModeReport, nil, false)
+	if len(m.filtered) != 3 {
+		t.Fatalf("expected 3 findings initially, got %d", len(m.filtered))
+	}
+
+	// Press 1 (env filter)
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	m1 := newM.(Model)
+	if m1.activeFilters.Domain != "env" {
+		t.Errorf("expected activeFilters.Domain = env, got %q", m1.activeFilters.Domain)
+	}
+	if len(m1.filtered) != 1 || m1.filtered[0].Finding.ID != "F-ENV-001" {
+		t.Errorf("expected 1 env finding, got %v", m1.filtered)
+	}
+	if !strings.Contains(m1.statusBarMsg, "Filter: env") {
+		t.Errorf("expected status bar message with 'Filter: env', got %q", m1.statusBarMsg)
+	}
+
+	// Press 2 (ci filter)
+	newM, _ = m1.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m2 := newM.(Model)
+	if m2.activeFilters.Domain != "ci" {
+		t.Errorf("expected activeFilters.Domain = ci, got %q", m2.activeFilters.Domain)
+	}
+	if len(m2.filtered) != 1 || m2.filtered[0].Finding.ID != "F-CI-001" {
+		t.Errorf("expected 1 ci finding, got %v", m2.filtered)
+	}
+
+	// Press 0 (clear filter)
+	newM, _ = m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'0'}})
+	m0 := newM.(Model)
+	if m0.activeFilters.Domain != "" {
+		t.Errorf("expected empty domain filter, got %q", m0.activeFilters.Domain)
+	}
+	if len(m0.filtered) != 3 {
+		t.Errorf("expected all 3 findings after clearing domain filter, got %d", len(m0.filtered))
+	}
+	if !strings.Contains(m0.statusBarMsg, "Filter cleared") {
+		t.Errorf("expected status bar 'Filter cleared', got %q", m0.statusBarMsg)
+	}
+}
+
+func TestTuiTextAndDomainFiltersCompose(t *testing.T) {
+	report := &schema.Report{
+		Findings: []schema.Finding{
+			{ID: "F-ENV-001", Title: "Secret leak", Severity: schema.SeverityHigh},
+			{ID: "F-ENV-002", Title: "Optional key", Severity: schema.SeverityMedium},
+			{ID: "F-CI-001", Title: "Secret CI", Severity: schema.SeverityMedium},
+		},
+	}
+	m := NewReportModel(report, "test-report.json", ModeReport, nil, false)
+
+	// 1. Enter text filter "Secret"
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	mText := newM.(Model)
+	for _, char := range "Secret" {
+		newM, _ = mText.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{char}})
+		mText = newM.(Model)
+	}
+	newM, _ = mText.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mText = newM.(Model)
+
+	if len(mText.filtered) != 2 {
+		t.Fatalf("expected 2 text-filtered findings ('Secret leak', 'Secret CI'), got %d", len(mText.filtered))
+	}
+
+	// 2. Apply domain filter 1 (env)
+	newM, _ = mText.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	mCompose := newM.(Model)
+	if len(mCompose.filtered) != 1 || mCompose.filtered[0].Finding.ID != "F-ENV-001" {
+		t.Errorf("expected 1 composed finding (F-ENV-001), got %v", mCompose.filtered)
+	}
+
+	// 3. Clear text filter but keep domain (Escape text filter clears activeFilters.Text)
+	newM, _ = mCompose.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	mEsc := newM.(Model)
+	newM, _ = mEsc.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	mEsc = newM.(Model)
+
+	if len(mEsc.filtered) != 2 {
+		t.Errorf("expected 2 findings matching 'env' domain only, got %d", len(mEsc.filtered))
+	}
+}
+
+func TestReportModelDoesNotStartBackgroundScan(t *testing.T) {
+	report := &schema.Report{
+		Findings: []schema.Finding{
+			{ID: "F-ENV-001", Title: "Missing Env Key"},
+		},
+	}
+	m := NewReportModel(report, "my-report.json", ModeReport, nil, false)
+	cmd := m.Init()
+	if cmd != nil {
+		t.Errorf("expected Init() to return nil cmd in report mode to prevent background scan, got: %v", cmd)
+	}
+	if m.scanning {
+		t.Error("expected scanning to be false in report mode")
+	}
+}
+
+func TestReportModelRerunDisabled(t *testing.T) {
+	report := &schema.Report{
+		Findings: []schema.Finding{},
+	}
+	m := NewReportModel(report, "my-report.json", ModeReport, nil, false)
+	newM, cmd := m.ReRun()
+	if cmd != nil {
+		t.Errorf("expected rerun cmd to be nil, got %v", cmd)
+	}
+	if !strings.Contains(newM.statusBarMsg, "Rerun disabled") {
+		t.Errorf("expected status bar warning message, got %q", newM.statusBarMsg)
 	}
 }

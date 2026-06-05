@@ -110,6 +110,9 @@ func nextEvent(sess *scanSession) tea.Cmd {
 
 // Init satisfies tea.Model.
 func (m Model) Init() tea.Cmd {
+	if m.mode != ModeScan {
+		return nil
+	}
 	if len(m.spinner.Spinner.Frames) == 0 {
 		m.spinner = newProgressSpinner()
 	}
@@ -189,6 +192,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	// Normal mode keys
 	switch msg.String() {
 	case "r":
+		m.statusBarMsg = ""
 		return m.ReRun()
 	case "v":
 		m.verbose = !m.verbose
@@ -209,6 +213,41 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "down", "j":
 		m.nextFinding()
 		return m, nil
+	case "0":
+		m.activeFilters.Domain = ""
+		m.statusBarMsg = "Filter cleared"
+		m = m.applyActiveFilters()
+		return m, nil
+	case "1":
+		m.activeFilters.Domain = "env"
+		m.statusBarMsg = "Filter: env"
+		m = m.applyActiveFilters()
+		return m, nil
+	case "2":
+		m.activeFilters.Domain = "ci"
+		m.statusBarMsg = "Filter: ci"
+		m = m.applyActiveFilters()
+		return m, nil
+	case "3":
+		m.activeFilters.Domain = "containers"
+		m.statusBarMsg = "Filter: containers"
+		m = m.applyActiveFilters()
+		return m, nil
+	case "4":
+		m.activeFilters.Domain = "runtime"
+		m.statusBarMsg = "Filter: runtime"
+		m = m.applyActiveFilters()
+		return m, nil
+	case "5":
+		m.activeFilters.Domain = "gpu"
+		m.statusBarMsg = "Filter: gpu"
+		m = m.applyActiveFilters()
+		return m, nil
+	case "6":
+		m.activeFilters.Domain = "trace"
+		m.statusBarMsg = "Filter: trace"
+		m = m.applyActiveFilters()
+		return m, nil
 	}
 
 	return m, nil
@@ -218,18 +257,14 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEnter:
 		m.filtering = false
-		af := DefaultFilters()
-		af.Text = strings.TrimSpace(m.filterInput)
-		m.filtered = ApplyFilters(m.findings, af)
-		m.selected = 0
-		m.scrollOffset = 0
+		m.activeFilters.Text = strings.TrimSpace(m.filterInput)
+		m = m.applyActiveFilters()
 		return m, nil
 	case tea.KeyEscape:
 		m.filtering = false
 		m.filterInput = ""
-		m.filtered = ApplyFilters(m.findings, DefaultFilters())
-		m.selected = 0
-		m.scrollOffset = 0
+		m.activeFilters.Text = ""
+		m = m.applyActiveFilters()
 		return m, nil
 	case tea.KeyBackspace:
 		if len(m.filterInput) > 0 {

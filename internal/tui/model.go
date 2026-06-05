@@ -121,8 +121,21 @@ type scanSession struct {
 	cancel context.CancelFunc
 }
 
+type ModelMode int
+
+const (
+	ModeScan ModelMode = iota
+	ModeReport
+	ModeRun
+)
+
 // Model is the Bubble Tea model for the inspect TUI.
 type Model struct {
+	// Mode and source info
+	mode         ModelMode
+	sourceName   string
+	statusBarMsg string
+
 	// Configuration
 	opts app.ScanOptions
 
@@ -151,25 +164,51 @@ type Model struct {
 	includeHidden bool
 	showHidden    bool
 	hiddenCount   int
+	activeFilters ActiveFilters
 
 	// Dimensions (updated by WindowSizeMsg)
 	width  int
 	height int
 }
 
-// NewModel creates a TUI model for the given scan options and redaction engine.
-func NewModel(opts app.ScanOptions, engine *redact.Engine, includeHidden ...bool) Model {
+// NewScanModel creates a TUI model for starting a background scan.
+func NewScanModel(opts app.ScanOptions, engine *redact.Engine, includeHidden ...bool) Model {
 	showHidden := false
 	if len(includeHidden) > 0 {
 		showHidden = includeHidden[0]
 	}
 	return Model{
+		mode:          ModeScan,
 		opts:          opts,
 		redactEngine:  engine,
 		spinner:       newProgressSpinner(),
 		includeHidden: showHidden,
 		showHidden:    showHidden,
+		activeFilters: DefaultFilters(),
 	}
+}
+
+// NewReportModel creates a TUI model for an already preloaded/loaded report.
+func NewReportModel(report *schema.Report, sourceName string, mode ModelMode, engine *redact.Engine, includeHidden bool) Model {
+	m := Model{
+		mode:          mode,
+		sourceName:    sourceName,
+		redactEngine:  engine,
+		includeHidden: includeHidden,
+		showHidden:    includeHidden,
+		activeFilters: DefaultFilters(),
+	}
+	if engine != nil && report != nil {
+		report = engine.RedactReport(report)
+	}
+	m = m.applyVisibility(report)
+	return m
+}
+
+// NewModel creates a TUI model for the given scan options and redaction engine.
+// This is kept as a compatibility alias.
+func NewModel(opts app.ScanOptions, engine *redact.Engine, includeHidden ...bool) Model {
+	return NewScanModel(opts, engine, includeHidden...)
 }
 
 // Report returns the final report from the TUI session.
@@ -197,6 +236,13 @@ func (m Model) StartScan() (Model, tea.Cmd) {
 	return m, tea.Batch(startScan(m.opts, m.sessionID), m.spinner.Tick)
 }
 
+func (m Model) applyActiveFilters() Model {
+	m.filtered = ApplyFilters(m.findings, m.activeFilters)
+	m.selected = 0
+	m.scrollOffset = 0
+	return m
+}
+
 func (m Model) applyVisibility(report *schema.Report) Model {
 	m.fullReport = report
 	policy := relevance.PolicyFromReport(report, m.showHidden)
@@ -204,7 +250,7 @@ func (m Model) applyVisibility(report *schema.Report) Model {
 	m.report = filteredReport
 	m.hiddenCount = summary.Hidden
 	m.findings = sortFindingsBySeverity(BuildInspectFindings(filteredReport))
-	m.filtered = ApplyFilters(m.findings, DefaultFilters())
+	m.filtered = ApplyFilters(m.findings, m.activeFilters)
 	m.selected = 0
 	m.scrollOffset = 0
 	return m
@@ -212,6 +258,10 @@ func (m Model) applyVisibility(report *schema.Report) Model {
 
 // ReRun triggers a fresh scan, cancelling any active scan first.
 func (m Model) ReRun() (Model, tea.Cmd) {
+	if m.mode != ModeScan {
+		m.statusBarMsg = "Rerun disabled for loaded reports. Run 'devdiag inspect <path>' for a fresh scan."
+		return m, nil
+	}
 	m.cancelScan()
 	return m.StartScan()
 }

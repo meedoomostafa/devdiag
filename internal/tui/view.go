@@ -102,13 +102,22 @@ func (m Model) renderHelp() string {
 	b.WriteString("  /            filter findings\n")
 	b.WriteString("  ?            toggle this help\n")
 	b.WriteString("\n")
+	b.WriteString("Domain Filters\n")
+	b.WriteString("  0            clear domain filter\n")
+	b.WriteString("  1            env\n")
+	b.WriteString("  2            ci\n")
+	b.WriteString("  3            containers\n")
+	b.WriteString("  4            runtime\n")
+	b.WriteString("  5            gpu\n")
+	b.WriteString("  6            trace\n")
+	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("Press ? or any key to close help."))
 	return b.String()
 }
 
 func (m Model) renderProgress() string {
 	var b strings.Builder
-	b.WriteString(appTitleStyle.Render(" DevDiag Inspect "))
+	b.WriteString(appTitleStyle.Render(" " + m.inspectTitle() + " "))
 	b.WriteString("\n\n")
 	b.WriteString(fmt.Sprintf("%s scanning %s\n", m.spinner.View(), mutedStyle.Render(m.scanDisplayPath())))
 
@@ -195,7 +204,7 @@ func (m Model) scanDisplayPath() string {
 
 func (m Model) renderError() string {
 	var b strings.Builder
-	b.WriteString(appTitleStyle.Render(" DevDiag Inspect "))
+	b.WriteString(appTitleStyle.Render(" " + m.inspectTitle() + " "))
 	b.WriteString("\n\n")
 	b.WriteString("Scan failed.\n\n")
 	b.WriteString(fmt.Sprintf("Error: %v\n", m.scanErr))
@@ -206,7 +215,7 @@ func (m Model) renderError() string {
 
 func (m Model) renderEmpty() string {
 	var b strings.Builder
-	b.WriteString(appTitleStyle.Render(" DevDiag Inspect "))
+	b.WriteString(appTitleStyle.Render(" " + m.inspectTitle() + " "))
 	b.WriteString("\n\n")
 	if len(m.findings) == 0 {
 		if m.hiddenCount > 0 {
@@ -218,7 +227,11 @@ func (m Model) renderEmpty() string {
 	} else {
 		b.WriteString("No findings match the current filters.\n\n")
 	}
-	b.WriteString(helpStyle.Render("h:hidden r:rerun q:quit"))
+	footerText := "h:hidden r:rerun q:quit"
+	if m.statusBarMsg != "" {
+		footerText = fmt.Sprintf("%s | %s", footerText, m.statusBarMsg)
+	}
+	b.WriteString(helpStyle.Render(footerText))
 	return b.String()
 }
 
@@ -244,7 +257,7 @@ func (m Model) renderFindings() string {
 		detailWidth = 30
 	}
 
-	title := appTitleStyle.Render(" DevDiag Inspect ")
+	title := appTitleStyle.Render(" " + m.inspectTitle() + " ")
 
 	listContent := m.renderList(listWidth)
 	listPanel := listStyle.Width(listWidth).Height(m.height - 3).Render(listContent)
@@ -252,7 +265,11 @@ func (m Model) renderFindings() string {
 	detailContent := m.renderDetail(detailWidth)
 	detailPanel := detailStyle.Width(detailWidth).Height(m.height - 3).Render(detailContent)
 
-	footer := helpStyle.Render("q:quit r:rerun ↑k:prev ↓j:next h:hidden v:verbose /:filter ?:help")
+	footerText := "q:quit r:rerun ↑k:prev ↓j:next h:hidden v:verbose /:filter 0-6:domain ?:help"
+	if m.statusBarMsg != "" {
+		footerText = fmt.Sprintf("%s | %s", footerText, m.statusBarMsg)
+	}
+	footer := helpStyle.Render(footerText)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, detailPanel)
 	return lipgloss.JoinVertical(lipgloss.Left, title, body, footer)
@@ -261,7 +278,7 @@ func (m Model) renderFindings() string {
 // renderCompact shows a single-column stacked layout for small terminals.
 func (m Model) renderCompact() string {
 	var b strings.Builder
-	b.WriteString(appTitleStyle.Render(" DevDiag Inspect "))
+	b.WriteString(appTitleStyle.Render(" " + m.inspectTitle() + " "))
 	b.WriteString("\n\n")
 
 	if m.selected < len(m.filtered) {
@@ -283,7 +300,11 @@ func (m Model) renderCompact() string {
 		b.WriteString("No findings.\n\n")
 	}
 
-	b.WriteString(helpStyle.Render("q:quit r:rerun ↑k:prev ↓j:next h:hidden ?:help"))
+	footerText := "q:quit r:rerun ↑k:prev ↓j:next h:hidden 0-6:domain ?:help"
+	if m.statusBarMsg != "" {
+		footerText = fmt.Sprintf("%s | %s", footerText, m.statusBarMsg)
+	}
+	b.WriteString(helpStyle.Render(footerText))
 	return b.String()
 }
 
@@ -440,4 +461,17 @@ func wrapText(text string, width int) string {
 		lineLen += wlen
 	}
 	return result.String()
+}
+
+func (m Model) inspectTitle() string {
+	switch m.mode {
+	case ModeScan:
+		return "DevDiag Inspect — scan"
+	case ModeReport:
+		return fmt.Sprintf("DevDiag Inspect — report (%s)", m.sourceName)
+	case ModeRun:
+		return fmt.Sprintf("DevDiag Inspect — run %s", m.sourceName)
+	default:
+		return "DevDiag Inspect"
+	}
 }
