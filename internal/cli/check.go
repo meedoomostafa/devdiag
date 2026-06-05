@@ -158,6 +158,7 @@ var checkPortsCmd = &cobra.Command{
 	Args:  cobra.MaximumNArgs(1),
 	RunE: makeCheckRun(func() rules.PolicyEngine { return rules.NewM1Engine() }, func(path string) []collectors.Collector {
 		return []collectors.Collector{
+			&envcollector.Collector{Root: path},
 			&composecollector.Collector{Root: path},
 			&portcollector.Collector{},
 		}
