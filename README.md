@@ -61,7 +61,15 @@ The module targets Go 1.25 as the minimum supported baseline. CI also gates Go
 Install the latest stable release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh | bash
+curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
+bash install.sh
+```
+
+Install a specific release:
+
+```bash
+curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
+DEVDIAG_INSTALL_VERSION=v0.2.3 bash install.sh
 ```
 
 The installer supports Linux distributions with Bash, `tar`, `curl` or `wget`,

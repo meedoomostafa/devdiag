@@ -28,7 +28,7 @@ Environment:
 Examples:
   curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
   bash install.sh
-  DEVDIAG_INSTALL_VERSION=v0.2.2 bash install.sh
+  DEVDIAG_INSTALL_VERSION=v0.2.3 bash install.sh
 USAGE
 }
 
@@ -264,7 +264,8 @@ tar -xzf "${ARCHIVE}" -C "${SRC_DIR}" --strip-components=1
 
 (
 	cd "${SRC_DIR}"
-	APP_VERSION="${VERSION#v}"
+	APP_VERSION="${VERSION##*/}"
+	APP_VERSION="${APP_VERSION#v}"
 	CGO_ENABLED=0 go build -trimpath \
 		-ldflags "-s -w -X github.com/meedoomostafa/devdiag/internal/version.Version=${APP_VERSION}" \
 		-o "${OUT}" ./cmd/devdiag

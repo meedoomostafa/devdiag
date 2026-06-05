@@ -535,7 +535,7 @@ func TestInstallScriptContract(t *testing.T) {
 	for _, want := range []string{
 		"DEVDIAG_INSTALL_VERSION",
 		"GITHUB_TOKEN or GH_TOKEN",
-		"v0.2.2",
+		"v0.2.3",
 		"linux",
 		"go version",
 		"go build",

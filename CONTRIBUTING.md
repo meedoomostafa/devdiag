@@ -55,7 +55,7 @@ XDG_CACHE_HOME=/tmp/devdiag-cache \
 /usr/local/go/bin/go build -o /tmp/devdiag-plan-check ./cmd/devdiag
 ```
 
-Install from the release tag:
+Install the latest stable release:
 
 ```bash
 curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
