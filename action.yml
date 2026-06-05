@@ -49,6 +49,9 @@ outputs:
   report-path:
     description: 'Path to the generated JSON report artifact'
     value: ${{ steps.devdiag.outputs.report-path }}
+  summary-written:
+    description: 'Whether the action wrote a GitHub job summary'
+    value: ${{ steps.devdiag.outputs.summary-written }}
 runs:
   using: 'composite'
   steps:
@@ -113,6 +116,7 @@ runs:
         fi
         REPORT_DIR="$RUNNER_TEMP/devdiag-artifacts"
         REPORT_PATH="$REPORT_DIR/devdiag-report.json"
+        SUMMARY_WRITTEN="false"
         mkdir -p "$REPORT_DIR"
         set +e
         devdiag scan --format "$FORMAT" --redact "$REDACT" --fail-severity "$EFFECTIVE_FAIL_SEVERITY" "${PROFILE_ARGS[@]}" "${RULE_PACK_ARGS[@]}" "${CI_ARGS[@]}" -- "$PATH_ARG"
@@ -132,8 +136,11 @@ runs:
             echo "- Annotation scan exit: \`$SCAN_EXIT\`"
             echo "- JSON report exit: \`$JSON_EXIT\`"
           } >> "$GITHUB_STEP_SUMMARY"
+          grep -q "### DevDiag scan" "$GITHUB_STEP_SUMMARY"
+          SUMMARY_WRITTEN="true"
         fi
         echo "report-path=$REPORT_PATH" >> "$GITHUB_OUTPUT"
+        echo "summary-written=$SUMMARY_WRITTEN" >> "$GITHUB_OUTPUT"
         FINAL_EXIT=0
         for EXIT_CODE in "$SCAN_EXIT" "$JSON_EXIT"; do
           if [ "$EXIT_CODE" -eq 0 ]; then
