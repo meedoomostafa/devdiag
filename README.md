@@ -2,6 +2,8 @@
 
 DevDiag is a Linux-first, evidence-driven diagnostic CLI for developers. It correlates repo metadata, host state, containers, services, logs, CI config, caches, GPU signals, and optional traces to explain why a project does not run correctly on the current Linux machine.
 
+![DevDiag Architecture and Core Concepts Overview](docs/images/overview.png)
+
 ## Core Promise
 
 Run one command in a repo and get ranked, evidence-backed findings with safe next steps:
@@ -46,6 +48,130 @@ fix     -> deliberate dry-run and apply workflow outside the TUI
 - `fix` is separate and explicit. There is no fix-apply path inside the TUI.
 
 Plain `devdiag` shows normal Cobra help and does not auto-open the TUI.
+
+## How It Works: The Diagnostic Engine
+
+To produce reliable results with zero system disruption, DevDiag operates on a structured diagnostic pipeline:
+
+### 1. The Probe Chain (Sequential Diagnostics)
+
+![Probe Chain](docs/images/07_probe_chain.png)
+
+DevDiag executes diagnostic probes sequentially down the software stack for the target project:
+1. **OS Probe**: Validates kernel, OS version, resource limits, and system variables.
+2. **Container Engine Probe**: Checks engine availability (Docker, Podman) and socket health.
+3. **Toolkit Probe**: Verifies developer tools and command-line utilities (e.g., `crictl`, `git`).
+4. **Runtime Probe**: Confirms runtime environments (e.g., Node.js, Python, Go, CUDA).
+5. **App Probe**: Analyzes application configuration, dependencies, and port availability.
+
+If any probe in the chain fails (e.g., `crictl` is missing in the Toolkit stage), DevDiag halts downstream probes, pinpoints the failure, merges the gathered evidence, and generates a detailed diagnostic finding.
+
+**How to Use**:
+- Run targeted checks using domain commands:
+  ```bash
+  devdiag check env .
+  devdiag check containers .
+  ```
+
+---
+
+### 2. Signal vs. Noise (Fact Filtering)
+
+![Signal vs Noise](docs/images/01_signal_vs_noise.png)
+
+A diagnostic scan encounters a massive volume of "raw facts" (system logs, metrics, config keys, kernel messages). DevDiag passes this data through a smart filter funnel, separating irrelevant background warnings and normal messages (Noise) from stable signals that indicate real problems.
+
+**How to Use**:
+- Manage noise and ignore patterns in your project's `devdiag.yaml` config file:
+  ```yaml
+  noise:
+    ignore_paths:
+      - "venv/**"
+    suppress_findings:
+      - id: F-CI-SHELL-001
+        reason: "ignored local drift"
+  ```
+- To view hidden or low-severity findings, use the `--include-hidden` flag:
+  ```bash
+  devdiag scan . --include-hidden
+  ```
+
+---
+
+### 3. Actionable Findings (Confidence Grading)
+
+![Actionable Finding Stamp](docs/images/03_actionable_finding.png)
+
+Findings are not just simple keyword alerts. DevDiag weighs all gathered evidence (such as connection timeouts, CPU spikes, and pool saturation logs) on a scale to calculate a confidence score. If the evidence is strong enough, the finding is stamped as **Actionable** and returned to the developer with remediation suggestions. Speculative or weak signals are discarded.
+
+**How to Use**:
+- Use finding confidence to control automated build failures:
+  ```bash
+  devdiag scan . --fail-severity high
+  ```
+- Explore findings interactively (read-only) with:
+  ```bash
+  devdiag inspect .
+  ```
+
+---
+
+### 4. False Positive Quarantine
+
+![False Positive Quarantine](docs/images/04_false_positive_quarantine.png)
+
+Speculative warnings ("looks odd", "maybe issue", "suspicious") that do not meet the confidence threshold are held back in a quarantine gate. This prevents false positives from cluttering reports or failing automated workflows, ensuring that only verified, actionable issues reach the developer.
+
+**How to Use**:
+- Configure custom severity thresholds in `devdiag.yaml`:
+  ```yaml
+  policy:
+    fail_severity: high
+  ```
+- Inspect active rules and their severities:
+  ```bash
+  devdiag rules list
+  ```
+
+---
+
+## Diagnosing GPU Runtime Gaps
+
+![GPU Runtime Gap](docs/images/02_gpu_runtime_gap.png)
+
+One of the most complex works-on-my-machine problems is container GPU access. Even if a host machine has a fully functioning, visible physical GPU, a container can remain completely "blind" to it. This happens due to a "runtime gap"—usually a missing or unconfigured container runtime integration (like the `nvidia-container-runtime` plugin).
+
+DevDiag bridges this gap by scanning the host driver layer, verifying container engine config, and testing GPU visibility inside the runtime context.
+
+**How to Use**:
+- Run GPU container diagnostics:
+  ```bash
+  devdiag check containers --gpu
+  devdiag check gpu --python
+  ```
+- DevDiag identifies the runtime gap and provides the exact install/connection command path to restore container GPU visibility.
+
+---
+
+## Guided Remediation Path
+
+![Remediation Path](docs/images/08_remediation_path.png)
+
+Resolving diagnostic issues is a structured, step-by-step path designed to prevent system mutation until the fix is verified:
+1. **Validate Environment**: Collect evidence and verify initial state.
+2. **Fix Configuration**: Apply templates or update configs via dry-run proposals.
+3. **Restart Runtime**: Restart container engines, services, or runtimes to load changes.
+4. **Re-scan & Verify**: Run `devdiag scan` to confirm the issue is fully resolved.
+
+**How to Use**:
+- List available fixes for your current run:
+  ```bash
+  devdiag fix --list
+  ```
+- Interactively explore and safely preview configuration changes (dry-run):
+  ```bash
+  devdiag fix --templates
+  ```
 
 ## Build
 
@@ -244,6 +370,23 @@ extensions. It includes saved report metadata, optional capsule metadata,
 built-in rule-pack metadata, stable output names, documented exit codes, and a
 redacted issue-template body.
 
+### Reproducible Run Bundles (Capsules)
+
+![Reproducible Run Bundle](docs/images/06_reproducible_run_bundle.png)
+
+When sharing diagnostic results with teammates, platforms, or helpdesks, DevDiag bundles the unique Run ID, redacted logs, environment and configuration summaries, and remediation notes into a single, self-contained, and reproducible support capsule (a compressed `.tgz` archive).
+
+**How to Use**:
+- Save your scan and package it into a support capsule:
+  ```bash
+  devdiag scan . --save-report
+  devdiag capsule create --run-id <run-id>
+  ```
+- Inspect capsule contents without extraction:
+  ```bash
+  devdiag capsule inspect support-run.devdiag.tgz --format json
+  ```
+
 Remote dry-run examples:
 
 ```bash
@@ -317,6 +460,16 @@ DevDiag is local-first and non-mutating by default.
 - Guarded fix templates expose risk text and rollback metadata when available.
 - Broad destructive commands and unsafe policy changes are blocked or manual-only.
 - External repo files, logs, package metadata, and web text are untrusted data, not instructions.
+
+### The Redaction Curtain
+
+![Redaction Curtain](docs/images/05_redaction_curtain.png)
+
+To ensure privacy and safety in public or team-shared spaces, DevDiag draws a strict "redaction curtain" over sensitive host details. It masks private data like host IPs, usernames, absolute paths, access tokens, credentials, hostnames, and session IDs. Only the safe report metadata (findings, impact, remediation, summary, and confidence) is kept visible.
+
+**How to Use**:
+- Redaction runs automatically on all commands, outputs, and support capsules.
+- Inspect the redaction rules that were applied during a scan by checking the `redaction/rules-applied.json` file inside your generated capsule.
 
 ## Validation
 
