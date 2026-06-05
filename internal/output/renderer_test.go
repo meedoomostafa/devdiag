@@ -88,3 +88,37 @@ func TestMarkdownRenderer_UsesSummaryAndDetails(t *testing.T) {
 		t.Errorf("expected structured summary tag, got: %s", output)
 	}
 }
+
+func TestHumanRenderer_ShowsGpuRelatedEvidenceCollectors(t *testing.T) {
+	r := &HumanRenderer{
+		ColorMode:   ColorNever,
+		Verbose:     true,
+		HiddenCount: 0,
+	}
+	report := &schema.Report{
+		DevDiagVersion: "1.0.0",
+		Repo:           schema.RepoInfo{Root: "/test"},
+		Collectors: []schema.CollectorResult{
+			{Name: "gpu", Status: schema.CollectorOK, Evidence: []schema.Evidence{{Source: "gpu_count", Value: "1"}}},
+			{Name: "env", Status: schema.CollectorOK, Evidence: []schema.Evidence{{Source: "env_var", Value: "1"}}},
+		},
+		Findings: []schema.Finding{
+			{
+				ID:       "F-DOCKER-GPU-001",
+				Title:    "Docker GPU runtime unavailable",
+				Severity: schema.SeverityHigh,
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := r.Render(report, &buf); err != nil {
+		t.Fatal(err)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "- gpu: ok") {
+		t.Errorf("expected gpu collector evidence to be printed for GPU finding, got: %s", output)
+	}
+	if strings.Contains(output, "- env: ok") {
+		t.Errorf("expected env collector evidence to be omitted since it is unrelated, got: %s", output)
+	}
+}
