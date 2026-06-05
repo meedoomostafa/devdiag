@@ -74,6 +74,20 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 		}
 		evidence = append(evidence, schema.Evidence{Source: "devdiag_policy_fail_severity", Value: failSeverity})
 	}
+	for _, pattern := range cleanKeys(cfg.Noise.IgnorePaths) {
+		evidence = append(evidence, schema.Evidence{Source: "devdiag_noise_ignore_path", Value: pattern})
+	}
+	for _, suppression := range cfg.Noise.SuppressFindings {
+		id := strings.TrimSpace(suppression.ID)
+		if id == "" {
+			continue
+		}
+		value := "id=" + id
+		if reason := strings.TrimSpace(suppression.Reason); reason != "" {
+			value += " reason=" + reason
+		}
+		evidence = append(evidence, schema.Evidence{Source: "devdiag_noise_suppress_finding", Value: value})
+	}
 	return schema.CollectorResult{Name: c.Name(), Status: schema.CollectorOK, Evidence: evidence}, nil
 }
 

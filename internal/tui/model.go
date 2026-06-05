@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/meedoomostafa/devdiag/internal/app"
 	"github.com/meedoomostafa/devdiag/internal/redact"
+	"github.com/meedoomostafa/devdiag/internal/relevance"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
@@ -126,26 +127,30 @@ type Model struct {
 	opts app.ScanOptions
 
 	// Scan state
-	scanning  bool
-	events    []app.Event
-	spinner   spinner.Model
-	session   *scanSession
-	sessionID int
-	scanErr   error
-	report    *schema.Report
+	scanning   bool
+	events     []app.Event
+	spinner    spinner.Model
+	session    *scanSession
+	sessionID  int
+	scanErr    error
+	report     *schema.Report
+	fullReport *schema.Report
 
 	// Redaction
 	redactEngine *redact.Engine
 
 	// Findings state
-	findings     []InspectFinding
-	filtered     []InspectFinding
-	selected     int
-	scrollOffset int
-	verbose      bool
-	showHelp     bool
-	filterInput  string
-	filtering    bool
+	findings      []InspectFinding
+	filtered      []InspectFinding
+	selected      int
+	scrollOffset  int
+	verbose       bool
+	showHelp      bool
+	filterInput   string
+	filtering     bool
+	includeHidden bool
+	showHidden    bool
+	hiddenCount   int
 
 	// Dimensions (updated by WindowSizeMsg)
 	width  int
@@ -153,11 +158,17 @@ type Model struct {
 }
 
 // NewModel creates a TUI model for the given scan options and redaction engine.
-func NewModel(opts app.ScanOptions, engine *redact.Engine) Model {
+func NewModel(opts app.ScanOptions, engine *redact.Engine, includeHidden ...bool) Model {
+	showHidden := false
+	if len(includeHidden) > 0 {
+		showHidden = includeHidden[0]
+	}
 	return Model{
-		opts:         opts,
-		redactEngine: engine,
-		spinner:      newProgressSpinner(),
+		opts:          opts,
+		redactEngine:  engine,
+		spinner:       newProgressSpinner(),
+		includeHidden: showHidden,
+		showHidden:    showHidden,
 	}
 }
 
@@ -177,12 +188,26 @@ func (m Model) StartScan() (Model, tea.Cmd) {
 	m.session = nil
 	m.scanErr = nil
 	m.report = nil
+	m.fullReport = nil
 	m.findings = nil
 	m.filtered = nil
 	m.selected = 0
 	m.scrollOffset = 0
 
 	return m, tea.Batch(startScan(m.opts, m.sessionID), m.spinner.Tick)
+}
+
+func (m Model) applyVisibility(report *schema.Report) Model {
+	m.fullReport = report
+	policy := relevance.PolicyFromReport(report, m.showHidden)
+	filteredReport, summary := relevance.FilterReport(report, policy)
+	m.report = filteredReport
+	m.hiddenCount = summary.Hidden
+	m.findings = sortFindingsBySeverity(BuildInspectFindings(filteredReport))
+	m.filtered = ApplyFilters(m.findings, DefaultFilters())
+	m.selected = 0
+	m.scrollOffset = 0
+	return m
 }
 
 // ReRun triggers a fresh scan, cancelling any active scan first.

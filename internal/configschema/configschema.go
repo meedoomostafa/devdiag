@@ -22,6 +22,13 @@ type Config struct {
 	Policy struct {
 		FailSeverity string `json:"fail_severity,omitempty" yaml:"fail_severity"`
 	} `json:"policy,omitempty" yaml:"policy"`
+	Noise struct {
+		IgnorePaths      []string `json:"ignore_paths,omitempty" yaml:"ignore_paths"`
+		SuppressFindings []struct {
+			ID     string `json:"id" yaml:"id"`
+			Reason string `json:"reason,omitempty" yaml:"reason"`
+		} `json:"suppress_findings,omitempty" yaml:"suppress_findings"`
+	} `json:"noise,omitempty" yaml:"noise"`
 }
 
 type Result struct {
@@ -41,6 +48,13 @@ const configCueSchema = `
 	}
 	policy?: {
 		fail_severity?: "off" | "info" | "low" | "medium" | "high" | "critical"
+	}
+	noise?: {
+		ignore_paths?: [...string]
+		suppress_findings?: [...{
+			id: string
+			reason?: string
+		}]
 	}
 }
 `

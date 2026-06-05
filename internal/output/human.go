@@ -11,8 +11,9 @@ import (
 
 // HumanRenderer emits terminal-friendly output with optional color.
 type HumanRenderer struct {
-	ColorMode ColorMode
-	Verbose   bool
+	ColorMode   ColorMode
+	Verbose     bool
+	HiddenCount int
 }
 
 func (r *HumanRenderer) Render(report *schema.Report, w io.Writer) error {
@@ -26,7 +27,11 @@ func (r *HumanRenderer) Render(report *schema.Report, w io.Writer) error {
 	b.WriteString("\n")
 
 	if len(report.Findings) > 0 {
-		b.WriteString("Top findings\n")
+		heading := "Actionable findings"
+		if containsLowVisibilityFinding(report.Findings) && r.HiddenCount == 0 {
+			heading = "Findings"
+		}
+		b.WriteString(fmt.Sprintf("%s (%d)\n", heading, len(report.Findings)))
 		for _, f := range report.Findings {
 			label := fmt.Sprintf("[%s]", f.Severity)
 			if useColor {
@@ -34,12 +39,22 @@ func (r *HumanRenderer) Render(report *schema.Report, w io.Writer) error {
 			}
 			b.WriteString(fmt.Sprintf("%-12s %s  %s  confidence=%.2f\n",
 				label, f.ID, f.Title, f.Confidence))
+			if f.Symptom != "" {
+				b.WriteString(fmt.Sprintf("%-12s %s\n", "", f.Symptom))
+			}
 		}
 		b.WriteString("\n")
+	} else if r.HiddenCount > 0 {
+		b.WriteString("No actionable findings at the default visibility level.\n\n")
+	} else {
+		b.WriteString("No findings.\n\n")
 	}
 
 	b.WriteString(fmt.Sprintf("Run ID: %s\n", report.RunID))
 	b.WriteString(fmt.Sprintf("Redaction: %s\n", report.RedactionStatus))
+	if r.HiddenCount > 0 {
+		b.WriteString(fmt.Sprintf("Hidden: %d low/info or suppressed finding(s). Re-run with --include-hidden to show them.\n", r.HiddenCount))
+	}
 	if report.RedactionStatus == "off" {
 		b.WriteString("WARNING: redaction is disabled. Secrets may be visible.\n")
 	}
@@ -58,6 +73,15 @@ func (r *HumanRenderer) Render(report *schema.Report, w io.Writer) error {
 
 	_, err := w.Write([]byte(b.String()))
 	return err
+}
+
+func containsLowVisibilityFinding(findings []schema.Finding) bool {
+	for _, f := range findings {
+		if f.Severity == schema.SeverityLow || f.Severity == schema.SeverityInfo {
+			return true
+		}
+	}
+	return false
 }
 
 var severityColors = map[string]string{

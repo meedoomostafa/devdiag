@@ -105,7 +105,7 @@ func TestFixFresh_PerformsRealScan(t *testing.T) {
 	// 2. ResolveReportWithFresh should use app.Scan.
 	// Since runBinaryInDir runs a sub-process, we'll check the source in the output.
 
-	stdout, stderr, code := runBinaryInDir(dir, "fix", "--fresh", "--list", "--format", "json")
+	stdout, stderr, code := runBinaryInDir(dir, "--debug", "fix", "--fresh", "--list", "--format", "json")
 	if code != 0 {
 		t.Fatalf("fix --fresh --list exit code = %d, want 0, stderr=%s", code, stderr)
 	}

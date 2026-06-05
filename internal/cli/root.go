@@ -14,14 +14,15 @@ import (
 )
 
 var (
-	flagFormat       string
-	flagRedact       string
-	flagDebug        bool
-	flagVerbose      bool
-	flagNoColor      bool
-	flagColor        string
-	flagProfile      string
-	flagFailSeverity string
+	flagFormat        string
+	flagRedact        string
+	flagDebug         bool
+	flagVerbose       bool
+	flagNoColor       bool
+	flagColor         string
+	flagProfile       string
+	flagFailSeverity  string
+	flagIncludeHidden bool
 )
 
 var rootCmd = &cobra.Command{
@@ -56,6 +57,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagColor, "color", "auto", "Color mode: always, auto, never")
 	rootCmd.PersistentFlags().StringVar(&flagProfile, "profile", "", "Profile mode: ai-ml")
 	rootCmd.PersistentFlags().StringVar(&flagFailSeverity, "fail-severity", "high", "Minimum finding severity that returns exit code 1: off, info, low, medium, high, critical")
+	rootCmd.PersistentFlags().BoolVar(&flagIncludeHidden, "include-hidden", false, "Include low/info and configured hidden findings in rendered and saved reports")
 
 }
 
@@ -119,7 +121,7 @@ func buildColorMode() output.ColorMode {
 
 // buildLogger creates a logger with redaction.
 func buildLogger() *logging.Logger {
-	level := logging.LevelInfo
+	level := logging.LevelWarn
 	if flagDebug {
 		level = logging.LevelDebug
 	}

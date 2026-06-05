@@ -37,23 +37,25 @@ func TestAggregator_DeduplicatesExactFindingEvidence(t *testing.T) {
 	}
 }
 
-func TestAggregator_KeepsSameIDWithDifferentEvidence(t *testing.T) {
+func TestAggregator_GroupsSameUserProblemWithDifferentEvidence(t *testing.T) {
 	aggregator := NewAggregator()
 	findings := []schema.Finding{
 		{
 			ID:         "F-CI-ENV-001",
-			Title:      "CI env var API_KEY not found locally",
+			Title:      "CI env vars not found locally",
 			Severity:   schema.SeverityMedium,
 			Confidence: 0.6,
+			Symptom:    "CI env differs from local env files",
 			Evidence: []schema.Evidence{
 				{Source: "ci_env", Value: "API_KEY"},
 			},
 		},
 		{
 			ID:         "F-CI-ENV-001",
-			Title:      "CI env var DB_URL not found locally",
+			Title:      "CI env vars not found locally",
 			Severity:   schema.SeverityMedium,
 			Confidence: 0.6,
+			Symptom:    "CI env differs from local env files",
 			Evidence: []schema.Evidence{
 				{Source: "ci_env", Value: "DB_URL"},
 			},
@@ -61,8 +63,11 @@ func TestAggregator_KeepsSameIDWithDifferentEvidence(t *testing.T) {
 	}
 
 	got := aggregator.Add(findings)
-	if len(got) != 2 {
-		t.Fatalf("expected two distinct findings, got %d", len(got))
+	if len(got) != 1 {
+		t.Fatalf("expected one grouped finding, got %d", len(got))
+	}
+	if len(got[0].Evidence) != 2 {
+		t.Fatalf("expected grouped evidence, got %v", got[0].Evidence)
 	}
 }
 

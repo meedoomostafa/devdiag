@@ -70,6 +70,30 @@ policy:
 	}
 }
 
+func TestCollectorReadsNoisePolicy(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte(`noise:
+  ignore_paths:
+    - "fixtures/generated/**"
+  suppress_findings:
+    - id: F-CI-SHELL-001
+      reason: "intentional local shell difference"
+`)
+	if err := os.WriteFile(filepath.Join(dir, "devdiag.yaml"), data, 0o644); err != nil {
+		t.Fatalf("write config fixture: %v", err)
+	}
+
+	res, err := (&Collector{Root: dir}).Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+	if res.Status != schema.CollectorOK {
+		t.Fatalf("status = %s, want ok; notes=%v", res.Status, res.Notes)
+	}
+	assertConfigEvidence(t, res.Evidence, "devdiag_noise_ignore_path", "fixtures/generated/**")
+	assertConfigEvidence(t, res.Evidence, "devdiag_noise_suppress_finding", "id=F-CI-SHELL-001 reason=intentional local shell difference")
+}
+
 func TestCollectorMissingConfigIsOK(t *testing.T) {
 	res, err := (&Collector{Root: t.TempDir()}).Collect(context.Background())
 	if err != nil {

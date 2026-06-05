@@ -69,7 +69,7 @@ Install a specific release:
 
 ```bash
 curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
-DEVDIAG_INSTALL_VERSION=v0.2.4 bash install.sh
+DEVDIAG_INSTALL_VERSION=v0.2.5 bash install.sh
 ```
 
 The installer supports Linux distributions with Bash, `tar`, `curl` or `wget`,
@@ -146,6 +146,7 @@ devdiag scan . --format json
 devdiag scan . --format ndjson
 devdiag scan . --ci
 devdiag scan . --verbose
+devdiag scan . --include-hidden
 devdiag scan . --save-report
 devdiag inspect .
 devdiag tui .                       # alias for inspect
@@ -190,6 +191,14 @@ ci:
       - CI_ONLY_SECRET
     ignore_missing_ci:
       - LOCAL_ONLY_DEVELOPMENT_KEY
+noise:
+  ignore_paths:
+    - ".venv/**"
+    - "venv/**"
+    - "**/site-packages/**"
+  suppress_findings:
+    - id: F-CI-SHELL-001
+      reason: "local shell intentionally differs from CI"
 ```
 
 `ignore_missing_local` suppresses `F-CI-ENV-001` for CI variables that should
@@ -200,6 +209,13 @@ local-only variables that should not appear in CI.
 `scan` and `check` commands when `--fail-severity` is not passed. Explicit CLI
 flags always win, and invalid config values are reported as partial collector
 results.
+
+By default, `scan` and `inspect` keep the screen focused on actionable medium,
+high, and critical findings. Low-severity, informational, evidence-only, and
+configured suppressed findings are hidden from rendered and saved reports unless
+`--include-hidden` is passed. `noise.ignore_paths` keeps generated or dependency
+trees from becoming project-level evidence, and `noise.suppress_findings` hides
+known project-specific noise.
 
 Team rule-pack metadata can be inspected locally before it is shared:
 

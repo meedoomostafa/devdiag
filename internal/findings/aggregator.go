@@ -23,9 +23,7 @@ func (a *Aggregator) Add(findings []schema.Finding) []schema.Finding {
 		normalized := normalizeFinding(finding)
 		key := findingFingerprint(normalized)
 		if existingIdx, ok := seen[key]; ok {
-			if ranksBefore(normalized, deduped[existingIdx]) {
-				deduped[existingIdx] = normalized
-			}
+			deduped[existingIdx] = mergeFinding(deduped[existingIdx], normalized)
 			continue
 		}
 		seen[key] = len(deduped)
@@ -82,12 +80,40 @@ func defaultLayers(id string) []string {
 }
 
 func findingFingerprint(f schema.Finding) string {
-	parts := make([]string, 0, len(f.Evidence))
-	for _, ev := range f.Evidence {
-		parts = append(parts, ev.Source+"\x00"+ev.Value)
+	return strings.Join([]string{
+		f.ID,
+		f.Title,
+		f.Symptom,
+	}, "\x00")
+}
+
+func mergeFinding(existing, next schema.Finding) schema.Finding {
+	if ranksBefore(next, existing) {
+		next.Evidence = mergeEvidence(existing.Evidence, next.Evidence)
+		return next
 	}
-	sort.Strings(parts)
-	return f.ID + "\x00" + strings.Join(parts, "\x00")
+	existing.Evidence = mergeEvidence(existing.Evidence, next.Evidence)
+	return existing
+}
+
+func mergeEvidence(left, right []schema.Evidence) []schema.Evidence {
+	merged := make([]schema.Evidence, 0, len(left)+len(right))
+	seen := make(map[string]bool, len(left)+len(right))
+	for _, evidence := range append(append([]schema.Evidence{}, left...), right...) {
+		key := evidence.Source + "\x00" + evidence.Value
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		merged = append(merged, evidence)
+	}
+	sort.SliceStable(merged, func(i, j int) bool {
+		if merged[i].Source != merged[j].Source {
+			return merged[i].Source < merged[j].Source
+		}
+		return merged[i].Value < merged[j].Value
+	})
+	return merged
 }
 
 func ranksBefore(a, b schema.Finding) bool {

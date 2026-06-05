@@ -152,10 +152,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.redactEngine != nil {
 				report = m.redactEngine.RedactReport(msg.report)
 			}
-			m.findings = sortFindingsBySeverity(BuildInspectFindings(report))
-			m.filtered = ApplyFilters(m.findings, DefaultFilters())
-			m.selected = 0
-			m.scrollOffset = 0
+			m = m.applyVisibility(report)
 		}
 		return m, nil
 
@@ -195,6 +192,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m.ReRun()
 	case "v":
 		m.verbose = !m.verbose
+		return m, nil
+	case "h":
+		if m.fullReport != nil {
+			m.showHidden = !m.showHidden
+			m = m.applyVisibility(m.fullReport)
+		}
 		return m, nil
 	case "/":
 		m.filtering = true

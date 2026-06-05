@@ -61,7 +61,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	// We let the TUI handle scan errors; pre-flight validation is limited
 	// to what the CLI layer already enforces via PersistentPreRunE.
 
-	model := tui.NewModel(opts, buildRedactEngine())
+	model := tui.NewModel(opts, buildRedactEngine(), flagIncludeHidden)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	finalModel, err := p.Run()
 	if err != nil {

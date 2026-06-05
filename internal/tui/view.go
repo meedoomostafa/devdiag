@@ -15,42 +15,42 @@ import (
 var (
 	appTitleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#FAFAFA")).
-			Background(lipgloss.Color("#2E3440")).
+			Foreground(lipgloss.Color("#F4F4F5")).
+			Background(lipgloss.Color("#27272A")).
 			Padding(0, 1)
 
 	listStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color("#4C566A")).
+			BorderForeground(lipgloss.Color("#3F3F46")).
 			Padding(0, 1)
 
 	detailStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color("#4C566A")).
+			BorderForeground(lipgloss.Color("#3F3F46")).
 			Padding(0, 1)
 
 	selectedItemStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("#ECEFF4")).
-				Background(lipgloss.Color("#3B4252"))
+				Foreground(lipgloss.Color("#FAFAFA")).
+				Background(lipgloss.Color("#3F3F46"))
 
 	accentStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#A3BE8C"))
+			Foreground(lipgloss.Color("#A7F3D0"))
 
 	severityColors = map[schema.Severity]lipgloss.Color{
-		schema.SeverityCritical: lipgloss.Color("#BF616A"),
-		schema.SeverityHigh:     lipgloss.Color("#D08770"),
-		schema.SeverityMedium:   lipgloss.Color("#EBCB8B"),
-		schema.SeverityLow:      lipgloss.Color("#88C0D0"),
-		schema.SeverityInfo:     lipgloss.Color("#81A1C1"),
+		schema.SeverityCritical: lipgloss.Color("#F87171"),
+		schema.SeverityHigh:     lipgloss.Color("#FB923C"),
+		schema.SeverityMedium:   lipgloss.Color("#FACC15"),
+		schema.SeverityLow:      lipgloss.Color("#38BDF8"),
+		schema.SeverityInfo:     lipgloss.Color("#A1A1AA"),
 	}
 
 	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#A7ADB8"))
+			Foreground(lipgloss.Color("#A1A1AA"))
 
 	mutedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#7D8796"))
+			Foreground(lipgloss.Color("#71717A"))
 )
 
 func newProgressSpinner() spinner.Model {
@@ -98,6 +98,7 @@ func (m Model) renderHelp() string {
 	b.WriteString("  up / k       previous finding\n")
 	b.WriteString("  down / j     next finding\n")
 	b.WriteString("  v            toggle verbose evidence\n")
+	b.WriteString("  h            toggle hidden low/info findings\n")
 	b.WriteString("  /            filter findings\n")
 	b.WriteString("  ?            toggle this help\n")
 	b.WriteString("\n")
@@ -208,11 +209,16 @@ func (m Model) renderEmpty() string {
 	b.WriteString(appTitleStyle.Render(" DevDiag Inspect "))
 	b.WriteString("\n\n")
 	if len(m.findings) == 0 {
-		b.WriteString("No findings.\n\n")
+		if m.hiddenCount > 0 {
+			b.WriteString("No actionable findings at the default visibility level.\n\n")
+			b.WriteString(fmt.Sprintf("%d hidden low/info finding(s) are available with h.\n\n", m.hiddenCount))
+		} else {
+			b.WriteString("No findings.\n\n")
+		}
 	} else {
 		b.WriteString("No findings match the current filters.\n\n")
 	}
-	b.WriteString(helpStyle.Render("r:rerun  q:quit"))
+	b.WriteString(helpStyle.Render("h:hidden r:rerun q:quit"))
 	return b.String()
 }
 
@@ -246,7 +252,7 @@ func (m Model) renderFindings() string {
 	detailContent := m.renderDetail(detailWidth)
 	detailPanel := detailStyle.Width(detailWidth).Height(m.height - 3).Render(detailContent)
 
-	footer := helpStyle.Render("q:quit r:rerun ↑k:prev ↓j:next v:verbose /:filter ?:help")
+	footer := helpStyle.Render("q:quit r:rerun ↑k:prev ↓j:next h:hidden v:verbose /:filter ?:help")
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, detailPanel)
 	return lipgloss.JoinVertical(lipgloss.Left, title, body, footer)
@@ -277,13 +283,21 @@ func (m Model) renderCompact() string {
 		b.WriteString("No findings.\n\n")
 	}
 
-	b.WriteString(helpStyle.Render("q:quit r:rerun ↑k:prev ↓j:next ?:help"))
+	b.WriteString(helpStyle.Render("q:quit r:rerun ↑k:prev ↓j:next h:hidden ?:help"))
 	return b.String()
 }
 
 func (m Model) renderList(width int) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Findings (%d)\n\n", len(m.filtered)))
+	title := "Actionable findings"
+	if m.showHidden {
+		title = "All findings"
+	}
+	b.WriteString(fmt.Sprintf("%s (%d)\n", title, len(m.filtered)))
+	if !m.showHidden && m.hiddenCount > 0 {
+		b.WriteString(helpStyle.Render(fmt.Sprintf("%d hidden, press h", m.hiddenCount)))
+	}
+	b.WriteString("\n\n")
 
 	maxItems := m.maxVisibleItems()
 	if maxItems < 1 {

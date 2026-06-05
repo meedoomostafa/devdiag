@@ -535,7 +535,7 @@ func TestInstallScriptContract(t *testing.T) {
 	for _, want := range []string{
 		"DEVDIAG_INSTALL_VERSION",
 		"GITHUB_TOKEN or GH_TOKEN",
-		"v0.2.4",
+		"v0.2.5",
 		"linux",
 		"go version",
 		"go build",
@@ -836,6 +836,64 @@ func TestScanExitCode0_ForInfoFinding(t *testing.T) {
 	_, _, code := runBinary("scan", ".")
 	if code != 0 {
 		t.Errorf("scan with info finding exit code = %d, want 0", code)
+	}
+}
+
+func TestScanHumanDefaultHidesInfoFindingAndQuietLogs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/devdiag\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	stdout, stderr, code := runBinary("scan", dir, "--no-color")
+	if code != 0 {
+		t.Fatalf("scan exit code = %d, want 0; stderr=%s", code, stderr)
+	}
+	if strings.Contains(stdout, "F-RUNTIME-DECL-001") {
+		t.Fatalf("default human output should hide info finding: %s", stdout)
+	}
+	if !strings.Contains(stdout, "Hidden: 1") {
+		t.Fatalf("default human output should show hidden count: %s", stdout)
+	}
+	if strings.Contains(stderr, "INF event=scan") {
+		t.Fatalf("default scan should not emit info log noise: %s", stderr)
+	}
+}
+
+func TestScanJSONVisibilityRequiresIncludeHiddenForInfoFinding(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/devdiag\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	stdout, stderr, code := runBinary("scan", dir, "--format", "json")
+	if code != 0 {
+		t.Fatalf("scan json exit code = %d, want 0; stderr=%s", code, stderr)
+	}
+	var report schema.Report
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("default JSON is invalid: %v; stdout=%s", err, stdout)
+	}
+	if len(report.Findings) != 0 {
+		t.Fatalf("default JSON should hide info findings, got %v", report.Findings)
+	}
+
+	stdout, stderr, code = runBinary("scan", dir, "--format", "json", "--include-hidden")
+	if code != 0 {
+		t.Fatalf("scan json --include-hidden exit code = %d, want 0; stderr=%s", code, stderr)
+	}
+	report = schema.Report{}
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("include-hidden JSON is invalid: %v; stdout=%s", err, stdout)
+	}
+	var found bool
+	for _, finding := range report.Findings {
+		if finding.ID == "F-RUNTIME-DECL-001" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("include-hidden JSON should include F-RUNTIME-DECL-001, got %v", report.Findings)
 	}
 }
 
@@ -3390,6 +3448,7 @@ func TestReproCommand_RedactsStartupLogArgs(t *testing.T) {
 
 	stdout, stderr, code := runBinaryInDir(
 		dir,
+		"--debug",
 		"repro",
 		"--format",
 		"json",

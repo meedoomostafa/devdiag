@@ -88,6 +88,13 @@ func TestCollector_NestedPackageJSONRuntime(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "node_modules", "ignored", "package.json"), []byte(`{"engines":{"node":">=1"}}`), 0644); err != nil {
 		t.Fatal(err)
 	}
+	venvPackageDir := filepath.Join(dir, ".venv", "lib", "python3.14", "site-packages", "playwright", "driver", "package")
+	if err := os.MkdirAll(venvPackageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(venvPackageDir, "package.json"), []byte(`{"engines":{"node":">=1"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	c := &Collector{Root: dir}
 	res, err := c.Collect(context.Background())
@@ -97,8 +104,42 @@ func TestCollector_NestedPackageJSONRuntime(t *testing.T) {
 
 	assertRuntimeEvidence(t, res.Evidence, "docs-site/package.json", `engines: "node": ">=24"`)
 	for _, ev := range res.Evidence {
-		if strings.Contains(ev.Source, "node_modules") {
+		if strings.Contains(ev.Source, "node_modules") || strings.Contains(ev.Source, ".venv") || strings.Contains(ev.Source, "site-packages") {
 			t.Fatalf("dependency package.json should not be collected: %v", res.Evidence)
+		}
+	}
+}
+
+func TestCollector_NestedPackageJSONRuntime_RespectsConfiguredIgnorePaths(t *testing.T) {
+	dir := t.TempDir()
+	generatedDir := filepath.Join(dir, "fixtures", "generated")
+	if err := os.MkdirAll(generatedDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(generatedDir, "package.json"), []byte(`{"engines":{"node":">=1"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	appDir := filepath.Join(dir, "apps", "web")
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "package.json"), []byte(`{"engines":{"node":">=24"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "devdiag.yaml"), []byte("noise:\n  ignore_paths:\n    - fixtures/generated/**\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Collector{Root: dir}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+
+	assertRuntimeEvidence(t, res.Evidence, "apps/web/package.json", `engines: "node": ">=24"`)
+	for _, ev := range res.Evidence {
+		if strings.Contains(ev.Source, "fixtures/generated") {
+			t.Fatalf("configured ignored package.json should not be collected: %v", res.Evidence)
 		}
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/meedoomostafa/devdiag/internal/configschema"
+	"github.com/meedoomostafa/devdiag/internal/pathfilter"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
@@ -180,6 +182,7 @@ func parsePackageJSONRuntime(path string) (packageManager, engines string) {
 
 func packageJSONRuntimePaths(root string) []string {
 	var paths []string
+	ignorePatterns := configuredIgnorePaths(root)
 	rootPackage := filepath.Join(root, "package.json")
 	if fileExists(rootPackage) {
 		paths = append(paths, rootPackage)
@@ -192,12 +195,15 @@ func packageJSONRuntimePaths(root string) []string {
 			return nil
 		}
 		if entry.IsDir() {
-			if shouldSkipRuntimeDir(entry.Name()) {
+			if pathfilter.ShouldSkipDir(entry.Name()) || pathfilter.ShouldSkipPathWithPatterns(root, path, ignorePatterns) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if entry.Name() != "package.json" || path == rootPackage {
+			return nil
+		}
+		if !pathfilter.IsProjectManifestPathWithPatterns(root, path, ignorePatterns) {
 			return nil
 		}
 		paths = append(paths, path)
@@ -207,13 +213,29 @@ func packageJSONRuntimePaths(root string) []string {
 	return paths
 }
 
-func shouldSkipRuntimeDir(name string) bool {
-	switch name {
-	case ".git", ".devdiag", "node_modules", "vendor", "dist", "build", "coverage":
-		return true
-	default:
-		return false
+func configuredIgnorePaths(root string) []string {
+	for _, name := range []string{"devdiag.yaml", "devdiag.yml", ".devdiag.yml", ".devdiag.yaml"} {
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			continue
+		}
+		validation := configschema.ValidateYAML(data)
+		if !validation.Valid {
+			return nil
+		}
+		var out []string
+		seen := make(map[string]bool)
+		for _, pattern := range validation.Config.Noise.IgnorePaths {
+			pattern = strings.TrimSpace(pattern)
+			if pattern == "" || seen[pattern] {
+				continue
+			}
+			seen[pattern] = true
+			out = append(out, pattern)
+		}
+		return out
 	}
+	return nil
 }
 
 func packageJSONEvidenceSource(root, path string) string {

@@ -411,6 +411,37 @@ func TestModel_KeyToggleVerbose(t *testing.T) {
 	}
 }
 
+func TestModel_KeyToggleHiddenFindings(t *testing.T) {
+	report := &schema.Report{
+		Findings: []schema.Finding{
+			{ID: "F-ENV-001", Title: "Env issue", Severity: schema.SeverityMedium},
+			{ID: "F-RUNTIME-DECL-001", Title: "Runtime declaration", Severity: schema.SeverityInfo},
+		},
+	}
+	m := NewModel(app.ScanOptions{Path: "."}, nil)
+	m.scanning = false
+	m = m.applyVisibility(report)
+	if len(m.filtered) != 1 {
+		t.Fatalf("default TUI visibility = %d findings, want 1", len(m.filtered))
+	}
+	if m.hiddenCount != 1 {
+		t.Fatalf("hidden count = %d, want 1", m.hiddenCount)
+	}
+
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}
+	newM, _ := m.Update(msg)
+	visible := newM.(Model)
+	if !visible.showHidden {
+		t.Fatal("expected hidden findings to be visible after pressing h")
+	}
+	if len(visible.filtered) != 2 {
+		t.Fatalf("after h filtered findings = %d, want 2", len(visible.filtered))
+	}
+	if visible.Report() == nil || len(visible.Report().Findings) != 2 {
+		t.Fatalf("Report should reflect current hidden visibility, got %#v", visible.Report())
+	}
+}
+
 func TestModel_FilterMode(t *testing.T) {
 	m := NewModel(app.ScanOptions{Path: "."}, nil)
 	m.scanning = false

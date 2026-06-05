@@ -12,6 +12,8 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/app"
 	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
+	"github.com/meedoomostafa/devdiag/internal/output"
+	"github.com/meedoomostafa/devdiag/internal/relevance"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
@@ -67,20 +69,24 @@ var scanCmd = &cobra.Command{
 			return fmt.Errorf("policy evaluation failed: %w", err)
 		}
 
-		renderer := pickRenderer(colorMode)
 		redacted := redactEngine.RedactReport(report)
-		if err := renderer.Render(redacted, cmd.OutOrStdout()); err != nil {
+		filtered, summary := relevance.FilterReport(redacted, relevance.PolicyFromReport(redacted, flagIncludeHidden))
+		renderer := pickRenderer(colorMode)
+		if humanRenderer, ok := renderer.(*output.HumanRenderer); ok {
+			humanRenderer.HiddenCount = summary.Hidden
+		}
+		if err := renderer.Render(filtered, cmd.OutOrStdout()); err != nil {
 			return err
 		}
 
 		// Persist reports only when explicitly requested. By default scan is read-only.
 		if scanSaveReport {
-			if err := persistReport(absPath, redacted); err != nil {
+			if err := persistReport(absPath, filtered); err != nil {
 				logger.Warn("scan", fmt.Sprintf("failed to persist report: %v", err))
 			}
 		}
 
-		code := exitCodeFromResultsForCommand(cmd, report.Findings, report.Collectors, false)
+		code := exitCodeFromResultsForCommand(cmd, filtered.Findings, filtered.Collectors, false)
 		if code != exitcode.Success {
 			return exitCodeError{code: code}
 		}

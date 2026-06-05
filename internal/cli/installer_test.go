@@ -17,7 +17,7 @@ func runInstallerWithEnv(t *testing.T, env map[string]string, args ...string) (s
 	t.Helper()
 	cmdArgs := append([]string{"../../scripts/install.sh"}, args...)
 	cmd := exec.Command("bash", cmdArgs...)
-	
+
 	cmdEnv := os.Environ()
 	for k, v := range env {
 		for i := 0; i < len(cmdEnv); i++ {
@@ -29,7 +29,7 @@ func runInstallerWithEnv(t *testing.T, env map[string]string, args ...string) (s
 		cmdEnv = append(cmdEnv, fmt.Sprintf("%s=%s", k, v))
 	}
 	cmd.Env = cmdEnv
-	
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -42,10 +42,10 @@ func runShellFunctionTest(t *testing.T, testBody string) string {
 	if err != nil {
 		t.Fatalf("failed to read install.sh: %v", err)
 	}
-	
+
 	var runnerScript strings.Builder
 	runnerScript.WriteString("#!/usr/bin/env bash\nset -euo pipefail\n")
-	
+
 	scriptLines := strings.Split(string(scriptData), "\n")
 	// Extract up to the OS_NAME check (everything before main script body execution)
 	for i := 0; i < len(scriptLines); i++ {
@@ -55,15 +55,15 @@ func runShellFunctionTest(t *testing.T, testBody string) string {
 		runnerScript.WriteString(scriptLines[i])
 		runnerScript.WriteString("\n")
 	}
-	
+
 	runnerScript.WriteString("\n")
 	runnerScript.WriteString(testBody)
-	
+
 	tmpFile := filepath.Join(t.TempDir(), "test_runner.sh")
 	if err := os.WriteFile(tmpFile, []byte(runnerScript.String()), 0o755); err != nil {
 		t.Fatalf("failed to write test runner: %v", err)
 	}
-	
+
 	cmd := exec.Command("bash", tmpFile)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -102,12 +102,12 @@ func TestInstaller_DryRunNoFilesCreated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v, stderr: %s", err, stderr)
 	}
-	
+
 	metadataPath := filepath.Join(tempHome, ".config", "devdiag")
 	if _, err := os.Stat(metadataPath); err == nil || !os.IsNotExist(err) {
 		t.Fatalf("dry-run created metadata directory: %s", metadataPath)
 	}
-	
+
 	expectedFields := []string{
 		"repo=meedoomostafa/devdiag",
 		"requested_version=v0.2.4",
@@ -139,7 +139,7 @@ func TestInstaller_ResolveLatestMocked(t *testing.T) {
 		fmt.Fprintln(w, `{"tag_name":"v0.2.5"}`)
 	}))
 	defer ts.Close()
-	
+
 	env := map[string]string{
 		"DEVDIAG_GITHUB_API_BASE_URL": ts.URL,
 		"DEVDIAG_INSTALL_VERSION":     "latest",
@@ -162,7 +162,7 @@ func TestInstaller_VersionNormalization(t *testing.T) {
 		{"refs/tags/v0.2.4", "resolved_version=0.2.4"},
 		{"main", "resolved_version=main"},
 	}
-	
+
 	for _, tc := range testCases {
 		t.Run(tc.input, func(t *testing.T) {
 			env := map[string]string{
@@ -317,7 +317,7 @@ func TestUpdate_MetadataMalformed(t *testing.T) {
 func TestUpdate_AlreadyLatest(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"tag_name":"v0.2.4"}`)
+		fmt.Fprintln(w, `{"tag_name":"v0.2.5"}`)
 	}))
 	defer ts.Close()
 
@@ -329,8 +329,8 @@ func TestUpdate_AlreadyLatest(t *testing.T) {
 	metadataContent := `{
 		"schema_version": "1",
 		"repo": "meedoomostafa/devdiag",
-		"source_ref": "v0.2.4",
-		"resolved_version": "0.2.4",
+		"source_ref": "v0.2.5",
+		"resolved_version": "0.2.5",
 		"install_dir": "/mock/bin",
 		"binary_path": "/mock/bin/devdiag",
 		"install_method": "source-archive"
@@ -358,7 +358,7 @@ func TestUpdate_AlreadyLatest(t *testing.T) {
 func TestUpdate_UpdateAvailable(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"tag_name":"v0.2.5"}`)
+		fmt.Fprintln(w, `{"tag_name":"v0.2.6"}`)
 	}))
 	defer ts.Close()
 
