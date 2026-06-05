@@ -70,7 +70,7 @@ func highestSeverity(findings []schema.Finding) schema.Severity {
 
 func summarizeFindingTitle(f schema.Finding) string {
 	switch f.ID {
-	case "F-ENV-001":
+	case "F-ENV-001", "F-ENV-001-OPTIONAL":
 		count := 0
 		for _, ev := range f.Evidence {
 			if ev.Source == "missing_keys" || ev.Source == "missing_optional_keys" {
@@ -80,7 +80,7 @@ func summarizeFindingTitle(f schema.Finding) string {
 			}
 		}
 		if count > 0 {
-			if strings.Contains(strings.ToLower(f.Title), "optional") {
+			if strings.Contains(strings.ToLower(f.Title), "optional") || f.ID == "F-ENV-001-OPTIONAL" {
 				return fmt.Sprintf("%d optional env keys missing from .env", count)
 			}
 			return fmt.Sprintf("%d env keys missing from .env", count)
@@ -134,7 +134,7 @@ func summarizeFindingTitle(f schema.Finding) string {
 
 func suggestedNextCommand(f schema.Finding) string {
 	switch f.ID {
-	case "F-ENV-001":
+	case "F-ENV-001", "F-ENV-001-OPTIONAL":
 		return "devdiag inspect . --filter env"
 	case "F-CI-ENV-001", "F-CI-ENV-DEPLOY-INFO", "F-CI-COMMAND-001":
 		return "devdiag inspect . --filter ci"
@@ -186,6 +186,15 @@ func renderCollectorIssues(collectors []schema.CollectorResult, b *strings.Build
 
 func relatedCollectorsForFinding(f schema.Finding) []string {
 	id := strings.ToUpper(f.ID)
+	if strings.Contains(id, "-GPU-") {
+		return []string{"gpu", "cuda", "gpudocker", "docker"}
+	}
+	if strings.Contains(id, "-ML-") {
+		return []string{"python_ml", "gpu", "cuda"}
+	}
+	if strings.Contains(id, "-CACHE-") {
+		return []string{"cache"}
+	}
 	if strings.Contains(id, "-ENV-") {
 		return []string{"env", "config"}
 	}

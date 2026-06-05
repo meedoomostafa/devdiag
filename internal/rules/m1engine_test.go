@@ -1416,7 +1416,9 @@ func TestEnvConfigIgnoresOptionalMissingKeys(t *testing.T) {
 				if !strings.Contains(f.Title, "NEXUQ_REQUIRED_PORT") {
 					t.Error("expected NEXUQ_REQUIRED_PORT in medium severity finding")
 				}
-			} else if f.Severity == schema.SeverityInfo {
+			}
+		} else if f.ID == "F-ENV-001-OPTIONAL" {
+			if f.Severity == schema.SeverityInfo {
 				hasInfo = true
 				if !strings.Contains(f.Title, "NEXUQ_WEBHOOK_SECRET") {
 					t.Error("expected NEXUQ_WEBHOOK_SECRET in optional/info severity finding")
@@ -1432,6 +1434,42 @@ func TestEnvConfigIgnoresOptionalMissingKeys(t *testing.T) {
 		t.Error("expected medium severity F-ENV-001 finding")
 	}
 	if !hasInfo {
-		t.Error("expected info severity F-ENV-001 finding for optional keys")
+		t.Error("expected info severity F-ENV-001-OPTIONAL finding for optional keys")
+	}
+}
+
+func TestOptionalEnvUsesDistinctFindingID(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name: "config",
+				Evidence: []schema.Evidence{
+					{Source: "devdiag_env_optional", Value: "OPTIONAL_KEY"},
+				},
+			},
+			{
+				Name: "env",
+				Evidence: []schema.Evidence{
+					{Source: "missing_keys", Value: "OPTIONAL_KEY"},
+				},
+			},
+		},
+	}
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, f := range findings {
+		if f.ID == "F-ENV-001-OPTIONAL" {
+			found = true
+			if f.Severity != schema.SeverityInfo {
+				t.Errorf("expected SeverityInfo, got %s", f.Severity)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected finding F-ENV-001-OPTIONAL")
 	}
 }

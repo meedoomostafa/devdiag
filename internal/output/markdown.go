@@ -112,7 +112,7 @@ func mdHighestSeverity(findings []schema.Finding) schema.Severity {
 
 func mdSummarizeFindingTitle(f schema.Finding) string {
 	switch f.ID {
-	case "F-ENV-001":
+	case "F-ENV-001", "F-ENV-001-OPTIONAL":
 		count := 0
 		for _, ev := range f.Evidence {
 			if ev.Source == "missing_keys" || ev.Source == "missing_optional_keys" {
@@ -122,7 +122,7 @@ func mdSummarizeFindingTitle(f schema.Finding) string {
 			}
 		}
 		if count > 0 {
-			if strings.Contains(strings.ToLower(f.Title), "optional") {
+			if strings.Contains(strings.ToLower(f.Title), "optional") || f.ID == "F-ENV-001-OPTIONAL" {
 				return fmt.Sprintf("%d optional env keys missing from .env", count)
 			}
 			return fmt.Sprintf("%d env keys missing from .env", count)

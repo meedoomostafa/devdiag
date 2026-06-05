@@ -144,7 +144,7 @@ func (e *M1Engine) envRules(result schema.CollectorResult, collectors map[string
 			}
 			if len(filteredOptional) > 0 {
 				findings = append(findings, schema.Finding{
-					ID:           "F-ENV-001",
+					ID:           "F-ENV-001-OPTIONAL",
 					Title:        fmt.Sprintf("Optional env keys missing from .env: %s", strings.Join(filteredOptional, ", ")),
 					Severity:     schema.SeverityInfo,
 					Confidence:   0.7,
@@ -177,11 +177,13 @@ func (e *M1Engine) envRules(result schema.CollectorResult, collectors map[string
 				}
 			}
 			sev := schema.SeverityMedium
+			id := "F-ENV-001"
 			if allOptional {
 				sev = schema.SeverityInfo
+				id = "F-ENV-001-OPTIONAL"
 			}
 			findings = append(findings, schema.Finding{
-				ID:           "F-ENV-001",
+				ID:           id,
 				Title:        ".env.example exists but no local .env was found",
 				Severity:     sev,
 				Confidence:   0.5,
