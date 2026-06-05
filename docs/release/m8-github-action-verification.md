@@ -20,7 +20,7 @@ Current GitHub Actions docs confirm these packaging contracts:
   https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions
 - Job summaries are appended through `GITHUB_STEP_SUMMARY`:
   https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#adding-a-job-summary
-- Workflow artifacts are uploaded with `actions/upload-artifact@v4`:
+- Workflow artifacts are uploaded with `actions/upload-artifact@v7`:
   https://docs.github.com/en/actions/tutorials/store-and-share-data
 - Go release history shows Go 1.26.3 and Go 1.25.10 were both released on
   2026-05-07; DevDiag keeps Go 1.25 as the minimum baseline and gates Go 1.26
@@ -38,7 +38,7 @@ Current GitHub Actions docs confirm these packaging contracts:
 - Generates a JSON report at
   `$RUNNER_TEMP/devdiag-artifacts/devdiag-report.json`.
 - Exposes `report-path` through `GITHUB_OUTPUT`.
-- Uploads the JSON report with `actions/upload-artifact@v4` and `if: always()`.
+- Uploads the JSON report with `actions/upload-artifact@v7` and `if: always()`.
 - Writes a concise job summary through `GITHUB_STEP_SUMMARY` by default.
 - Makes findings exit behavior configurable with `fail-on-findings`.
 - Supports `fail-severity` so jobs can fail on `info`, `low`, `medium`, `high`,

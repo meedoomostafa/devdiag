@@ -168,7 +168,7 @@ runs:
         MASK_VALUES: ${{ inputs.mask-values }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         RULE_PACK: ${{ inputs.rule-pack }}
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v7
       if: always()
       with:
         name: ${{ inputs.artifact-name }}
