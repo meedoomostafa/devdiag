@@ -100,6 +100,21 @@ then analyzes the trace output to produce diagnostic findings.`,
 		// Analyze raw trace events first, then redact report/capsule output.
 		// Raw events must never be printed or persisted unredacted.
 		traceFindings := trace.Analyze(res.Events)
+		if res.TraceUnavailable {
+			traceFindings = append(traceFindings, schema.Finding{
+				ID:         "F-TRACE-UNAVAILABLE-001",
+				Title:      "Trace backend unavailable",
+				Severity:   schema.SeverityInfo,
+				Confidence: 1.0,
+				Symptom:    fmt.Sprintf("Syscall tracing is unavailable on this host. Reason: %s", res.UnavailableReason),
+				LikelyCauses: []string{
+					"Trace backend (strace or ebpf) is missing or lacks required permissions/capabilities",
+				},
+				FixHints: []string{
+					"Install strace or run with necessary capabilities for eBPF",
+				},
+			})
+		}
 
 		// Build collector result
 		collectorResult := schema.CollectorResult{
