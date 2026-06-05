@@ -99,6 +99,11 @@ func TestRedactString_QuotedEnvValues(t *testing.T) {
 			input: `{"args":["API_KEY=secret123"]}`,
 			want:  `{"args":["API_KEY=<redacted>"]}`,
 		},
+		{
+			name:  "go slice argument",
+			input: `args=[API_KEY=secret123]`,
+			want:  `args=[API_KEY=<redacted>]`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
