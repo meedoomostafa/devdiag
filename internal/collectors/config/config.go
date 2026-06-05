@@ -56,11 +56,29 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	cfg := validation.Config
 
 	evidence := []schema.Evidence{{Source: "devdiag_config_path", Value: name}}
+	for _, key := range cleanKeys(cfg.Env.IgnoreMissing) {
+		evidence = append(evidence, schema.Evidence{Source: "devdiag_env_ignore_missing", Value: key})
+	}
+	for _, key := range cleanKeys(cfg.Env.Optional) {
+		evidence = append(evidence, schema.Evidence{Source: "devdiag_env_optional", Value: key})
+	}
+	for _, key := range cleanKeys(cfg.Env.Required) {
+		evidence = append(evidence, schema.Evidence{Source: "devdiag_env_required", Value: key})
+	}
 	for _, key := range cleanKeys(cfg.CI.Env.IgnoreMissingLocal) {
 		evidence = append(evidence, schema.Evidence{Source: "devdiag_ci_env_ignore_missing_local", Value: key})
 	}
 	for _, key := range cleanKeys(cfg.CI.Env.IgnoreMissingCI) {
 		evidence = append(evidence, schema.Evidence{Source: "devdiag_ci_env_ignore_missing_ci", Value: key})
+	}
+	for _, key := range cleanKeys(cfg.CI.Env.LocalRequired) {
+		evidence = append(evidence, schema.Evidence{Source: "devdiag_ci_env_local_required", Value: key})
+	}
+	for _, key := range cleanKeys(cfg.CI.Env.DeploymentOnly) {
+		evidence = append(evidence, schema.Evidence{Source: "devdiag_ci_env_deployment_only", Value: key})
+	}
+	for _, key := range cleanKeys(cfg.CI.Env.CIOnly) {
+		evidence = append(evidence, schema.Evidence{Source: "devdiag_ci_env_ci_only", Value: key})
 	}
 	if failSeverity := strings.TrimSpace(cfg.Policy.FailSeverity); failSeverity != "" {
 		if !validFailSeverity(failSeverity) {

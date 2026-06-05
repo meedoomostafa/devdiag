@@ -13,10 +13,18 @@ import (
 
 type Config struct {
 	SchemaVersion string `json:"schema_version,omitempty" yaml:"schema_version"`
+	Env           struct {
+		IgnoreMissing []string `json:"ignore_missing,omitempty" yaml:"ignore_missing"`
+		Optional      []string `json:"optional,omitempty" yaml:"optional"`
+		Required      []string `json:"required,omitempty" yaml:"required"`
+	} `json:"env,omitempty" yaml:"env"`
 	CI            struct {
 		Env struct {
 			IgnoreMissingLocal []string `json:"ignore_missing_local,omitempty" yaml:"ignore_missing_local"`
 			IgnoreMissingCI    []string `json:"ignore_missing_ci,omitempty" yaml:"ignore_missing_ci"`
+			LocalRequired      []string `json:"local_required,omitempty" yaml:"local_required"`
+			DeploymentOnly     []string `json:"deployment_only,omitempty" yaml:"deployment_only"`
+			CIOnly             []string `json:"ci_only,omitempty" yaml:"ci_only"`
 		} `json:"env,omitempty" yaml:"env"`
 	} `json:"ci,omitempty" yaml:"ci"`
 	Policy struct {
@@ -40,10 +48,18 @@ type Result struct {
 const configCueSchema = `
 #Config: {
 	schema_version?: string
+	env?: {
+		ignore_missing?: [...string]
+		optional?: [...string]
+		required?: [...string]
+	}
 	ci?: {
 		env?: {
 			ignore_missing_local?: [...string]
 			ignore_missing_ci?: [...string]
+			local_required?: [...string]
+			deployment_only?: [...string]
+			ci_only?: [...string]
 		}
 	}
 	policy?: {
