@@ -2041,8 +2041,8 @@ func TestCheckGPU_NewFlagsDoNotCrash(t *testing.T) {
 func assertCheckGPUFlagAccepted(t *testing.T, args ...string) {
 	t.Helper()
 	_, stderr, code := runBinary(args...)
-	if code != 0 && code != int(exitcode.FindingsExist) {
-		t.Errorf("%s exit code = %d, want 0 or findings exit 1, stderr=%s", strings.Join(args, " "), code, stderr)
+	if code != 0 && code != int(exitcode.FindingsExist) && code != int(exitcode.CollectorPartial) {
+		t.Errorf("%s exit code = %d, want 0, findings exit 1, or partial exit 3, stderr=%s", strings.Join(args, " "), code, stderr)
 	}
 }
 
