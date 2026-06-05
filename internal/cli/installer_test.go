@@ -136,7 +136,7 @@ func TestInstaller_ResolveLatestMocked(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"tag_name":"v0.2.6"}`)
+		fmt.Fprintln(w, `{"tag_name":"v0.2.7"}`)
 	}))
 	defer ts.Close()
 
@@ -148,8 +148,8 @@ func TestInstaller_ResolveLatestMocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v, stderr: %s", err, stderr)
 	}
-	if !strings.Contains(stdout, "resolved_version=0.2.6") {
-		t.Fatalf("expected resolved version 0.2.6, got output: %s", stdout)
+	if !strings.Contains(stdout, "resolved_version=0.2.7") {
+		t.Fatalf("expected resolved version 0.2.7, got output: %s", stdout)
 	}
 }
 
@@ -285,7 +285,7 @@ func TestUpdate_MetadataMissing(t *testing.T) {
 func TestUpdate_MetadataMalformed(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"tag_name":"v0.2.6"}`)
+		fmt.Fprintln(w, `{"tag_name":"v0.2.7"}`)
 	}))
 	defer ts.Close()
 
@@ -317,7 +317,7 @@ func TestUpdate_MetadataMalformed(t *testing.T) {
 func TestUpdate_AlreadyLatest(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"tag_name":"v0.2.6"}`)
+		fmt.Fprintln(w, `{"tag_name":"v0.2.7"}`)
 	}))
 	defer ts.Close()
 
@@ -329,8 +329,8 @@ func TestUpdate_AlreadyLatest(t *testing.T) {
 	metadataContent := `{
 		"schema_version": "1",
 		"repo": "meedoomostafa/devdiag",
-		"source_ref": "v0.2.6",
-		"resolved_version": "0.2.6",
+		"source_ref": "v0.2.7",
+		"resolved_version": "0.2.7",
 		"install_dir": "/mock/bin",
 		"binary_path": "/mock/bin/devdiag",
 		"install_method": "source-archive"
@@ -370,8 +370,8 @@ func TestUpdate_CurrentNewerThanLatestDoesNotDowngrade(t *testing.T) {
 	metadataContent := `{
 		"schema_version": "1",
 		"repo": "meedoomostafa/devdiag",
-		"source_ref": "v0.2.6",
-		"resolved_version": "0.2.6",
+		"source_ref": "v0.2.7",
+		"resolved_version": "0.2.7",
 		"install_dir": "/mock/bin",
 		"binary_path": "/mock/bin/devdiag",
 		"install_method": "source-archive"
@@ -399,7 +399,7 @@ func TestUpdate_CurrentNewerThanLatestDoesNotDowngrade(t *testing.T) {
 func TestUpdate_UpdateAvailable(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"tag_name":"v0.2.7"}`)
+		fmt.Fprintln(w, `{"tag_name":"v0.2.8"}`)
 	}))
 	defer ts.Close()
 
@@ -509,7 +509,7 @@ func TestUpdate_ApplyRunsInstallerForLatestRelease(t *testing.T) {
 		switch r.URL.Path {
 		case "/repos/meedoomostafa/devdiag/releases/latest":
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintln(w, `{"tag_name":"v0.2.7"}`)
+			fmt.Fprintln(w, `{"tag_name":"v0.2.8"}`)
 		case "/install.sh":
 			w.Header().Set("Content-Type", "text/plain")
 			fmt.Fprintln(w, `#!/usr/bin/env bash`)
@@ -541,7 +541,7 @@ func TestUpdate_ApplyRunsInstallerForLatestRelease(t *testing.T) {
 	if !strings.Contains(stdout, "action: applying_update") {
 		t.Fatalf("expected applying_update, got: %s", stdout)
 	}
-	if !strings.Contains(stdout, "installer_version=v0.2.7") {
+	if !strings.Contains(stdout, "installer_version=v0.2.8") {
 		t.Fatalf("installer did not receive latest version: %s", stdout)
 	}
 	if !strings.Contains(stdout, "installer_bin_dir="+binDir) {

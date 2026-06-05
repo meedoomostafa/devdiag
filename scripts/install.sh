@@ -37,7 +37,7 @@ Environment:
 Examples:
   curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
   bash install.sh
-  DEVDIAG_INSTALL_VERSION=v0.2.6 bash install.sh
+  DEVDIAG_INSTALL_VERSION=v0.2.7 bash install.sh
   bash install.sh --add-to-path
 USAGE
 }

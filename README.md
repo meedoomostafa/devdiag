@@ -69,7 +69,7 @@ Install a specific release:
 
 ```bash
 curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
-DEVDIAG_INSTALL_VERSION=v0.2.6 bash install.sh
+DEVDIAG_INSTALL_VERSION=v0.2.7 bash install.sh
 ```
 
 The installer supports Linux distributions with Bash, `tar`, `curl` or `wget`,
