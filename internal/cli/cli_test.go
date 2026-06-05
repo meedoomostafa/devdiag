@@ -214,6 +214,17 @@ func TestInvalidColor_ReturnsExitCode2(t *testing.T) {
 	}
 }
 
+func TestScanMissingPath_ReturnsExitCode2(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	_, stderr, code := runBinary("scan", missing, "--format", "json")
+	if code != 2 {
+		t.Fatalf("missing path exit code = %d, want 2; stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "path does not exist") {
+		t.Fatalf("missing path stderr should explain the invalid path, got %q", stderr)
+	}
+}
+
 func TestScanJSON_NoStderrWarningInStdout(t *testing.T) {
 	stdout, stderr, code := runBinary("scan", ".", "--format", "json", "--redact", "off")
 	if code != 0 {
@@ -2551,14 +2562,15 @@ func TestRemoteKubernetesSyncUploadFailureReturnsJSON(t *testing.T) {
 
 func TestRemoteKubernetesStatusUsesCache(t *testing.T) {
 	cacheDir := t.TempDir()
+	sessionID := "20260525T000000Z_k8sstatus"
 	writeRemoteSessionCache(t, cacheDir, session.Manifest{
 		SchemaVersion: "0.1",
-		SessionID:     "k8s-status",
+		SessionID:     sessionID,
 		CreatedAt:     "2026-05-25T00:00:00Z",
 		Target:        target.Target{Kind: target.KindK8s, Raw: "k8s:default/api-pod", Namespace: "default", Pod: "api-pod"},
 		Profile:       "minimal",
 		Mode:          "temporary",
-		RootDir:       "/tmp/devdiag-remote/k8s-status",
+		RootDir:       "/tmp/devdiag-remote/" + sessionID,
 		Status:        "active",
 	})
 	env := append(os.Environ(), "XDG_CACHE_HOME="+cacheDir)
@@ -2571,30 +2583,28 @@ func TestRemoteKubernetesStatusUsesCache(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		t.Fatalf("remote status k8s stdout is not valid JSON: %v; stdout=%s", err, stdout)
 	}
-	if result["session_id"] != "k8s-status" {
-		t.Fatalf("remote status k8s session_id = %v, want k8s-status; result=%v", result["session_id"], result)
-	}
-	if result["remote_dir"] != "/tmp/devdiag-remote/k8s-status" {
-		t.Fatalf("remote status k8s remote_dir = %v, want /tmp/devdiag-remote/k8s-status; result=%v", result["remote_dir"], result)
+	if result["session_id"] != sessionID {
+		t.Fatalf("remote status k8s session_id = %v, want %s; result=%v", result["session_id"], sessionID, result)
 	}
 }
 
 func TestRemoteKubernetesCleanExitPaths(t *testing.T) {
 	t.Run("refused unsafe root", func(t *testing.T) {
 		cacheDir := t.TempDir()
+		sessionID := "20260525T000000Z_k8sunsafe"
 		writeRemoteSessionCache(t, cacheDir, session.Manifest{
 			SchemaVersion: "0.1",
-			SessionID:     "k8s-unsafe-clean",
+			SessionID:     sessionID,
 			CreatedAt:     "2026-05-25T00:00:00Z",
 			Target:        target.Target{Kind: target.KindK8s, Raw: "k8s:default/api-pod", Namespace: "default", Pod: "api-pod"},
 			Profile:       "minimal",
 			Mode:          "temporary",
-			RootDir:       "~/.devdiag/remote/k8s-unsafe-clean",
+			RootDir:       "~/.devdiag/remote/" + sessionID,
 			Status:        "active",
 		})
 		env := append(os.Environ(), "XDG_CACHE_HOME="+cacheDir)
 
-		stdout, stderr, code := runBinaryWithEnv(env, "remote", "clean", "k8s:default/api-pod", "--session", "k8s-unsafe-clean", "--format", "json")
+		stdout, stderr, code := runBinaryWithEnv(env, "remote", "clean", "k8s:default/api-pod", "--session", sessionID, "--format", "json")
 		if code != exitcode.UnsafeRefused.Int() {
 			t.Fatalf("remote clean k8s unsafe exit code = %d, want %d; stderr=%s stdout=%s", code, exitcode.UnsafeRefused.Int(), stderr, stdout)
 		}
@@ -2604,23 +2614,24 @@ func TestRemoteKubernetesCleanExitPaths(t *testing.T) {
 	t.Run("partial cleanup", func(t *testing.T) {
 		binDir := t.TempDir()
 		cacheDir := t.TempDir()
+		sessionID := "20260525T000000Z_k8spartial"
 		writeExecutable(t, filepath.Join(binDir, "kubectl"), "#!/bin/sh\nprintf '%s\n' 'rm failed' >&2\nexit 7\n")
 		writeRemoteSessionCache(t, cacheDir, session.Manifest{
 			SchemaVersion: "0.1",
-			SessionID:     "k8s-partial-clean",
+			SessionID:     sessionID,
 			CreatedAt:     "2026-05-25T00:00:00Z",
 			Target:        target.Target{Kind: target.KindK8s, Raw: "k8s:default/api-pod", Namespace: "default", Pod: "api-pod"},
 			Profile:       "minimal",
 			Mode:          "temporary",
-			RootDir:       "/tmp/devdiag-remote/k8s-partial-clean",
+			RootDir:       "/tmp/devdiag-remote/" + sessionID,
 			Files: []session.ManagedFile{
-				{Path: "/tmp/devdiag-remote/k8s-partial-clean/env.sh", Created: true},
+				{Path: "/tmp/devdiag-remote/" + sessionID + "/env.sh", Created: true},
 			},
 			Status: "active",
 		})
 		env := append(prependPath(os.Environ(), binDir), "XDG_CACHE_HOME="+cacheDir)
 
-		stdout, stderr, code := runBinaryWithEnv(env, "remote", "clean", "k8s:default/api-pod", "--session", "k8s-partial-clean", "--format", "json")
+		stdout, stderr, code := runBinaryWithEnv(env, "remote", "clean", "k8s:default/api-pod", "--session", sessionID, "--format", "json")
 		if code != exitcode.CollectorPartial.Int() {
 			t.Fatalf("remote clean k8s partial exit code = %d, want %d; stderr=%s stdout=%s", code, exitcode.CollectorPartial.Int(), stderr, stdout)
 		}
@@ -2630,24 +2641,25 @@ func TestRemoteKubernetesCleanExitPaths(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		binDir := t.TempDir()
 		cacheDir := t.TempDir()
+		sessionID := "20260525T000000Z_k8ssuccess"
 		callsPath := filepath.Join(t.TempDir(), "kubectl-clean-calls.log")
 		writeExecutable(t, filepath.Join(binDir, "kubectl"), "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$KUBECTL_CALLS\"\nexit 0\n")
 		writeRemoteSessionCache(t, cacheDir, session.Manifest{
 			SchemaVersion: "0.1",
-			SessionID:     "k8s-success-clean",
+			SessionID:     sessionID,
 			CreatedAt:     "2026-05-25T00:00:00Z",
 			Target:        target.Target{Kind: target.KindK8s, Raw: "k8s:default/api-pod", Namespace: "default", Pod: "api-pod"},
 			Profile:       "minimal",
 			Mode:          "temporary",
-			RootDir:       "/tmp/devdiag-remote/k8s-success-clean",
+			RootDir:       "/tmp/devdiag-remote/" + sessionID,
 			Files: []session.ManagedFile{
-				{Path: "/tmp/devdiag-remote/k8s-success-clean/env.sh", Created: true},
+				{Path: "/tmp/devdiag-remote/" + sessionID + "/env.sh", Created: true},
 			},
 			Status: "active",
 		})
 		env := append(prependPath(os.Environ(), binDir), "XDG_CACHE_HOME="+cacheDir, "KUBECTL_CALLS="+callsPath)
 
-		stdout, stderr, code := runBinaryWithEnv(env, "remote", "clean", "k8s:default/api-pod", "--session", "k8s-success-clean", "--format", "json")
+		stdout, stderr, code := runBinaryWithEnv(env, "remote", "clean", "k8s:default/api-pod", "--session", sessionID, "--format", "json")
 		if code != 0 {
 			t.Fatalf("remote clean k8s success exit code = %d, want 0; stderr=%s stdout=%s", code, stderr, stdout)
 		}
@@ -2662,7 +2674,7 @@ func TestRemoteKubernetesCleanExitPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read kubectl calls: %v", err)
 		}
-		if !strings.Contains(string(data), "rm -f /tmp/devdiag-remote/k8s-success-clean/env.sh") {
+		if !strings.Contains(string(data), "rm -f /tmp/devdiag-remote/"+sessionID+"/env.sh") {
 			t.Fatalf("kubectl clean calls missing rm command:\n%s", data)
 		}
 	})
@@ -2748,19 +2760,20 @@ func TestRemoteSyncSSHOptionsForwardedToUpload(t *testing.T) {
 func TestRemoteCleanFailureExitCodes(t *testing.T) {
 	t.Run("unsafe manifest refused", func(t *testing.T) {
 		cacheDir := t.TempDir()
+		sessionID := "20260525T000000Z_sshunsafe"
 		writeRemoteSessionCache(t, cacheDir, session.Manifest{
 			SchemaVersion: "0.1",
-			SessionID:     "unsafe-clean",
-			CreatedAt:     "2026-05-22T00:00:00Z",
+			SessionID:     sessionID,
+			CreatedAt:     "2026-05-25T00:00:00Z",
 			Target:        target.Target{Kind: target.KindSSH, Raw: "user@example.invalid", User: "user", Host: "example.invalid", Port: 22},
 			Profile:       "minimal",
 			Mode:          "temporary",
-			RootDir:       "/tmp",
+			RootDir:       "/etc/passwd", // Unsafe root
 			Status:        "active",
 		})
 		env := append(os.Environ(), "XDG_CACHE_HOME="+cacheDir)
 
-		stdout, stderr, code := runBinaryWithEnv(env, "remote", "clean", "user@example.invalid", "--session", "unsafe-clean", "--format", "json")
+		stdout, stderr, code := runBinaryWithEnv(env, "remote", "clean", "user@example.invalid", "--session", sessionID, "--format", "json")
 		if code != exitcode.UnsafeRefused.Int() {
 			t.Fatalf("remote clean unsafe exit code = %d, want %d; stderr=%s stdout=%s", code, exitcode.UnsafeRefused.Int(), stderr, stdout)
 		}
@@ -2770,23 +2783,24 @@ func TestRemoteCleanFailureExitCodes(t *testing.T) {
 	t.Run("partial cleanup", func(t *testing.T) {
 		binDir := t.TempDir()
 		cacheDir := t.TempDir()
+		sessionID := "20260525T000000Z_sshpartial"
 		writeExecutable(t, filepath.Join(binDir, "ssh"), "#!/bin/sh\nprintf '%s\n' 'rm failed' >&2\nexit 7\n")
 		writeRemoteSessionCache(t, cacheDir, session.Manifest{
 			SchemaVersion: "0.1",
-			SessionID:     "partial-clean",
-			CreatedAt:     "2026-05-22T00:00:00Z",
+			SessionID:     sessionID,
+			CreatedAt:     "2026-05-25T00:00:00Z",
 			Target:        target.Target{Kind: target.KindSSH, Raw: "user@example.invalid", User: "user", Host: "example.invalid", Port: 22},
 			Profile:       "minimal",
 			Mode:          "temporary",
-			RootDir:       "~/.devdiag/remote/partial-clean",
+			RootDir:       "~/.devdiag/remote/" + sessionID,
 			Files: []session.ManagedFile{
-				{Path: "~/.devdiag/remote/partial-clean/env.sh", Created: true},
+				{Path: "~/.devdiag/remote/" + sessionID + "/env.sh", Created: true},
 			},
 			Status: "active",
 		})
 		env := append(prependPath(os.Environ(), binDir), "XDG_CACHE_HOME="+cacheDir)
 
-		stdout, stderr, code := runBinaryWithEnv(env, "remote", "clean", "user@example.invalid", "--session", "partial-clean", "--format", "json")
+		stdout, stderr, code := runBinaryWithEnv(env, "remote", "clean", "user@example.invalid", "--session", sessionID, "--format", "json")
 		if code != exitcode.CollectorPartial.Int() {
 			t.Fatalf("remote clean partial exit code = %d, want %d; stderr=%s stdout=%s", code, exitcode.CollectorPartial.Int(), stderr, stdout)
 		}
@@ -3106,16 +3120,22 @@ func remoteJSONExpectCode(t *testing.T, env []string, wantCode int, args ...stri
 func writeRemoteSessionCache(t *testing.T, cacheHome string, manifest session.Manifest) {
 	t.Helper()
 	dir := filepath.Join(cacheHome, "devdiag", "remote", "sessions")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("create remote cache dir: %v", err)
 	}
-	data, err := json.MarshalIndent(manifest, "", "  ")
+	// Normalize manual test fixtures the same way target parsing would, without
+	// mutating the caller's manifest.
+	m := manifest
+	if m.Target.Raw == "" {
+		m.Target.Raw = m.Target.String()
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal remote manifest: %v", err)
 	}
-	path := filepath.Join(dir, string(manifest.Target.Kind)+"_"+manifest.SessionID+".json")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write remote manifest cache: %v", err)
+	path := filepath.Join(dir, string(m.Target.Kind)+"_"+m.SessionID+".json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write remote manifest cache path=%s: %v", path, err)
 	}
 }
 

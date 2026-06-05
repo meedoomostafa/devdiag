@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/meedoomostafa/devdiag/internal/app"
 	"github.com/meedoomostafa/devdiag/internal/redact"
@@ -127,6 +128,7 @@ type Model struct {
 	// Scan state
 	scanning  bool
 	events    []app.Event
+	spinner   spinner.Model
 	session   *scanSession
 	sessionID int
 	scanErr   error
@@ -155,6 +157,7 @@ func NewModel(opts app.ScanOptions, engine *redact.Engine) Model {
 	return Model{
 		opts:         opts,
 		redactEngine: engine,
+		spinner:      newProgressSpinner(),
 	}
 }
 
@@ -165,6 +168,9 @@ func (m Model) Report() *schema.Report {
 
 // StartScan initiates the background scan and returns the initial command.
 func (m Model) StartScan() (Model, tea.Cmd) {
+	if len(m.spinner.Spinner.Frames) == 0 {
+		m.spinner = newProgressSpinner()
+	}
 	m.sessionID++
 	m.scanning = true
 	m.events = nil
@@ -176,7 +182,7 @@ func (m Model) StartScan() (Model, tea.Cmd) {
 	m.selected = 0
 	m.scrollOffset = 0
 
-	return m, startScan(m.opts, m.sessionID)
+	return m, tea.Batch(startScan(m.opts, m.sessionID), m.spinner.Tick)
 }
 
 // ReRun triggers a fresh scan, cancelling any active scan first.

@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -41,6 +43,27 @@ func pickRenderer(colorMode output.ColorMode) output.Renderer {
 	default:
 		return &output.HumanRenderer{ColorMode: colorMode, Verbose: flagVerbose}
 	}
+}
+
+func resolveExistingDirectory(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		path = "."
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return path, fmt.Errorf("resolve path: %w", err)
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return absPath, fmt.Errorf("path does not exist: %s", absPath)
+		}
+		return absPath, fmt.Errorf("stat path %s: %w", absPath, err)
+	}
+	if !info.IsDir() {
+		return absPath, fmt.Errorf("path is not a directory: %s", absPath)
+	}
+	return absPath, nil
 }
 
 func severityHigher(a, b schema.Severity) bool {

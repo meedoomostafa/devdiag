@@ -92,7 +92,7 @@ func TestUploadTarsLocalDirIntoKubectlExec(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "tar-bytes",
 		},
-		"kubectl -n default exec -i api-pod -- sh -lc mkdir -p /tmp/devdiag-remote/s1 && tar -C /tmp/devdiag-remote/s1 -xf -": {
+		"kubectl -n default exec -i api-pod -- sh -lc mkdir -p '/tmp/devdiag-remote/s1' && tar -C '/tmp/devdiag-remote/s1' -xf -": {
 			Command:  "kubectl",
 			ExitCode: 0,
 		},

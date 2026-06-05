@@ -56,6 +56,26 @@ func (t Target) String() string {
 	return t.Raw
 }
 
+// ValidateIdentifier checks that a string is a safe identifier for use in remote commands.
+// It rejects leading dashes, whitespace, control characters, shell metacharacters, and quotes.
+func ValidateIdentifier(kind, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s must not be empty", kind)
+	}
+	if strings.HasPrefix(value, "-") {
+		return fmt.Errorf("%s must not start with a dash: %q", kind, value)
+	}
+	for _, r := range value {
+		if r <= 32 || r == 127 {
+			return fmt.Errorf("%s contains whitespace or control characters: %q", kind, value)
+		}
+	}
+	if strings.ContainsAny(value, "|&;<>$\\`'\"") {
+		return fmt.Errorf("%s contains shell metacharacters or quotes: %q", kind, value)
+	}
+	return nil
+}
+
 // Parse parses a raw target string into a structured Target.
 // Invalid forms return an error with exit code semantics (caller maps to code 2).
 func Parse(raw string) (*Target, error) {
@@ -64,18 +84,27 @@ func Parse(raw string) (*Target, error) {
 		return nil, fmt.Errorf("target is empty")
 	}
 
+	var t *Target
+	var err error
+
 	// Container targets: container:<id> or container:docker/<id> or container:podman/<id>
 	if strings.HasPrefix(raw, "container:") {
-		return parseContainer(raw)
+		t, err = parseContainer(raw)
+	} else if strings.HasPrefix(raw, "k8s:") {
+		// Kubernetes targets: k8s:namespace/pod or k8s:context/namespace/pod
+		t, err = parseK8s(raw)
+	} else {
+		// SSH targets: user@host, user@host:port, host, or ssh://user@host:port
+		t, err = parseSSH(raw)
 	}
 
-	// Kubernetes targets: k8s:namespace/pod or k8s:context/namespace/pod
-	if strings.HasPrefix(raw, "k8s:") {
-		return parseK8s(raw)
+	if err != nil {
+		return nil, err
 	}
 
-	// SSH targets: user@host, user@host:port, host, or ssh://user@host:port
-	return parseSSH(raw)
+	// Canonicalize Raw to ensure it never contains secrets and has a standard form.
+	t.Raw = t.String()
+	return t, nil
 }
 
 func parseContainer(raw string) (*Target, error) {
@@ -86,7 +115,6 @@ func parseContainer(raw string) (*Target, error) {
 
 	t := &Target{
 		Kind: KindContainer,
-		Raw:  raw,
 	}
 
 	// Check for explicit runtime prefix: docker/ or podman/
@@ -106,8 +134,8 @@ func parseContainer(raw string) (*Target, error) {
 		t.Container = body
 	}
 
-	if strings.ContainsAny(t.Container, "|&;<>$\\") {
-		return nil, fmt.Errorf("container name contains shell metacharacters")
+	if err := ValidateIdentifier("container ID", t.Container); err != nil {
+		return nil, err
 	}
 
 	return t, nil
@@ -126,7 +154,6 @@ func parseK8s(raw string) (*Target, error) {
 
 	t := &Target{
 		Kind: KindK8s,
-		Raw:  raw,
 	}
 
 	if len(parts) == 2 {
@@ -141,8 +168,17 @@ func parseK8s(raw string) (*Target, error) {
 	if t.Namespace == "" || t.Pod == "" {
 		return nil, fmt.Errorf("kubernetes target namespace and pod must not be empty")
 	}
-	if containsShellMetachar(t.Context) || containsShellMetachar(t.Namespace) || containsShellMetachar(t.Pod) {
-		return nil, fmt.Errorf("kubernetes target contains shell metacharacters")
+
+	if t.Context != "" {
+		if err := ValidateIdentifier("kubernetes context", t.Context); err != nil {
+			return nil, err
+		}
+	}
+	if err := ValidateIdentifier("kubernetes namespace", t.Namespace); err != nil {
+		return nil, err
+	}
+	if err := ValidateIdentifier("kubernetes pod", t.Pod); err != nil {
+		return nil, err
 	}
 
 	return t, nil
@@ -151,7 +187,6 @@ func parseK8s(raw string) (*Target, error) {
 func parseSSH(raw string) (*Target, error) {
 	t := &Target{
 		Kind: KindSSH,
-		Raw:  raw,
 		Port: 22,
 	}
 
@@ -162,6 +197,9 @@ func parseSSH(raw string) (*Target, error) {
 			return nil, fmt.Errorf("invalid ssh URL: %w", err)
 		}
 		if u.User != nil {
+			if _, set := u.User.Password(); set {
+				return nil, fmt.Errorf("ssh URL must not contain a password")
+			}
 			t.User = u.User.Username()
 		}
 		t.Host = u.Hostname()
@@ -175,49 +213,65 @@ func parseSSH(raw string) (*Target, error) {
 		if t.Host == "" {
 			return nil, fmt.Errorf("ssh target is missing host")
 		}
-		return t, nil
-	}
+	} else {
+		// Plain target string: user@host or user@host:port or host
+		hostPart := raw
 
-	// Plain target string: user@host or user@host:port or host
-	hostPart := raw
-
-	// Extract user
-	if at := strings.LastIndex(raw, "@"); at != -1 {
-		t.User = raw[:at]
-		hostPart = raw[at+1:]
-		if t.User == "" {
-			return nil, fmt.Errorf("ssh user is empty before @")
-		}
-	}
-
-	// Extract port from host
-	if colon := strings.LastIndex(hostPart, ":"); colon != -1 {
-		// Make sure this isn't an IPv6 literal by checking for brackets
-		if !strings.HasPrefix(hostPart, "[") {
-			portStr := hostPart[colon+1:]
-			p, err := strconv.Atoi(portStr)
-			if err != nil || p < 1 || p > 65535 {
-				return nil, fmt.Errorf("invalid port %q", portStr)
+		// Extract user
+		if at := strings.LastIndex(raw, "@"); at != -1 {
+			t.User = raw[:at]
+			hostPart = raw[at+1:]
+			if t.User == "" {
+				return nil, fmt.Errorf("ssh user is empty before @")
 			}
-			t.Port = p
-			hostPart = hostPart[:colon]
+		}
+
+		// Extract port from host
+		if colon := strings.LastIndex(hostPart, ":"); colon != -1 {
+			// Make sure this isn't an IPv6 literal by checking for brackets
+			if !strings.HasPrefix(hostPart, "[") {
+				portStr := hostPart[colon+1:]
+				p, err := strconv.Atoi(portStr)
+				if err != nil || p < 1 || p > 65535 {
+					return nil, fmt.Errorf("invalid port %q", portStr)
+				}
+				t.Port = p
+				hostPart = hostPart[:colon]
+			}
+		}
+
+		if hostPart == "" {
+			return nil, fmt.Errorf("ssh target is missing host")
+		}
+		t.Host = hostPart
+	}
+
+	if t.User != "" {
+		if err := ValidateIdentifier("ssh user", t.User); err != nil {
+			return nil, err
 		}
 	}
-
-	if hostPart == "" {
-		return nil, fmt.Errorf("ssh target is missing host")
+	if err := ValidateIdentifier("ssh host", t.Host); err != nil {
+		return nil, err
 	}
-
-	// Reject shell metacharacters in host
-	if containsShellMetachar(hostPart) {
-		return nil, fmt.Errorf("host contains shell metacharacters")
-	}
-
-	t.Host = hostPart
 
 	return t, nil
 }
 
-func containsShellMetachar(value string) bool {
-	return strings.ContainsAny(value, "|&;<>$\\")
+func SameTarget(a, b Target) bool {
+	if a.Kind != b.Kind {
+		return false
+	}
+	// Normalization happens during Parse, so String() is canonical enough for most fields.
+	// But we check specific fields to be absolutely sure.
+	if a.Kind == KindSSH {
+		return a.User == b.User && a.Host == b.Host && a.Port == b.Port
+	}
+	if a.Kind == KindContainer {
+		return a.Runtime == b.Runtime && a.Container == b.Container
+	}
+	if a.Kind == KindK8s {
+		return a.Context == b.Context && a.Namespace == b.Namespace && a.Pod == b.Pod && a.ContainerName == b.ContainerName
+	}
+	return a.String() == b.String()
 }

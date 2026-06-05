@@ -39,9 +39,10 @@ var scanCmd = &cobra.Command{
 		if len(args) > 0 {
 			scanPath = args[0]
 		}
-		absPath, err := filepath.Abs(scanPath)
+		absPath, err := resolveExistingDirectory(scanPath)
 		if err != nil {
-			absPath = scanPath
+			logger.Error("scan", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
 		}
 
 		logger.Info("scan", fmt.Sprintf("scanning path=%s", absPath))

@@ -139,7 +139,8 @@ func (t *Transport) Upload(ctx context.Context, localDir, remoteDir string) erro
 		return fmt.Errorf("tar stage failed: %s", combinedOutput(tar))
 	}
 
-	remoteCmd := fmt.Sprintf("mkdir -p %s && tar -C %s -xf -", remoteDir, remoteDir)
+	quotedDir := session.ShellQuote(remoteDir)
+	remoteCmd := fmt.Sprintf("mkdir -p %s && tar -C %s -xf -", quotedDir, quotedDir)
 	kube := cmdrunner.RunWithOptions(ctx, t.runner(), cmdrunner.RunOptions{Stdin: []byte(tar.Stdout)}, "kubectl", t.kubectlExecArgs(false, true, "sh", "-lc", remoteCmd)...)
 	if kube.ExitCode != 0 {
 		return fmt.Errorf("kubectl upload failed: %s", combinedOutput(kube))

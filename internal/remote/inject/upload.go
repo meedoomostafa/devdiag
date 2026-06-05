@@ -33,7 +33,8 @@ func UploadTarStream(ctx context.Context, t *target.Target, localDir, remoteDir 
 	}
 	sshArgs = append(sshArgs, host, "--")
 	remoteShellDir := session.ShellPath(remoteDir)
-	remoteCommand := fmt.Sprintf("mkdir -p %s && tar -C %s -xf -", remoteShellDir, remoteShellDir)
+	quotedDir := session.ShellQuote(remoteShellDir)
+	remoteCommand := fmt.Sprintf("mkdir -p %s && tar -C %s -xf -", quotedDir, quotedDir)
 	sshArgs = append(sshArgs, "sh -lc "+session.ShellQuote(remoteCommand))
 	sshCmd := exec.CommandContext(ctx, "ssh", sshArgs...)
 

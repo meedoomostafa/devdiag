@@ -23,6 +23,10 @@ func CacheDir() string {
 
 // WriteCache writes a manifest to the local session cache keyed by session ID.
 func WriteCache(manifest *Manifest) error {
+	if err := ValidateManifest(manifest); err != nil {
+		return fmt.Errorf("invalid manifest: %w", err)
+	}
+
 	dir := CacheDir()
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("mkdir cache: %w", err)
@@ -69,6 +73,9 @@ func ReadCache(kind, raw string) (*Manifest, error) {
 		if err := json.Unmarshal(data, &m); err != nil {
 			continue
 		}
+		if err := ValidateManifestIdentity(&m); err != nil {
+			continue
+		}
 		if m.Target.Raw != raw {
 			continue
 		}
@@ -109,6 +116,9 @@ func ListCache(kind, raw string) ([]*Manifest, error) {
 		if err := json.Unmarshal(data, &m); err != nil {
 			continue
 		}
+		if err := ValidateManifestIdentity(&m); err != nil {
+			continue
+		}
 		if m.Target.Raw != raw {
 			continue
 		}
@@ -137,6 +147,9 @@ func ReadCacheBySessionID(sessionID string) (*Manifest, error) {
 			continue
 		}
 		if m.SessionID == sessionID {
+			if err := ValidateManifestIdentity(&m); err != nil {
+				return nil, fmt.Errorf("matching session %s is invalid: %w", sessionID, err)
+			}
 			return &m, nil
 		}
 	}
