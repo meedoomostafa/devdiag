@@ -535,7 +535,7 @@ func TestInstallScriptContract(t *testing.T) {
 	for _, want := range []string{
 		"DEVDIAG_INSTALL_VERSION",
 		"GITHUB_TOKEN or GH_TOKEN",
-		"v0.2.3",
+		"v0.2.4",
 		"linux",
 		"go version",
 		"go build",
@@ -545,9 +545,35 @@ func TestInstallScriptContract(t *testing.T) {
 		"Authorization: Bearer",
 		"https://github.com/%s/archive",
 		"~/.local/bin",
+		"--add-to-path",
+		"--no-add-to-path",
+		"--print-path-command",
+		"--shell",
+		"metadata_path",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("install script missing %q:\n%s", want, script)
+		}
+	}
+
+	// Verify no curl | bash in README, CONTRIBUTING, or install.sh usage
+	for _, file := range []string{
+		filepath.Join("..", "..", "README.md"),
+		filepath.Join("..", "..", "CONTRIBUTING.md"),
+		filepath.Join("..", "..", "scripts", "install.sh"),
+	} {
+		contentBytes, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("failed to read %s: %v", file, err)
+		}
+		lines := strings.Split(string(contentBytes), "\n")
+		for idx, line := range lines {
+			if strings.Contains(line, "curl ") && (strings.Contains(line, "| bash") || strings.Contains(line, "| sh")) {
+				t.Errorf("unsafe pipe command found in %s on line %d: %s", file, idx+1, line)
+			}
+			if strings.Contains(line, "wget ") && (strings.Contains(line, "| bash") || strings.Contains(line, "| sh")) {
+				t.Errorf("unsafe pipe command found in %s on line %d: %s", file, idx+1, line)
+			}
 		}
 	}
 }

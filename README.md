@@ -69,7 +69,7 @@ Install a specific release:
 
 ```bash
 curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
-DEVDIAG_INSTALL_VERSION=v0.2.3 bash install.sh
+DEVDIAG_INSTALL_VERSION=v0.2.4 bash install.sh
 ```
 
 The installer supports Linux distributions with Bash, `tar`, `curl` or `wget`,
@@ -79,16 +79,16 @@ back to `~/.local/bin` otherwise.
 Useful installer options:
 
 ```bash
-# Install to a user-local directory.
+# Install to a user-local directory and configure PATH automatically.
 curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
-bash install.sh --bin-dir "$HOME/.local/bin"
+bash install.sh --bin-dir "$HOME/.local/bin" --add-to-path
 
-# Preview the detected archive, Go version, and install directory.
+# Preview the resolved release tag, archive URL, and local paths without mutating files.
 curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
 bash install.sh --dry-run
 
-# Install another Git ref for testing.
-DEVDIAG_INSTALL_VERSION=main bash scripts/install.sh --dry-run
+# Print manual PATH addition command instead of modifying profiles.
+bash install.sh --print-path-command
 ```
 
 For private repository installs, pass an authenticated GitHub token so the
@@ -98,6 +98,43 @@ installer can fetch the source archive:
 curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -o install.sh \
   https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
 GITHUB_TOKEN="$GITHUB_TOKEN" bash install.sh
+```
+
+### Self-Contained Clarification
+
+The installed DevDiag binary is a single Go binary built with CGO disabled.
+The installer itself requires Bash, tar, mktemp, Go 1.25+, and curl or wget.
+DevDiag may optionally call system tools such as Docker, Podman, kubectl,
+strace, systemctl, git, nvidia-smi, and language runtimes depending on the
+checks requested.
+
+## Update
+
+To update DevDiag, re-run the installer. It downloads the full source archive
+for the selected release, builds a fresh binary, and atomically replaces the
+previous binary. It does not download binary diffs.
+
+```bash
+curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
+bash install.sh
+```
+
+To preview the update plan without mutating anything:
+
+```bash
+devdiag update --dry-run
+```
+
+For manual PATH configuration:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Fish:
+
+```fish
+fish_add_path "$HOME/.local/bin"
 ```
 
 ## Common Commands

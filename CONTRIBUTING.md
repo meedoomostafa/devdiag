@@ -62,11 +62,11 @@ curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag
 bash install.sh
 ```
 
-Use a user-local install directory when `/usr/local/bin` is not writable:
+Use a user-local install directory and add it to PATH when `/usr/local/bin` is not writable:
 
 ```bash
 curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
-bash install.sh --bin-dir "$HOME/.local/bin"
+bash install.sh --bin-dir "$HOME/.local/bin" --add-to-path
 ```
 
 When the repository is private, use an authenticated raw download and pass the
