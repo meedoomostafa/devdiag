@@ -16,8 +16,8 @@ jobs:
       matrix:
         go-version: ['1.25', '1.26']
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: ${{ matrix.go-version }}
       - name: Build devdiag
@@ -40,7 +40,7 @@ jobs:
               env:
                 SECRET_URL: https://devdiag:secret123@example.invalid/resource
               steps:
-                - uses: actions/setup-node@v4
+                - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
                   with:
                     node-version: '20'
                 - run: npm test
@@ -73,7 +73,7 @@ jobs:
           jq -e '.schema_version and .collectors and .findings' "$report_path"
           sha256sum "$report_path" | tee "$RUNNER_TEMP/devdiag-report.sha256"
       - name: Download uploaded report artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: devdiag-report-${{ matrix.go-version }}
           path: ${{ runner.temp }}/devdiag-action-download

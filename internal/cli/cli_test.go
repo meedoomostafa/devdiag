@@ -423,7 +423,7 @@ func TestGitHubActionMetadataSupportsArtifactsSummaryAndConfigurableFindings(t *
 			}
 			devdiagRun = step.Run
 		}
-		if step.Uses == "actions/upload-artifact@v7" {
+		if step.Uses == "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" {
 			artifactStepFound = true
 			if step.If != "always()" {
 				t.Fatalf("upload-artifact if = %q, want always()", step.If)
@@ -480,7 +480,7 @@ func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 		"fail-severity: critical",
 		"mask-values: secret123",
 		"artifact-name: devdiag-report-${{ matrix.go-version }}",
-		"actions/download-artifact@v8",
+		"actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
 		"steps.allow.outputs.summary-written",
 		"jq -e '.schema_version and .collectors and .findings'",
 		"jq -e '.. | strings | select(contains(\"<redacted>\"))'",
