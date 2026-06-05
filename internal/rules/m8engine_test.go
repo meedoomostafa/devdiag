@@ -1027,3 +1027,44 @@ func TestCheckCI_ConfigIgnoresDeploymentSecrets(t *testing.T) {
 		t.Error("expected F-CI-ENV-DEPLOY-INFO finding")
 	}
 }
+
+func TestDeploymentOnlyCanBeOverriddenByLocalRequired(t *testing.T) {
+	e := NewM8Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "config", Evidence: []schema.Evidence{
+				{Source: "devdiag_ci_env_deployment_only", Value: "CONFLICT_VAR"},
+				{Source: "devdiag_ci_env_local_required", Value: "CONFLICT_VAR"},
+			}},
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_env__workflow__CONFLICT_VAR", Value: "some-val"},
+			}},
+			{Name: "env", Evidence: []schema.Evidence{
+				{Source: ".env", Value: "keys: OTHER_VAR"},
+			}},
+		},
+	}
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hasParity001, hasDeployInfo bool
+	for _, f := range findings {
+		if f.ID == "F-CI-ENV-001" {
+			if strings.Contains(f.Title, "CONFLICT_VAR") {
+				hasParity001 = true
+			}
+		}
+		if f.ID == "F-CI-ENV-DEPLOY-INFO" {
+			if strings.Contains(f.Title, "CONFLICT_VAR") {
+				hasDeployInfo = true
+			}
+		}
+	}
+	if !hasParity001 {
+		t.Error("expected CONFLICT_VAR to trigger F-CI-ENV-001 because local_required should override deployment_only")
+	}
+	if hasDeployInfo {
+		t.Error("CONFLICT_VAR should not be classified as deployment_only")
+	}
+}

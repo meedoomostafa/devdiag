@@ -257,12 +257,15 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 	var missingDeployKeys []string
 	for key := range allCIEnvKeys {
 		if !localEnvKeys[key] {
-			isDeploy := deploymentOnly[key] || (isDeploymentOnlyHeuristics(key) && !localRequired[key])
-			if isDeploy {
-				missingDeployKeys = append(missingDeployKeys, key)
-			} else {
+			if localRequired[key] {
 				missingLocalKeys = append(missingLocalKeys, key)
+				continue
 			}
+			if deploymentOnly[key] || isDeploymentOnlyHeuristics(key) {
+				missingDeployKeys = append(missingDeployKeys, key)
+				continue
+			}
+			missingLocalKeys = append(missingLocalKeys, key)
 		}
 	}
 	if len(missingLocalKeys) > 0 {
