@@ -67,6 +67,7 @@ jobs:
           test -n "$report_path"
           test -f "$report_path"
           test '${{ steps.allow.outputs.summary-written }}' = 'true'
+          grep -q '### DevDiag scan' "$GITHUB_STEP_SUMMARY"
           jq -e '.. | strings | select(contains("<redacted>"))' "$report_path" >/dev/null
           ! grep -q 'secret123' "$report_path"
           jq -e '.schema_version and .collectors and .findings' "$report_path"
