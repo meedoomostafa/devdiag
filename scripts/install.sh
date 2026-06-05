@@ -157,6 +157,11 @@ if [[ "${OS_NAME}" != "linux" ]]; then
 	exit 2
 fi
 
+# Support systems where Go is installed in /usr/local/go/bin but not on standard user PATH.
+if [[ -d "/usr/local/go/bin" ]]; then
+	export PATH="/usr/local/go/bin:${PATH}"
+fi
+
 need go
 need tar
 need mktemp
