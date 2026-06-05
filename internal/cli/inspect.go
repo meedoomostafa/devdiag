@@ -1,21 +1,30 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
 	"github.com/meedoomostafa/devdiag/internal/app"
+	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/output"
+	"github.com/meedoomostafa/devdiag/internal/schema"
 	"github.com/meedoomostafa/devdiag/internal/tui"
 )
 
-var inspectSaveReport bool
-var inspectCI bool
-var inspectRulePackPath string
+var (
+	inspectSaveReport   bool
+	inspectCI           bool
+	inspectRulePackPath string
+	inspectLatest       bool
+	inspectRunID        string
+	inspectReportPath   string
+)
 
 var inspectCmd = &cobra.Command{
 	Use:     "inspect [path]",
@@ -25,43 +34,165 @@ var inspectCmd = &cobra.Command{
 	RunE:    runInspect,
 }
 
-func runInspect(cmd *cobra.Command, args []string) error {
-	// Require a TTY for the interactive inspect workflow.
-	if !output.IsTTY(os.Stdout) || !output.IsTTY(os.Stdin) {
-		return exitCodeError{code: exitcode.InvalidInput}
+type loadedInspectReport struct {
+	report     *schema.Report
+	mode       tui.ModelMode
+	sourceName string
+	basePath   string
+}
+
+func countInspectSourceFlags(latest bool, runID string, reportPath string) int {
+	count := 0
+	if latest {
+		count++
+	}
+	if runID != "" {
+		count++
+	}
+	if reportPath != "" {
+		count++
+	}
+	return count
+}
+
+func loadReportFile(path string) (*schema.Report, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read report file: %w", err)
+	}
+	var r schema.Report
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, fmt.Errorf("parse report JSON: %w", err)
+	}
+	return &r, nil
+}
+
+func resolveInspectReport(args []string, latest bool, runID string, reportPath string) (*loadedInspectReport, error) {
+	flagCount := countInspectSourceFlags(latest, runID, reportPath)
+	if flagCount > 1 {
+		return nil, fmt.Errorf("flags --latest, --run-id, and --report are mutually exclusive")
 	}
 
+	if reportPath != "" {
+		if len(args) > 0 {
+			return nil, fmt.Errorf("--report and [path] cannot be combined")
+		}
+		rep, err := loadReportFile(reportPath)
+		if err != nil {
+			return nil, err
+		}
+		return &loadedInspectReport{
+			report:     rep,
+			mode:       tui.ModeReport,
+			sourceName: reportPath,
+			basePath:   ".",
+		}, nil
+	}
+
+	if runID != "" {
+		if err := artifact.ValidateRunID(runID); err != nil {
+			return nil, fmt.Errorf("invalid run ID: %w", err)
+		}
+		startPath := "."
+		if len(args) > 0 {
+			startPath = args[0]
+		}
+		base, err := artifact.DiscoverBase(startPath)
+		if err != nil {
+			base = startPath
+		}
+		targetPath := filepath.Join(artifact.RunDir(base, runID), "report.json")
+		rep, err := loadReportFile(targetPath)
+		if err != nil {
+			return nil, err
+		}
+		return &loadedInspectReport{
+			report:     rep,
+			mode:       tui.ModeRun,
+			sourceName: runID,
+			basePath:   base,
+		}, nil
+	}
+
+	if latest {
+		startPath := "."
+		if len(args) > 0 {
+			startPath = args[0]
+		}
+		base, err := artifact.DiscoverBase(startPath)
+		if err != nil {
+			base = startPath
+		}
+		latestID, err := artifact.FindLatestRunID(base)
+		if err != nil {
+			return nil, fmt.Errorf("find latest run ID: %w", err)
+		}
+		targetPath := filepath.Join(artifact.RunDir(base, latestID), "report.json")
+		rep, err := loadReportFile(targetPath)
+		if err != nil {
+			return nil, err
+		}
+		return &loadedInspectReport{
+			report:     rep,
+			mode:       tui.ModeRun,
+			sourceName: latestID,
+			basePath:   base,
+		}, nil
+	}
+
+	return nil, nil
+}
+
+func runInspect(cmd *cobra.Command, args []string) error {
 	logger := buildLogger()
 
-	if flagRedact == "off" {
-		logger.Warn("inspect", "redaction is disabled; secrets may be visible")
-	}
-
-	scanPath := "."
-	if len(args) > 0 {
-		scanPath = args[0]
-	}
-	absPath, err := resolveExistingDirectory(scanPath)
+	loaded, err := resolveInspectReport(args, inspectLatest, inspectRunID, inspectReportPath)
 	if err != nil {
 		logger.Error("inspect", err.Error())
 		return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
 	}
 
-	logger.Info("inspect", fmt.Sprintf("scanning path=%s", absPath))
-
-	opts := app.ScanOptions{
-		Path:         absPath,
-		Profile:      flagProfile,
-		RulePackPath: inspectRulePackPath,
-		RedactLevel:  flagRedact,
-		CI:           inspectCI,
+	// Require a TTY for the interactive inspect workflow.
+	if !output.IsTTY(os.Stdout) || !output.IsTTY(os.Stdin) {
+		return exitCodeError{code: exitcode.InvalidInput}
 	}
 
-	// Non-interactive parts (rule pack validation) may fail before TUI starts.
-	// We let the TUI handle scan errors; pre-flight validation is limited
-	// to what the CLI layer already enforces via PersistentPreRunE.
+	if flagRedact == "off" {
+		logger.Warn("inspect", "redaction is disabled; secrets may be visible")
+	}
 
-	model := tui.NewModel(opts, buildRedactEngine(), flagIncludeHidden)
+	var model tui.Model
+	var absPath string
+
+	if loaded != nil {
+		absPath = loaded.basePath
+		logger.Info("inspect", fmt.Sprintf("loading preloaded report mode=%v source=%s", loaded.mode, loaded.sourceName))
+		model = tui.NewReportModel(loaded.report, loaded.sourceName, loaded.mode, buildRedactEngine(), flagIncludeHidden)
+	} else {
+		scanPath := "."
+		if len(args) > 0 {
+			scanPath = args[0]
+		}
+		var err error
+		absPath, err = resolveExistingDirectory(scanPath)
+		if err != nil {
+			logger.Error("inspect", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+		}
+
+		logger.Info("inspect", fmt.Sprintf("scanning path=%s", absPath))
+
+		opts := app.ScanOptions{
+			Path:         absPath,
+			Profile:      flagProfile,
+			RulePackPath: inspectRulePackPath,
+			RedactLevel:  flagRedact,
+			CI:           inspectCI,
+		}
+
+		model = tui.NewScanModel(opts, buildRedactEngine(), flagIncludeHidden)
+	}
+
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	finalModel, err := p.Run()
 	if err != nil {
@@ -69,10 +200,8 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	}
 
 	// After the TUI exits, optionally persist the report if requested.
-	// The TUI model itself does not own persistence; the CLI layer does.
 	if inspectSaveReport {
 		if m, ok := finalModel.(tui.Model); ok && m.Report() != nil {
-			// Redact the final report using the same engine before persisting.
 			redacted := buildRedactEngine().RedactReport(m.Report())
 			if err := persistReport(absPath, redacted); err != nil {
 				logger.Warn("inspect", fmt.Sprintf("failed to persist report: %v", err))
@@ -87,5 +216,8 @@ func init() {
 	inspectCmd.Flags().BoolVar(&inspectSaveReport, "save-report", false, "Persist report under .devdiag/runs for fix and capsule commands")
 	inspectCmd.Flags().BoolVar(&inspectCI, "ci", false, "Force CI/local parity collection and evaluation")
 	inspectCmd.Flags().StringVar(&inspectRulePackPath, "rule-pack", "", "Evaluate an external deterministic rule pack")
+	inspectCmd.Flags().BoolVar(&inspectLatest, "latest", false, "Load the latest saved run report")
+	inspectCmd.Flags().StringVar(&inspectRunID, "run-id", "", "Load a saved run report by ID")
+	inspectCmd.Flags().StringVar(&inspectReportPath, "report", "", "Load a saved report JSON file path directly")
 	rootCmd.AddCommand(inspectCmd)
 }
