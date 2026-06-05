@@ -61,7 +61,7 @@ The module targets Go 1.25 as the minimum supported baseline. CI also gates Go
 Install the current release from source on Linux:
 
 ```bash
-curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.1/scripts/install.sh
 bash install.sh
 ```
 
@@ -73,11 +73,11 @@ Useful installer options:
 
 ```bash
 # Install to a user-local directory.
-curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.1/scripts/install.sh
 bash install.sh --bin-dir "$HOME/.local/bin"
 
 # Preview the detected archive, Go version, and install directory.
-curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.1/scripts/install.sh
 bash install.sh --dry-run
 
 # Install another Git ref for testing.
@@ -89,7 +89,7 @@ installer can fetch the source archive:
 
 ```bash
 curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -o install.sh \
-  https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh
+  https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.1/scripts/install.sh
 GITHUB_TOKEN="$GITHUB_TOKEN" bash install.sh
 ```
 

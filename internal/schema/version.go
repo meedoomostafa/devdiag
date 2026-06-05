@@ -2,6 +2,5 @@ package schema
 
 const (
 	SchemaVersion  = "0.1"
-	DevDiagVersion = "0.2.0"
+	DevDiagVersion = "0.2.1"
 )
-
