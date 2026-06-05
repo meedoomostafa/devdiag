@@ -58,13 +58,13 @@ XDG_CACHE_HOME=/tmp/devdiag-cache \
 Install from the release tag:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh | bash
 ```
 
 Use a user-local install directory when `/usr/local/bin` is not writable:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh | \
   bash -s -- --bin-dir "$HOME/.local/bin"
 ```
 
@@ -73,7 +73,7 @@ same token through for the archive download:
 
 ```bash
 curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
-  https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | \
+  https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh | \
   GITHUB_TOKEN="$GITHUB_TOKEN" bash
 ```
 

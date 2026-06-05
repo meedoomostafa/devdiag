@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="${DEVDIAG_REPO:-meedoomostafa/devdiag}"
-VERSION="${DEVDIAG_INSTALL_VERSION:-v0.1.0}"
+VERSION="${DEVDIAG_INSTALL_VERSION:-v0.2.0}"
 BIN_DIR="${DEVDIAG_BIN_DIR:-}"
 SHA256="${DEVDIAG_ARCHIVE_SHA256:-}"
 REQUIRE_CHECKSUM="${DEVDIAG_REQUIRE_CHECKSUM:-0}"
@@ -18,7 +18,7 @@ Usage:
   scripts/install.sh [--version <ref>] [--bin-dir <dir>] [--sha256 <hex>] [--dry-run]
 
 Environment:
-  DEVDIAG_INSTALL_VERSION  Git ref to install. Default: v0.1.0
+  DEVDIAG_INSTALL_VERSION  Git ref to install. Default: v0.2.0
   DEVDIAG_BIN_DIR          Install directory. Default: /usr/local/bin if writable, else ~/.local/bin
   DEVDIAG_REPO             GitHub repo owner/name. Default: meedoomostafa/devdiag
   DEVDIAG_ARCHIVE_SHA256   Expected SHA256 checksum of the source archive
@@ -26,8 +26,8 @@ Environment:
   GITHUB_TOKEN or GH_TOKEN GitHub token for private repository archive downloads
 
 Examples:
-  curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | bash
-  curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | bash -s -- --sha256 <hex>
+  curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh | bash -s -- --sha256 <hex>
   DEVDIAG_INSTALL_VERSION=main bash scripts/install.sh --dry-run
 USAGE
 }

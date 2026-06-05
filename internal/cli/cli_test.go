@@ -535,7 +535,7 @@ func TestInstallScriptContract(t *testing.T) {
 	for _, want := range []string{
 		"DEVDIAG_INSTALL_VERSION",
 		"GITHUB_TOKEN or GH_TOKEN",
-		"v0.1.0",
+		"v0.2.0",
 		"linux",
 		"go version",
 		"go build",
@@ -596,7 +596,7 @@ func TestReadmeAdvertisesCurlInstall(t *testing.T) {
 	}
 	readme := string(data)
 	for _, want := range []string{
-		"curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.1.0/scripts/install.sh | bash",
+		"curl -fsSL https://raw.githubusercontent.com/meedoomostafa/devdiag/v0.2.0/scripts/install.sh | bash",
 		"DEVDIAG_INSTALL_VERSION",
 		"scripts/install.sh",
 	} {
