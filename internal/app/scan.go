@@ -427,11 +427,13 @@ func (f defaultCollectorFactory) Build(opts ScanOptions) ([]collectors.Collector
 	}
 
 	if repoHasContainers {
-		allCollectors = append(allCollectors,
-			&docker.Collector{},
-			&podman.Collector{},
-			&composestatus.Collector{Root: absPath},
-		)
+		if repoHasDocker {
+			allCollectors = append(allCollectors, &docker.Collector{})
+		}
+		if repoHasPodman {
+			allCollectors = append(allCollectors, &podman.Collector{})
+		}
+		allCollectors = append(allCollectors, &composestatus.Collector{Root: absPath})
 	}
 
 	repoHasCI := repo.HasCISignal(absPath)

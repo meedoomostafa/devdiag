@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +90,63 @@ func newTestScanner(factory *fakeCollectorFactory, engines *fakeEngineFactory) *
 		RunID:            func() string { return "test-run-id" },
 		Now:              func() time.Time { return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) },
 	})
+}
+
+func TestDefaultCollectorFactory_DockerSignalDoesNotAddPodmanCollector(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/Dockerfile", []byte("FROM alpine\n"), 0o644); err != nil {
+		t.Fatalf("write Dockerfile: %v", err)
+	}
+
+	collectorList, signals := defaultCollectorFactory{}.Build(ScanOptions{Path: dir})
+	names := collectorNames(collectorList)
+
+	if !signals.HasDocker || signals.HasPodman || !signals.HasContainers {
+		t.Fatalf("signals = %+v, want docker-only container signal", signals)
+	}
+	if !hasCollectorName(names, "docker") {
+		t.Fatalf("docker collector missing from docker-only fixture: %v", names)
+	}
+	if hasCollectorName(names, "podman") {
+		t.Fatalf("podman collector should not run for docker-only fixture: %v", names)
+	}
+}
+
+func TestDefaultCollectorFactory_PodmanSignalDoesNotAddDockerCollector(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/Containerfile", []byte("FROM alpine\n"), 0o644); err != nil {
+		t.Fatalf("write Containerfile: %v", err)
+	}
+
+	collectorList, signals := defaultCollectorFactory{}.Build(ScanOptions{Path: dir})
+	names := collectorNames(collectorList)
+
+	if signals.HasDocker || !signals.HasPodman || !signals.HasContainers {
+		t.Fatalf("signals = %+v, want podman-only container signal", signals)
+	}
+	if !hasCollectorName(names, "podman") {
+		t.Fatalf("podman collector missing from podman-only fixture: %v", names)
+	}
+	if hasCollectorName(names, "docker") {
+		t.Fatalf("docker collector should not run for podman-only fixture: %v", names)
+	}
+}
+
+func collectorNames(collectorList []collectors.Collector) []string {
+	names := make([]string, len(collectorList))
+	for i, collector := range collectorList {
+		names[i] = collector.Name()
+	}
+	return names
+}
+
+func hasCollectorName(names []string, want string) bool {
+	for _, name := range names {
+		if name == want {
+			return true
+		}
+	}
+	return false
 }
 
 func eventTypes(events []Event) []EventType {

@@ -39,8 +39,10 @@ var reproCmd = &cobra.Command{
 
 		command := args[0]
 		cmdArgs := args[1:]
+		redactedCommand := redactEngine.RedactString(command, "repro_command")
+		redactedArgsList := redactArgs(cmdArgs, redactEngine)
 
-		logger.Info("repro", fmt.Sprintf("running command=%s args=%v timeout=%v", command, cmdArgs, reproTimeout))
+		logger.Info("repro", fmt.Sprintf("running command=%s args=%v timeout=%v", redactedCommand, redactedArgsList, reproTimeout))
 
 		runner := repro.NewRunner()
 		runner.Redactor = redactEngine
@@ -49,7 +51,6 @@ var reproCmd = &cobra.Command{
 		}
 
 		runID := generateRunID()
-		redactedArgsList := redactArgs(cmdArgs, redactEngine)
 		redactedArgs := strings.Join(redactedArgsList, " ")
 		ndjsonStarted := flagFormat == "ndjson"
 		if ndjsonStarted {

@@ -3359,6 +3359,29 @@ func TestReproCommand_PersistsRedactedRunArtifacts(t *testing.T) {
 	}
 }
 
+func TestReproCommand_RedactsStartupLogArgs(t *testing.T) {
+	dir := t.TempDir()
+
+	stdout, stderr, code := runBinaryInDir(
+		dir,
+		"repro",
+		"--format",
+		"json",
+		"--",
+		"printf",
+		"API_KEY=secret123\n",
+	)
+	if code != 0 {
+		t.Fatalf("repro exit code = %d, want 0; stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	if strings.Contains(stderr, "secret123") {
+		t.Fatalf("repro startup log leaked secret: %s", stderr)
+	}
+	if !strings.Contains(stderr, "API_KEY=<redacted>") {
+		t.Fatalf("repro startup log missing redaction marker: %s", stderr)
+	}
+}
+
 func TestReproCommand_RuntimeVersionFailureFinding(t *testing.T) {
 	dir := t.TempDir()
 
