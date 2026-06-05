@@ -75,6 +75,9 @@ var scanCmd = &cobra.Command{
 		if humanRenderer, ok := renderer.(*output.HumanRenderer); ok {
 			humanRenderer.HiddenCount = summary.Hidden
 		}
+		if mdRenderer, ok := renderer.(*output.MarkdownRenderer); ok {
+			mdRenderer.HiddenCount = summary.Hidden
+		}
 		if err := renderer.Render(filtered, cmd.OutOrStdout()); err != nil {
 			return err
 		}
