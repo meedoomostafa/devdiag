@@ -29,6 +29,9 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 	var repoEvs []schema.Evidence
 	ignoreMissingLocal := make(map[string]bool)
 	ignoreMissingCI := make(map[string]bool)
+	localRequired := make(map[string]bool)
+	deploymentOnly := make(map[string]bool)
+	ciOnly := make(map[string]bool)
 	var hostShell string
 	var devcontainerImage string
 
@@ -59,7 +62,7 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 				}
 			}
 		case "config":
-			collectM8Config(c.Evidence, ignoreMissingLocal, ignoreMissingCI)
+			collectM8Config(c.Evidence, ignoreMissingLocal, ignoreMissingCI, localRequired, deploymentOnly, ciOnly)
 		}
 	}
 
@@ -85,6 +88,9 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 				continue
 			}
 			if ignoreMissingLocal[key] {
+				continue
+			}
+			if ciOnly[key] {
 				continue
 			}
 			allCIEnvKeys[key] = true
@@ -248,9 +254,15 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 
 	// Check env parity
 	var missingLocalKeys []string
+	var missingDeployKeys []string
 	for key := range allCIEnvKeys {
 		if !localEnvKeys[key] {
-			missingLocalKeys = append(missingLocalKeys, key)
+			isDeploy := deploymentOnly[key] || (isDeploymentOnlyHeuristics(key) && !localRequired[key])
+			if isDeploy {
+				missingDeployKeys = append(missingDeployKeys, key)
+			} else {
+				missingLocalKeys = append(missingLocalKeys, key)
+			}
 		}
 	}
 	if len(missingLocalKeys) > 0 {
@@ -264,6 +276,20 @@ func (e *M8Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 			Evidence:   envKeyEvidence("ci_env", missingLocalKeys),
 			LikelyCauses: []string{
 				"Local .env is out of date with CI configuration",
+			},
+		})
+	}
+	if len(missingDeployKeys) > 0 {
+		sort.Strings(missingDeployKeys)
+		findings = append(findings, schema.Finding{
+			ID:         "F-CI-ENV-DEPLOY-INFO",
+			Title:      fmt.Sprintf("CI deployment env vars not found locally: %s", summarizeKeysForTitle(missingDeployKeys)),
+			Severity:   schema.SeverityInfo,
+			Confidence: 0.6,
+			Symptom:    "One or more CI deployment/secrets environment variables are not present locally",
+			Evidence:   envKeyEvidence("ci_env", missingDeployKeys),
+			LikelyCauses: []string{
+				"Variables are deployment-only or secrets meant only for production/CI environments",
 			},
 		})
 	}
@@ -407,7 +433,7 @@ func ciEnvKey(source string) (key string, ok bool) {
 	return "", false
 }
 
-func collectM8Config(evidence []schema.Evidence, ignoreMissingLocal, ignoreMissingCI map[string]bool) {
+func collectM8Config(evidence []schema.Evidence, ignoreMissingLocal, ignoreMissingCI, localRequired, deploymentOnly, ciOnly map[string]bool) {
 	for _, ev := range evidence {
 		key := strings.TrimSpace(ev.Value)
 		if key == "" {
@@ -418,8 +444,37 @@ func collectM8Config(evidence []schema.Evidence, ignoreMissingLocal, ignoreMissi
 			ignoreMissingLocal[key] = true
 		case "devdiag_ci_env_ignore_missing_ci":
 			ignoreMissingCI[key] = true
+		case "devdiag_ci_env_local_required":
+			localRequired[key] = true
+		case "devdiag_ci_env_deployment_only":
+			deploymentOnly[key] = true
+		case "devdiag_ci_env_ci_only":
+			ciOnly[key] = true
 		}
 	}
+}
+
+func isDeploymentOnlyHeuristics(key string) bool {
+	key = strings.ToUpper(key)
+	if strings.HasPrefix(key, "OCI_") {
+		return true
+	}
+	if strings.HasSuffix(key, "_SSH_PRIVATE_KEY") {
+		return true
+	}
+	if strings.HasSuffix(key, "_KNOWN_HOSTS") {
+		return true
+	}
+	if key == "RELEASE_SHA" || key == "CONFIRM_DEPLOY" {
+		return true
+	}
+	if strings.HasSuffix(key, "_PRODUCTION_URL") {
+		return true
+	}
+	if strings.HasSuffix(key, "_DEPLOY_PATH") {
+		return true
+	}
+	return false
 }
 
 func summarizeCommandForTitle(command string) string {

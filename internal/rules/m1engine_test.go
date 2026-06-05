@@ -1378,3 +1378,60 @@ func containsString(values []string, want string) bool {
 	}
 	return false
 }
+
+func TestEnvConfigIgnoresOptionalMissingKeys(t *testing.T) {
+	engine := NewM1Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{
+				Name: "config",
+				Evidence: []schema.Evidence{
+					{Source: "devdiag_env_ignore_missing", Value: "NEXUQ_POSTGRES_PASSWORD"},
+					{Source: "devdiag_env_optional", Value: "NEXUQ_WEBHOOK_SECRET"},
+					{Source: "devdiag_env_required", Value: "NEXUQ_REQUIRED_PORT"},
+				},
+			},
+			{
+				Name: "env",
+				Evidence: []schema.Evidence{
+					{Source: "missing_keys", Value: "NEXUQ_POSTGRES_PASSWORD, NEXUQ_WEBHOOK_SECRET, NEXUQ_REQUIRED_PORT, NEXUQ_OTHER_PORT"},
+				},
+			},
+		},
+	}
+
+	findings, err := engine.Evaluate(snapshot)
+	if err != nil {
+		t.Fatalf("Evaluate error: %v", err)
+	}
+
+	var hasMedium, hasInfo bool
+	for _, f := range findings {
+		if f.ID == "F-ENV-001" {
+			if f.Severity == schema.SeverityMedium {
+				hasMedium = true
+				if strings.Contains(f.Title, "NEXUQ_POSTGRES_PASSWORD") {
+					t.Error("NEXUQ_POSTGRES_PASSWORD should be ignored")
+				}
+				if !strings.Contains(f.Title, "NEXUQ_REQUIRED_PORT") {
+					t.Error("expected NEXUQ_REQUIRED_PORT in medium severity finding")
+				}
+			} else if f.Severity == schema.SeverityInfo {
+				hasInfo = true
+				if !strings.Contains(f.Title, "NEXUQ_WEBHOOK_SECRET") {
+					t.Error("expected NEXUQ_WEBHOOK_SECRET in optional/info severity finding")
+				}
+				if !strings.Contains(f.Title, "NEXUQ_OTHER_PORT") {
+					t.Error("expected NEXUQ_OTHER_PORT in optional/info severity finding")
+				}
+			}
+		}
+	}
+
+	if !hasMedium {
+		t.Error("expected medium severity F-ENV-001 finding")
+	}
+	if !hasInfo {
+		t.Error("expected info severity F-ENV-001 finding for optional keys")
+	}
+}

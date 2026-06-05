@@ -958,3 +958,72 @@ func TestM8Engine_NoCINoFindings(t *testing.T) {
 		t.Errorf("expected no findings without CI evidence, got %d", len(findings))
 	}
 }
+
+func TestCheckCI_ConfigIgnoresDeploymentSecrets(t *testing.T) {
+	e := NewM8Engine()
+	snapshot := graph.NormalizedSnapshot{
+		Collectors: []schema.CollectorResult{
+			{Name: "config", Evidence: []schema.Evidence{
+				{Source: "devdiag_ci_env_deployment_only", Value: "CONFIRM_DEPLOY"},
+				{Source: "devdiag_ci_env_local_required", Value: "REQUIRED_LOCAL_VAR"},
+				{Source: "devdiag_ci_env_ci_only", Value: "DOTNET_VERSION"},
+			}},
+			{Name: "ci", Evidence: []schema.Evidence{
+				{Source: "ci_env__workflow__CONFIRM_DEPLOY", Value: "deploy-v1"},
+				{Source: "ci_env__workflow__OCI_SSH_PRIVATE_KEY", Value: "${{ secrets.OCI_SSH_PRIVATE_KEY }}"},
+				{Source: "ci_env__workflow__REQUIRED_LOCAL_VAR", Value: "some-val"},
+				{Source: "ci_env__workflow__DOTNET_VERSION", Value: "8.0"},
+				{Source: "ci_env__workflow__NORMAL_CI_VAR", Value: "normal"},
+			}},
+			{Name: "env", Evidence: []schema.Evidence{
+				{Source: ".env", Value: "keys: OTHER_LOCAL_VAR"},
+			}},
+		},
+	}
+
+	findings, err := e.Evaluate(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var hasParity001, hasDeployInfo bool
+	for _, f := range findings {
+		if f.ID == "F-CI-ENV-001" {
+			hasParity001 = true
+			if strings.Contains(f.Title, "CONFIRM_DEPLOY") {
+				t.Error("CONFIRM_DEPLOY should not trigger F-CI-ENV-001")
+			}
+			if strings.Contains(f.Title, "OCI_SSH_PRIVATE_KEY") {
+				t.Error("OCI_SSH_PRIVATE_KEY should not trigger F-CI-ENV-001")
+			}
+			if strings.Contains(f.Title, "DOTNET_VERSION") {
+				t.Error("DOTNET_VERSION should not trigger F-CI-ENV-001")
+			}
+			if !strings.Contains(f.Title, "REQUIRED_LOCAL_VAR") {
+				t.Error("expected REQUIRED_LOCAL_VAR in F-CI-ENV-001")
+			}
+			if !strings.Contains(f.Title, "NORMAL_CI_VAR") {
+				t.Error("expected NORMAL_CI_VAR in F-CI-ENV-001")
+			}
+		}
+		if f.ID == "F-CI-ENV-DEPLOY-INFO" {
+			hasDeployInfo = true
+			if f.Severity != schema.SeverityInfo {
+				t.Errorf("expected SeverityInfo for F-CI-ENV-DEPLOY-INFO, got %s", f.Severity)
+			}
+			if !strings.Contains(f.Title, "CONFIRM_DEPLOY") {
+				t.Error("expected CONFIRM_DEPLOY in F-CI-ENV-DEPLOY-INFO")
+			}
+			if !strings.Contains(f.Title, "OCI_SSH_PRIVATE_KEY") {
+				t.Error("expected OCI_SSH_PRIVATE_KEY in F-CI-ENV-DEPLOY-INFO")
+			}
+		}
+	}
+
+	if !hasParity001 {
+		t.Error("expected F-CI-ENV-001 finding")
+	}
+	if !hasDeployInfo {
+		t.Error("expected F-CI-ENV-DEPLOY-INFO finding")
+	}
+}

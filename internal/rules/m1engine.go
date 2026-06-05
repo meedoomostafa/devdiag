@@ -31,7 +31,7 @@ func (e *M1Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 	for _, c := range snapshot.Collectors {
 		switch c.Name {
 		case "env":
-			findings = append(findings, e.envRules(c)...)
+			findings = append(findings, e.envRules(c, collectorMap)...)
 		case "compose":
 			findings = append(findings, e.composeRules(c, collectorMap)...)
 		case "git":
@@ -75,9 +75,26 @@ func (e *M1Engine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Finding
 }
 
 // envRules creates findings from env collector evidence.
-func (e *M1Engine) envRules(result schema.CollectorResult) []schema.Finding {
+func (e *M1Engine) envRules(result schema.CollectorResult, collectors map[string]schema.CollectorResult) []schema.Finding {
 	var findings []schema.Finding
 	var envMissing, envExampleKeys []string
+
+	ignoreMissing := make(map[string]bool)
+	optionalKeys := make(map[string]bool)
+	requiredKeys := make(map[string]bool)
+
+	if configResult, ok := collectors["config"]; ok {
+		for _, ev := range configResult.Evidence {
+			switch ev.Source {
+			case "devdiag_env_ignore_missing":
+				ignoreMissing[ev.Value] = true
+			case "devdiag_env_optional":
+				optionalKeys[ev.Value] = true
+			case "devdiag_env_required":
+				requiredKeys[ev.Value] = true
+			}
+		}
+	}
 
 	for _, ev := range result.Evidence {
 		switch ev.Source {
@@ -92,31 +109,88 @@ func (e *M1Engine) envRules(result schema.CollectorResult) []schema.Finding {
 		case "missing_keys":
 			// keys present in .env.example but not in .env
 			missing := strings.Split(ev.Value, ", ")
-			findings = append(findings, schema.Finding{
-				ID:           "F-ENV-001",
-				Title:        fmt.Sprintf("Missing env keys from .env: %s", strings.Join(missing, ", ")),
-				Severity:     schema.SeverityMedium,
-				Confidence:   0.7,
-				Symptom:      "Keys defined in .env.example are not present in .env",
-				Evidence:     []schema.Evidence{ev},
-				LikelyCauses: []string{".env file not created from .env.example"},
-				FixHints:     []string{"add-env-placeholder"},
-			})
+			var filteredMissing []string
+			var filteredOptional []string
+			for _, k := range missing {
+				k = strings.TrimSpace(k)
+				if k == "" {
+					continue
+				}
+				if ignoreMissing[k] {
+					continue
+				}
+				if len(requiredKeys) > 0 && !requiredKeys[k] {
+					filteredOptional = append(filteredOptional, k)
+					continue
+				}
+				if optionalKeys[k] {
+					filteredOptional = append(filteredOptional, k)
+					continue
+				}
+				filteredMissing = append(filteredMissing, k)
+			}
+
+			if len(filteredMissing) > 0 {
+				findings = append(findings, schema.Finding{
+					ID:           "F-ENV-001",
+					Title:        fmt.Sprintf("Missing env keys from .env: %s", strings.Join(filteredMissing, ", ")),
+					Severity:     schema.SeverityMedium,
+					Confidence:   0.7,
+					Symptom:      "Keys defined in .env.example are not present in .env",
+					Evidence:     []schema.Evidence{{Source: "missing_keys", Value: strings.Join(filteredMissing, ", ")}},
+					LikelyCauses: []string{".env file not created from .env.example"},
+					FixHints:     []string{"add-env-placeholder"},
+				})
+			}
+			if len(filteredOptional) > 0 {
+				findings = append(findings, schema.Finding{
+					ID:           "F-ENV-001",
+					Title:        fmt.Sprintf("Optional env keys missing from .env: %s", strings.Join(filteredOptional, ", ")),
+					Severity:     schema.SeverityInfo,
+					Confidence:   0.7,
+					Symptom:      "Optional keys defined in .env.example are not present in .env",
+					Evidence:     []schema.Evidence{{Source: "missing_optional_keys", Value: strings.Join(filteredOptional, ", ")}},
+					LikelyCauses: []string{"Optional env variables were not configured locally"},
+				})
+			}
 		}
 	}
 
 	// Missing .env file entirely
 	if len(envMissing) > 0 && len(envExampleKeys) > 0 {
-		findings = append(findings, schema.Finding{
-			ID:           "F-ENV-001",
-			Title:        ".env.example exists but no local .env was found",
-			Severity:     schema.SeverityMedium,
-			Confidence:   0.5,
-			Symptom:      ".env.example exists but .env is missing",
-			Evidence:     result.Evidence,
-			LikelyCauses: []string{"Project may require local env vars but .env is not present"},
-			FixHints:     []string{"add-env-placeholder"},
-		})
+		var activeExampleKeys []string
+		for _, k := range envExampleKeys {
+			k = strings.TrimSpace(k)
+			if k != "" && !ignoreMissing[k] {
+				activeExampleKeys = append(activeExampleKeys, k)
+			}
+		}
+		if len(activeExampleKeys) > 0 {
+			allOptional := true
+			for _, k := range activeExampleKeys {
+				if len(requiredKeys) > 0 && !requiredKeys[k] {
+					continue
+				}
+				if !optionalKeys[k] {
+					allOptional = false
+					break
+				}
+			}
+			sev := schema.SeverityMedium
+			if allOptional {
+				sev = schema.SeverityInfo
+			}
+			findings = append(findings, schema.Finding{
+				ID:           "F-ENV-001",
+				Title:        ".env.example exists but no local .env was found",
+				Severity:     sev,
+				Confidence:   0.5,
+				Symptom:      ".env.example exists but .env is missing",
+				Evidence:     result.Evidence,
+				LikelyCauses: []string{"Project may require local env vars but .env is not present"},
+				FixHints:     []string{"add-env-placeholder"},
+			})
+		}
 	}
 
 	return findings
