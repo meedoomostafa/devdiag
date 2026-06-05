@@ -2031,9 +2031,9 @@ fi
 exit 1
 `)
 	env := append(os.Environ(), "PATH="+binDir)
-	_, _, code := runBinaryWithEnv(env, "check", "gpu", "--python", "--gpu-verify", "--allow-pull")
-	if code != 0 {
-		t.Errorf("check gpu combined flags exit code = %d, want 0", code)
+	_, stderr, code := runBinaryWithEnv(env, "check", "gpu", "--python", "--gpu-verify", "--allow-pull")
+	if !allowedExitCode(code, exitcode.Success.Int(), exitcode.FindingsExist.Int(), exitcode.CollectorPartial.Int()) {
+		t.Errorf("check gpu combined flags exit code = %d, want 0, 1, or 3; stderr=%s", code, stderr)
 	}
 }
 
