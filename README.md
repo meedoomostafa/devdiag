@@ -69,7 +69,7 @@ Install a specific release:
 
 ```bash
 curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
-DEVDIAG_INSTALL_VERSION=v0.2.5 bash install.sh
+DEVDIAG_INSTALL_VERSION=v0.2.6 bash install.sh
 ```
 
 The installer supports Linux distributions with Bash, `tar`, `curl` or `wget`,
@@ -110,13 +110,13 @@ checks requested.
 
 ## Update
 
-To update DevDiag, re-run the installer. It downloads the full source archive
-for the selected release, builds a fresh binary, and atomically replaces the
-previous binary. It does not download binary diffs.
+To update DevDiag, run the updater. It resolves the latest GitHub Release,
+downloads that release's installer, builds a fresh binary from the source
+archive, and atomically replaces the previous binary. It does not download
+binary diffs.
 
 ```bash
-curl -fsSL -o install.sh https://raw.githubusercontent.com/meedoomostafa/devdiag/main/scripts/install.sh
-bash install.sh
+devdiag update
 ```
 
 To preview the update plan without mutating anything:

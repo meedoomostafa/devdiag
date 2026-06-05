@@ -136,7 +136,7 @@ func TestInstaller_ResolveLatestMocked(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"tag_name":"v0.2.5"}`)
+		fmt.Fprintln(w, `{"tag_name":"v0.2.6"}`)
 	}))
 	defer ts.Close()
 
@@ -148,8 +148,8 @@ func TestInstaller_ResolveLatestMocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v, stderr: %s", err, stderr)
 	}
-	if !strings.Contains(stdout, "resolved_version=0.2.5") {
-		t.Fatalf("expected resolved version 0.2.5, got output: %s", stdout)
+	if !strings.Contains(stdout, "resolved_version=0.2.6") {
+		t.Fatalf("expected resolved version 0.2.6, got output: %s", stdout)
 	}
 }
 
@@ -261,7 +261,7 @@ func runUpdateCmd(env []string, args ...string) (string, string, int) {
 func TestUpdate_MetadataMissing(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"tag_name":"v0.2.5"}`)
+		fmt.Fprintln(w, `{"tag_name":"v0.2.7"}`)
 	}))
 	defer ts.Close()
 
@@ -285,7 +285,7 @@ func TestUpdate_MetadataMissing(t *testing.T) {
 func TestUpdate_MetadataMalformed(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"tag_name":"v0.2.5"}`)
+		fmt.Fprintln(w, `{"tag_name":"v0.2.6"}`)
 	}))
 	defer ts.Close()
 
@@ -317,6 +317,47 @@ func TestUpdate_MetadataMalformed(t *testing.T) {
 func TestUpdate_AlreadyLatest(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"tag_name":"v0.2.6"}`)
+	}))
+	defer ts.Close()
+
+	tempHome := t.TempDir()
+	metadataDir := filepath.Join(tempHome, ".config", "devdiag")
+	if err := os.MkdirAll(metadataDir, 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	metadataContent := `{
+		"schema_version": "1",
+		"repo": "meedoomostafa/devdiag",
+		"source_ref": "v0.2.6",
+		"resolved_version": "0.2.6",
+		"install_dir": "/mock/bin",
+		"binary_path": "/mock/bin/devdiag",
+		"install_method": "source-archive"
+	}`
+	if err := os.WriteFile(filepath.Join(metadataDir, "install.json"), []byte(metadataContent), 0o644); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	env := append(os.Environ(),
+		"HOME="+tempHome,
+		"XDG_CONFIG_HOME="+tempHome+"/.config",
+		"DEVDIAG_GITHUB_API_BASE_URL="+ts.URL,
+	)
+
+	stdout, stderr, code := runUpdateCmd(env, "--dry-run")
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d. stderr: %s", code, stderr)
+	}
+
+	if !strings.Contains(stdout, "action: already_up_to_date") {
+		t.Errorf("expected already_up_to_date, got: %s", stdout)
+	}
+}
+
+func TestUpdate_CurrentNewerThanLatestDoesNotDowngrade(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `{"tag_name":"v0.2.5"}`)
 	}))
 	defer ts.Close()
@@ -329,8 +370,8 @@ func TestUpdate_AlreadyLatest(t *testing.T) {
 	metadataContent := `{
 		"schema_version": "1",
 		"repo": "meedoomostafa/devdiag",
-		"source_ref": "v0.2.5",
-		"resolved_version": "0.2.5",
+		"source_ref": "v0.2.6",
+		"resolved_version": "0.2.6",
 		"install_dir": "/mock/bin",
 		"binary_path": "/mock/bin/devdiag",
 		"install_method": "source-archive"
@@ -358,7 +399,7 @@ func TestUpdate_AlreadyLatest(t *testing.T) {
 func TestUpdate_UpdateAvailable(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"tag_name":"v0.2.6"}`)
+		fmt.Fprintln(w, `{"tag_name":"v0.2.7"}`)
 	}))
 	defer ts.Close()
 
@@ -443,13 +484,77 @@ func TestUpdate_TokenProtected(t *testing.T) {
 	}
 }
 
-func TestUpdate_MutatingRejectedExits2(t *testing.T) {
-	_, stderr, code := runUpdateCmd(nil)
-	if code != 2 {
-		t.Fatalf("expected exit code 2, got %d. stderr: %s", code, stderr)
+func TestUpdate_ApplyRunsInstallerForLatestRelease(t *testing.T) {
+	tempHome := t.TempDir()
+	binDir := filepath.Join(tempHome, "bin")
+	metadataDir := filepath.Join(tempHome, ".config", "devdiag")
+	if err := os.MkdirAll(metadataDir, 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
 	}
-	if !strings.Contains(stderr, "devdiag update apply is not implemented yet; use install.sh to update.") {
-		t.Fatalf("unexpected stderr: %s", stderr)
+	metadataContent := fmt.Sprintf(`{
+		"schema_version": "1",
+		"repo": "meedoomostafa/devdiag",
+		"source_ref": "v0.2.4",
+		"resolved_version": "0.2.4",
+		"install_dir": %q,
+		"binary_path": %q,
+		"install_method": "source-archive"
+	}`, binDir, filepath.Join(binDir, "devdiag"))
+	if err := os.WriteFile(filepath.Join(metadataDir, "install.json"), []byte(metadataContent), 0o644); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	var installerEnv string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/meedoomostafa/devdiag/releases/latest":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintln(w, `{"tag_name":"v0.2.7"}`)
+		case "/install.sh":
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprintln(w, `#!/usr/bin/env bash`)
+			fmt.Fprintln(w, `set -euo pipefail`)
+			fmt.Fprintln(w, `echo "installer_version=${DEVDIAG_INSTALL_VERSION}"`)
+			fmt.Fprintln(w, `echo "installer_bin_dir=${DEVDIAG_BIN_DIR}"`)
+			fmt.Fprintln(w, `echo "installer_repo=${DEVDIAG_REPO}"`)
+			fmt.Fprintln(w, `mkdir -p "${DEVDIAG_BIN_DIR}"`)
+			fmt.Fprintln(w, `printf '#!/usr/bin/env bash\necho updated\n' > "${DEVDIAG_BIN_DIR}/devdiag"`)
+			fmt.Fprintln(w, `chmod 0755 "${DEVDIAG_BIN_DIR}/devdiag"`)
+			fmt.Fprintln(w, `installerEnv="${DEVDIAG_INSTALL_VERSION}|${DEVDIAG_BIN_DIR}|${DEVDIAG_REPO}"`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	env := append(os.Environ(),
+		"HOME="+tempHome,
+		"XDG_CONFIG_HOME="+tempHome+"/.config",
+		"DEVDIAG_GITHUB_API_BASE_URL="+ts.URL,
+		"DEVDIAG_INSTALL_SCRIPT_URL="+ts.URL+"/install.sh",
+	)
+
+	stdout, stderr, code := runUpdateCmd(env)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d. stdout: %s stderr: %s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "action: applying_update") {
+		t.Fatalf("expected applying_update, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "installer_version=v0.2.7") {
+		t.Fatalf("installer did not receive latest version: %s", stdout)
+	}
+	if !strings.Contains(stdout, "installer_bin_dir="+binDir) {
+		t.Fatalf("installer did not receive metadata bin dir: %s", stdout)
+	}
+	if !strings.Contains(stdout, "action: updated") {
+		t.Fatalf("expected updated action, got: %s", stdout)
+	}
+	if installerEnv != "" {
+		t.Fatalf("test server should not mutate local variables from served shell script")
+	}
+	if _, err := os.Stat(filepath.Join(binDir, "devdiag")); err != nil {
+		t.Fatalf("expected fake installer to write devdiag binary: %v", err)
 	}
 }
 
