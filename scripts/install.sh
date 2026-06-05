@@ -222,8 +222,9 @@ tar -xzf "${ARCHIVE}" -C "${SRC_DIR}" --strip-components=1
 
 (
 	cd "${SRC_DIR}"
+	APP_VERSION="${VERSION#v}"
 	CGO_ENABLED=0 go build -trimpath \
-		-ldflags "-s -w -X github.com/meedoomostafa/devdiag/internal/version.Version=${VERSION}" \
+		-ldflags "-s -w -X github.com/meedoomostafa/devdiag/internal/version.Version=${APP_VERSION}" \
 		-o "${OUT}" ./cmd/devdiag
 )
 
