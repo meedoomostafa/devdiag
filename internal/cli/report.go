@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -19,6 +20,7 @@ var (
 	reportRunID        string
 	reportPath         string
 	reportBaselinePath string
+	reportNoBaseline   bool
 )
 
 var reportCmd = &cobra.Command{
@@ -29,6 +31,10 @@ var reportCmd = &cobra.Command{
 		logger := buildLogger()
 		colorMode := buildColorMode()
 		redactEngine := buildRedactEngine()
+
+		if reportBaselinePath != "" && reportNoBaseline {
+			return exitCodeError{code: exitcode.InvalidInput, message: "flags --baseline and --no-baseline are mutually exclusive"}
+		}
 
 		flagCount := countSourceFlags(reportLatest, reportRunID, reportPath)
 		if flagCount == 0 {
@@ -91,24 +97,33 @@ var reportCmd = &cobra.Command{
 
 		// Build relevance policy and apply baseline if available.
 		policy := relevance.PolicyFromReport(redacted, flagIncludeHidden)
-		baselinePath := reportBaselinePath
-		if baselinePath == "" && reportPath == "" {
-			// For --latest / --run-id modes, auto-discover baseline from base.
-			startPath := "."
-			if len(args) > 0 {
-				startPath = args[0]
+		if !reportNoBaseline {
+			baselinePath := reportBaselinePath
+			explicit := reportBaselinePath != ""
+			if explicit {
+				var err error
+				baselinePath, err = filepath.Abs(reportBaselinePath)
+				if err != nil {
+					return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+				}
+			} else if reportPath == "" {
+				// For --latest / --run-id modes, auto-discover baseline from base.
+				startPath := "."
+				if len(args) > 0 {
+					startPath = args[0]
+				}
+				if discoveredBase, err := artifact.DiscoverBase(startPath); err == nil {
+					baselinePath = baseline.DefaultPath(discoveredBase)
+				}
 			}
-			if discoveredBase, err := artifact.DiscoverBase(startPath); err == nil {
-				baselinePath = baseline.DefaultPath(discoveredBase)
+			if baselinePath != "" {
+				b, err := loadBaselineForCommand(baselinePath, explicit)
+				if err != nil {
+					logger.Error("baseline", err.Error())
+					return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load baseline: %v", err)}
+				}
+				relevance.ApplyBaseline(&policy, b, time.Now())
 			}
-		}
-		if baselinePath != "" {
-			b, err := baseline.Load(baselinePath)
-			if err != nil {
-				logger.Error("baseline", err.Error())
-				return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load baseline: %v", err)}
-			}
-			relevance.ApplyBaseline(&policy, b, time.Now())
 		}
 
 		// Filter using relevance rules, including --include-hidden
@@ -140,5 +155,6 @@ func init() {
 	reportCmd.Flags().StringVar(&reportRunID, "run-id", "", "Load a saved run report by ID")
 	reportCmd.Flags().StringVar(&reportPath, "report", "", "Load a saved report JSON file path directly")
 	reportCmd.Flags().StringVar(&reportBaselinePath, "baseline", "", "Path to baseline file (required for --report mode; auto-discovered for --latest/--run-id)")
+	reportCmd.Flags().BoolVar(&reportNoBaseline, "no-baseline", false, "Disable baseline suppressions for the report (mutually exclusive with --baseline)")
 	rootCmd.AddCommand(reportCmd)
 }

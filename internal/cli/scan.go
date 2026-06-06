@@ -22,6 +22,8 @@ import (
 var scanSaveReport bool
 var scanCI bool
 var scanRulePackPath string
+var scanBaselinePath string
+var scanNoBaseline bool
 
 // scanCmd is a thin wrapper around app.Scan.
 // Orchestration lives in internal/app; the CLI layer owns flags, rendering,
@@ -34,6 +36,10 @@ var scanCmd = &cobra.Command{
 		logger := buildLogger()
 		colorMode := buildColorMode()
 		redactEngine := buildRedactEngine()
+
+		if scanBaselinePath != "" && scanNoBaseline {
+			return exitCodeError{code: exitcode.InvalidInput, message: "flags --baseline and --no-baseline are mutually exclusive"}
+		}
 
 		if flagRedact == "off" {
 			logger.Warn("redact", "redaction is disabled; secrets may be visible")
@@ -73,12 +79,27 @@ var scanCmd = &cobra.Command{
 
 		redacted := redactEngine.RedactReport(report)
 		policy := relevance.PolicyFromReport(redacted, flagIncludeHidden)
-		b, err := baseline.Load(baseline.DefaultPath(absPath))
-		if err != nil {
-			logger.Error("baseline", err.Error())
-			return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load baseline: %v", err)}
+
+		if !scanNoBaseline {
+			baselinePath := scanBaselinePath
+			explicit := scanBaselinePath != ""
+			if explicit {
+				var err error
+				baselinePath, err = filepath.Abs(scanBaselinePath)
+				if err != nil {
+					return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+				}
+			} else {
+				baselinePath = baseline.DefaultPath(absPath)
+			}
+			b, err := loadBaselineForCommand(baselinePath, explicit)
+			if err != nil {
+				logger.Error("baseline", err.Error())
+				return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load baseline: %v", err)}
+			}
+			relevance.ApplyBaseline(&policy, b, time.Now())
 		}
-		relevance.ApplyBaseline(&policy, b, time.Now())
+
 		filtered, summary := relevance.FilterReport(redacted, policy)
 		renderer := pickRenderer(colorMode)
 		if humanRenderer, ok := renderer.(*output.HumanRenderer); ok {
@@ -129,5 +150,7 @@ func init() {
 	scanCmd.Flags().BoolVar(&scanSaveReport, "save-report", false, "Persist report under .devdiag/runs for fix and capsule commands")
 	scanCmd.Flags().BoolVar(&scanCI, "ci", false, "Force CI/local parity collection and evaluation")
 	scanCmd.Flags().StringVar(&scanRulePackPath, "rule-pack", "", "Evaluate an external deterministic rule pack")
+	scanCmd.Flags().StringVar(&scanBaselinePath, "baseline", "", "Path to custom baseline file (mutually exclusive with --no-baseline)")
+	scanCmd.Flags().BoolVar(&scanNoBaseline, "no-baseline", false, "Disable baseline suppressions for the scan (mutually exclusive with --baseline)")
 	rootCmd.AddCommand(scanCmd)
 }

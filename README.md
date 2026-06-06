@@ -234,10 +234,32 @@ List all entries, their status (active or expired), and documented reasons:
 devdiag baseline list [path]
 ```
 
+Export the entire baseline file to stdout (in YAML or JSON format) or to a file (saves with private `0600` permissions):
+
+```bash
+devdiag baseline export . --format yaml --output baseline.yaml
+devdiag baseline export . --format json
+```
+
+Import and merge entries from a source baseline file (YAML-only) into the target baseline file:
+
+```bash
+devdiag baseline import ./team-baseline.yaml .
+```
+
 ### Scanning with Baselines
 
 - **Automatic Discovery**: During `devdiag scan .`, if a `.devdiag/baseline.yaml` file exists in the target directory, it is automatically loaded and applied to filter out matching active findings.
-- **Report Mode**: When rendering from a saved report JSON directly using the `report` command, automatic discovery is disabled to avoid unintended suppression. You must explicitly pass the `--baseline` flag:
+- **Custom Baseline Location**: You can specify an explicit custom baseline path using the `--baseline` flag (relative paths resolve from the current working directory). Note that this custom file must exist:
+  ```bash
+  devdiag scan . --baseline ./ci/baseline.yaml
+  ```
+- **Disabling Baselines**: Disable baseline suppressions for scans or reports (mutually exclusive with `--baseline`):
+  ```bash
+  devdiag scan . --no-baseline
+  devdiag report --latest . --no-baseline
+  ```
+- **Report Mode**: When rendering from a saved report JSON directly using the `report` command, automatic discovery is disabled. You can explicitly pass the `--baseline` flag or `--no-baseline` to disable it:
   ```bash
   devdiag report --report .devdiag/runs/latest/report.json --baseline .devdiag/baseline.yaml
   ```

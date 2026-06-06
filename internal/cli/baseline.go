@@ -1,14 +1,18 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
+	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/baseline"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -29,6 +33,9 @@ var (
 	baselineAddFingerprint string
 
 	baselineRemoveFingerprint string
+
+	baselineExportFormat string
+	baselineExportOutput string
 )
 
 var baselineCmd = &cobra.Command{
@@ -479,6 +486,136 @@ var baselineRemoveCmd = &cobra.Command{
 	},
 }
 
+func loadBaselineForCommand(path string, explicit bool) (*baseline.Baseline, error) {
+	if explicit {
+		return loadExistingBaseline(path)
+	}
+	return baseline.Load(path)
+}
+
+var baselineExportCmd = &cobra.Command{
+	Use:   "export [path]",
+	Short: "Export baseline entries in YAML or JSON format",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		logger := buildLogger()
+
+		format := strings.ToLower(strings.TrimSpace(baselineExportFormat))
+		if format != "yaml" && format != "json" {
+			return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("invalid --format: %q (must be yaml or json)", baselineExportFormat)}
+		}
+
+		scanPath := "."
+		if len(args) > 0 {
+			scanPath = args[0]
+		}
+		absPath, err := resolveExistingDirectory(scanPath)
+		if err != nil {
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+		}
+
+		baselinePath := baseline.DefaultPath(absPath)
+		b, err := loadExistingBaseline(baselinePath)
+		if err != nil {
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load baseline: %v", err)}
+		}
+
+		var data []byte
+		if format == "json" {
+			data, err = json.MarshalIndent(b, "", "  ")
+		} else {
+			data, err = yaml.Marshal(b)
+		}
+		if err != nil {
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InternalError, message: fmt.Sprintf("marshal baseline: %v", err)}
+		}
+
+		if baselineExportOutput != "" {
+			outPath, err := filepath.Abs(baselineExportOutput)
+			if err != nil {
+				return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+			}
+			if err := artifact.WriteFilePrivate(outPath, data); err != nil {
+				logger.Error("baseline", err.Error())
+				return exitCodeError{code: exitcode.InternalError, message: fmt.Sprintf("write baseline: %v", err)}
+			}
+		} else {
+			fmt.Fprint(cmd.OutOrStdout(), string(data))
+		}
+
+		return nil
+	},
+}
+
+var baselineImportCmd = &cobra.Command{
+	Use:   "import <source-file> [path]",
+	Short: "Import and merge baseline entries from another baseline file",
+	Args:  cobra.RangeArgs(1, 2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		logger := buildLogger()
+
+		sourcePath, err := filepath.Abs(args[0])
+		if err != nil {
+			return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+		}
+
+		sourceBaseline, err := loadExistingBaseline(sourcePath)
+		if err != nil {
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load source baseline: %v", err)}
+		}
+
+		scanPath := "."
+		if len(args) == 2 {
+			scanPath = args[1]
+		}
+		absPath, err := resolveExistingDirectory(scanPath)
+		if err != nil {
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+		}
+
+		baselinePath := baseline.DefaultPath(absPath)
+		if _, err := os.Stat(baselinePath); err == nil {
+			_, err = loadExistingBaseline(baselinePath)
+			if err != nil {
+				logger.Error("baseline", err.Error())
+				return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load target baseline: %v", err)}
+			}
+		}
+
+		targetBaseline, err := baseline.Load(baselinePath)
+		if err != nil {
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load target baseline: %v", err)}
+		}
+
+		var added, updated int
+		for _, entry := range sourceBaseline.Entries {
+			up, err := targetBaseline.Add(entry)
+			if err != nil {
+				return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+			}
+			if up {
+				updated++
+			} else {
+				added++
+			}
+		}
+
+		if err := baseline.Save(baselinePath, targetBaseline); err != nil {
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InternalError, message: fmt.Sprintf("save baseline: %v", err)}
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "Imported %d entries (added %d, updated %d) to %s\n", len(sourceBaseline.Entries), added, updated, baselinePath)
+		return nil
+	},
+}
+
 const baselineTimeFormat = "2006-01-02 15:04:05"
 
 func formatBaselineTime(t time.Time) string {
@@ -535,6 +672,9 @@ func init() {
 
 	baselineRemoveCmd.Flags().StringVar(&baselineRemoveFingerprint, "fingerprint", "", "Exact finding fingerprint (optional)")
 
+	baselineExportCmd.Flags().StringVar(&baselineExportFormat, "format", "yaml", "Export format (yaml or json)")
+	baselineExportCmd.Flags().StringVar(&baselineExportOutput, "output", "", "Output file path (default: stdout)")
+
 	baselineCmd.AddCommand(baselineCreateCmd)
 	baselineCmd.AddCommand(baselineListCmd)
 	baselineCmd.AddCommand(baselineValidateCmd)
@@ -543,5 +683,7 @@ func init() {
 	baselineCmd.AddCommand(baselinePruneCmd)
 	baselineCmd.AddCommand(baselineAddCmd)
 	baselineCmd.AddCommand(baselineRemoveCmd)
+	baselineCmd.AddCommand(baselineExportCmd)
+	baselineCmd.AddCommand(baselineImportCmd)
 	rootCmd.AddCommand(baselineCmd)
 }

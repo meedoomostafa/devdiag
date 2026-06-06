@@ -785,3 +785,413 @@ func TestBaselineRemoveFingerprintDoesNotRemoveIDOnly(t *testing.T) {
 		t.Fatalf("expected ID-only entry to remain, got %q", loaded.Entries[0].Fingerprint)
 	}
 }
+
+func TestScanBaselineAndNoBaselineConflictExitsInvalidInput(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := runBinary("scan", dir, "--baseline", "custom.yaml", "--no-baseline")
+	if code == 0 {
+		t.Fatal("expected non-zero exit when --baseline and --no-baseline are combined")
+	}
+	if !strings.Contains(stderr, "mutually exclusive") {
+		t.Fatalf("expected mutually exclusive message in stderr, got: %s", stderr)
+	}
+}
+
+func TestScanBaselineMissingExitsInvalidInput(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := runBinary("scan", dir, "--baseline", filepath.Join(dir, "missing.yaml"))
+	if code == 0 {
+		t.Fatal("expected non-zero exit when explicit --baseline file is missing")
+	}
+	if !strings.Contains(stderr, "baseline not found") {
+		t.Fatalf("expected baseline not found in stderr, got: %s", stderr)
+	}
+}
+
+func TestScanBaselineCustomPathApplies(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+	now := time.Now().UTC()
+	customPath := filepath.Join(dir, "custom-baseline.yaml")
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "custom baseline", CreatedAt: now},
+		},
+	}
+	if err := baseline.Save(customPath, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	stdout, stderr, code := runBinary("scan", dir, "--baseline", customPath, "--format", "json")
+	if code != 0 {
+		t.Fatalf("scan failed: exit=%d; stdout=%s; stderr=%s", code, stdout, stderr)
+	}
+
+	var rep schema.Report
+	if err := json.Unmarshal([]byte(stdout), &rep); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if len(rep.Findings) != 0 {
+		t.Fatalf("expected 0 findings (suppressed by custom baseline), got %d", len(rep.Findings))
+	}
+}
+
+func TestScanNoBaselineBypassesDefaultBaseline(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{})
+	defaultPath := baseline.DefaultPath(dir)
+	if err := os.WriteFile(defaultPath, []byte("invalid yaml {["), 0600); err != nil {
+		t.Fatalf("write invalid baseline: %v", err)
+	}
+
+	// scan should fail due to invalid default baseline
+	_, _, codeNormal := runBinary("scan", dir, "--format", "json")
+	if codeNormal == 0 {
+		t.Fatal("expected scan to fail when default baseline is invalid")
+	}
+
+	// scan --no-baseline should bypass loading and succeed (exit 0)
+	_, _, codeNoBaseline := runBinary("scan", dir, "--no-baseline", "--format", "json")
+	if codeNoBaseline != 0 {
+		t.Fatalf("expected scan --no-baseline to succeed despite invalid default baseline, got exit %d", codeNoBaseline)
+	}
+}
+
+func TestReportBaselineAndNoBaselineConflictExitsInvalidInput(t *testing.T) {
+	_, stderr, code := runBinary("report", "--report", "report.json", "--baseline", "custom.yaml", "--no-baseline")
+	if code == 0 {
+		t.Fatal("expected non-zero exit when --baseline and --no-baseline conflict")
+	}
+	if !strings.Contains(stderr, "mutually exclusive") {
+		t.Fatalf("expected mutually exclusive message, got: %s", stderr)
+	}
+}
+
+func TestReportBaselineMissingExitsInvalidInput(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{})
+	reportFilePath := filepath.Join(artifact.RunDir(dir, "2026-06-06T12-00-00Z_abcd"), "report.json")
+
+	_, stderr, code := runBinary("report", "--report", reportFilePath, "--baseline", filepath.Join(dir, "missing.yaml"))
+	if code == 0 {
+		t.Fatal("expected non-zero exit when explicit report --baseline file is missing")
+	}
+	if !strings.Contains(stderr, "baseline not found") {
+		t.Fatalf("expected baseline not found in stderr, got: %s", stderr)
+	}
+}
+
+func TestReportLatestNoBaselineBypassesAutoDiscovery(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+	now := time.Now().UTC()
+	defaultPath := baseline.DefaultPath(dir)
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "default baseline", CreatedAt: now},
+		},
+	}
+	if err := baseline.Save(defaultPath, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	stdout, stderr, _ := runBinary("report", "--latest", dir, "--no-baseline", "--format", "json")
+	var rep schema.Report
+	if err := json.Unmarshal([]byte(stdout), &rep); err != nil {
+		t.Fatalf("invalid json: %v; stderr=%s; stdout=%s", err, stderr, stdout)
+	}
+	if len(rep.Findings) != 1 {
+		t.Fatalf("expected finding to remain visible, got %d findings", len(rep.Findings))
+	}
+}
+
+func TestReportReportModeNoBaselineIsValidNoOp(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+	reportFilePath := filepath.Join(artifact.RunDir(dir, "2026-06-06T12-00-00Z_abcd"), "report.json")
+
+	_, stderr, code := runBinary("report", "--report", reportFilePath, "--no-baseline", "--format", "json")
+	if code == 0 {
+		// should succeed or fail depending on findings, but not invalid input
+	}
+	if strings.Contains(stderr, "mutually exclusive") {
+		t.Fatalf("unexpected mutually exclusive error: %s", stderr)
+	}
+}
+
+func TestScanExplicitBaselinePathResolvesFromWorkingDirectory(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+	now := time.Now().UTC()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "cwd relative", CreatedAt: now},
+		},
+	}
+	relPath := "test-rel-baseline.yaml"
+	absPath := filepath.Join(cwd, relPath)
+	if err := baseline.Save(absPath, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	defer os.Remove(absPath)
+
+	stdout, stderr, code := runBinary("scan", dir, "--baseline", relPath, "--format", "json")
+	if code != 0 {
+		t.Fatalf("scan failed: exit=%d; stdout=%s; stderr=%s", code, stdout, stderr)
+	}
+
+	var rep schema.Report
+	if err := json.Unmarshal([]byte(stdout), &rep); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if len(rep.Findings) != 0 {
+		t.Fatalf("expected findings to be suppressed by relative baseline resolved from CWD, got %d findings", len(rep.Findings))
+	}
+}
+
+func TestBaselineExportInvalidFormatExitsInvalidInput(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := runBinary("baseline", "export", dir, "--format", "xml")
+	if code == 0 {
+		t.Fatal("expected non-zero exit for invalid export format")
+	}
+	if !strings.Contains(stderr, "invalid --format") {
+		t.Fatalf("expected invalid --format in stderr, got: %s", stderr)
+	}
+}
+
+func TestBaselineExportOutputFilePermissions(t *testing.T) {
+	dir := t.TempDir()
+	baselinePath := baseline.DefaultPath(dir)
+	now := time.Now().UTC()
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "test", CreatedAt: now},
+		},
+	}
+	if err := baseline.Save(baselinePath, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	outPath := filepath.Join(dir, "exported.yaml")
+	stdout, stderr, code := runBinary("baseline", "export", dir, "--output", outPath)
+	if code != 0 {
+		t.Fatalf("export failed: exit=%d; stdout=%s; stderr=%s", code, stdout, stderr)
+	}
+
+	info, err := os.Stat(outPath)
+	if err != nil {
+		t.Fatalf("stat exported file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Fatalf("exported file permissions = %o, want 0600", perm)
+	}
+}
+
+func TestBaselineExportMissingBaselineExitsInvalidInput(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := runBinary("baseline", "export", dir)
+	if code == 0 {
+		t.Fatal("expected non-zero exit when exporting missing baseline")
+	}
+	if !strings.Contains(stderr, "baseline not found") {
+		t.Fatalf("expected baseline not found error, got: %s", stderr)
+	}
+}
+
+func TestBaselineExportStdout(t *testing.T) {
+	dir := t.TempDir()
+	baselinePath := baseline.DefaultPath(dir)
+	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "test-export", CreatedAt: now},
+		},
+	}
+	if err := baseline.Save(baselinePath, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	stdout, _, code := runBinary("baseline", "export", dir, "--format", "yaml")
+	if code != 0 {
+		t.Fatalf("export failed: %d", code)
+	}
+	if !strings.Contains(stdout, "test-export") || !strings.Contains(stdout, "schema_version") {
+		t.Fatalf("unexpected yaml stdout: %s", stdout)
+	}
+
+	stdoutJSON, _, code := runBinary("baseline", "export", dir, "--format", "json")
+	if code != 0 {
+		t.Fatalf("export failed: %d", code)
+	}
+	if !strings.Contains(stdoutJSON, "\"test-export\"") || !strings.Contains(stdoutJSON, "\"schema_version\"") {
+		t.Fatalf("unexpected json stdout: %s", stdoutJSON)
+	}
+}
+
+func TestBaselineExportExportsExpiredEntriesByDefault(t *testing.T) {
+	dir := t.TempDir()
+	baselinePath := baseline.DefaultPath(dir)
+	now := time.Now().UTC()
+	past := now.Add(-24 * time.Hour)
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-EXPIRED", Reason: "expired entry", CreatedAt: now, ExpiresAt: &past},
+		},
+	}
+	if err := baseline.Save(baselinePath, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	stdout, _, code := runBinary("baseline", "export", dir, "--format", "yaml")
+	if code != 0 {
+		t.Fatalf("export failed: %d", code)
+	}
+	if !strings.Contains(stdout, "F-EXPIRED") {
+		t.Fatalf("expected expired entry to be exported, got: %s", stdout)
+	}
+}
+
+func TestBaselineImportInvalidSourceExitsInvalidInput(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := runBinary("baseline", "import", filepath.Join(dir, "missing.yaml"), dir)
+	if code == 0 {
+		t.Fatal("expected non-zero exit for invalid source import")
+	}
+	if !strings.Contains(stderr, "baseline not found") {
+		t.Fatalf("expected baseline not found in stderr, got: %s", stderr)
+	}
+}
+
+func TestBaselineImportInvalidTargetExitsInvalidInput(t *testing.T) {
+	dir := t.TempDir()
+	baselinePath := baseline.DefaultPath(dir)
+	if err := os.MkdirAll(filepath.Dir(baselinePath), 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(baselinePath, []byte("invalid target yaml {["), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	sourcePath := filepath.Join(dir, "source.yaml")
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "imported", CreatedAt: time.Now()},
+		},
+	}
+	if err := baseline.Save(sourcePath, b); err != nil {
+		t.Fatalf("save source: %v", err)
+	}
+
+	_, stderr, code := runBinary("baseline", "import", sourcePath, dir)
+	if code == 0 {
+		t.Fatal("expected non-zero exit when target baseline is invalid")
+	}
+	if !strings.Contains(stderr, "load target baseline") {
+		t.Fatalf("expected load target baseline in error, got: %s", stderr)
+	}
+}
+
+func TestBaselineImportUpdatesSameIDAndFingerprint(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+
+	targetPath := baseline.DefaultPath(dir)
+	bTarget := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "original", CreatedAt: now},
+		},
+	}
+	if err := baseline.Save(targetPath, bTarget); err != nil {
+		t.Fatalf("save target: %v", err)
+	}
+
+	sourcePath := filepath.Join(dir, "source.yaml")
+	bSource := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "updated reason", CreatedAt: now},
+		},
+	}
+	if err := baseline.Save(sourcePath, bSource); err != nil {
+		t.Fatalf("save source: %v", err)
+	}
+
+	stdout, _, code := runBinary("baseline", "import", sourcePath, dir)
+	if code != 0 {
+		t.Fatalf("import failed: %d", code)
+	}
+	if !strings.Contains(stdout, "Imported 1 entries (added 0, updated 1)") {
+		t.Fatalf("unexpected stdout: %s", stdout)
+	}
+
+	loaded, err := baseline.Load(targetPath)
+	if err != nil {
+		t.Fatalf("load target: %v", err)
+	}
+	if len(loaded.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(loaded.Entries))
+	}
+	if loaded.Entries[0].Reason != "updated reason" {
+		t.Fatalf("expected reason to be updated, got %q", loaded.Entries[0].Reason)
+	}
+}
+
+func TestBaselineImportPreservesSeparateFingerprintsWithSameID(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	fp1 := "aaa" + strings.Repeat("0", 61)
+	fp2 := "bbb" + strings.Repeat("0", 61)
+
+	targetPath := baseline.DefaultPath(dir)
+	bTarget := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Fingerprint: fp1, Reason: "original", CreatedAt: now},
+		},
+	}
+	if err := baseline.Save(targetPath, bTarget); err != nil {
+		t.Fatalf("save target: %v", err)
+	}
+
+	sourcePath := filepath.Join(dir, "source.yaml")
+	bSource := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Fingerprint: fp2, Reason: "new symptom instance", CreatedAt: now},
+		},
+	}
+	if err := baseline.Save(sourcePath, bSource); err != nil {
+		t.Fatalf("save source: %v", err)
+	}
+
+	stdout, _, code := runBinary("baseline", "import", sourcePath, dir)
+	if code != 0 {
+		t.Fatalf("import failed: %d", code)
+	}
+	if !strings.Contains(stdout, "Imported 1 entries (added 1, updated 0)") {
+		t.Fatalf("unexpected stdout: %s", stdout)
+	}
+
+	loaded, err := baseline.Load(targetPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(loaded.Entries))
+	}
+}
