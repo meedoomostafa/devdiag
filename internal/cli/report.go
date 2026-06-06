@@ -29,7 +29,7 @@ var reportCmd = &cobra.Command{
 	Example: `  devdiag report --latest .
   devdiag report --latest . --no-baseline
   devdiag report --report .devdiag/runs/<run-id>/report.json --baseline .devdiag/baseline.yaml`,
-	Args:  cobra.MaximumNArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 		colorMode := buildColorMode()
@@ -100,6 +100,7 @@ var reportCmd = &cobra.Command{
 
 		// Build relevance policy and apply baseline if available.
 		policy := relevance.PolicyFromReport(redacted, flagIncludeHidden)
+		applyViewPolicy(&policy)
 		if !reportNoBaseline {
 			baselinePath := reportBaselinePath
 			explicit := reportBaselinePath != ""

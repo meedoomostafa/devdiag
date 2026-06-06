@@ -35,7 +35,7 @@ var scanCmd = &cobra.Command{
   devdiag scan . --baseline ./ci/baseline.yaml
   devdiag scan . --no-baseline
   devdiag scan . --include-hidden`,
-	Args:  cobra.MaximumNArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 		colorMode := buildColorMode()
@@ -103,6 +103,7 @@ var scanCmd = &cobra.Command{
 
 		redacted := redactEngine.RedactReport(report)
 		policy := relevance.PolicyFromReport(redacted, flagIncludeHidden)
+		applyViewPolicy(&policy)
 
 		if loadedBaseline != nil {
 			relevance.ApplyBaseline(&policy, loadedBaseline, time.Now())

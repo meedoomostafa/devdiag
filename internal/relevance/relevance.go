@@ -8,10 +8,35 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
+type ViewMode string
+
+const (
+	ViewActionable ViewMode = "actionable"
+	ViewAll        ViewMode = "all"
+	ViewAudit      ViewMode = "audit"
+	ViewCI         ViewMode = "ci"
+	ViewEnv        ViewMode = "env"
+)
+
+type ActionabilityLevel string
+
+const (
+	ActionabilityHigh   ActionabilityLevel = "high"
+	ActionabilityMedium ActionabilityLevel = "medium"
+	ActionabilityLow    ActionabilityLevel = "low"
+)
+
+type FindingView struct {
+	Finding       schema.Finding
+	Actionability ActionabilityLevel
+	NoiseReason   string
+}
+
 // Policy controls which findings stay visible in user-facing reports.
 type Policy struct {
 	IncludeHidden          bool
 	MinSeverity            schema.Severity
+	View                   ViewMode
 	SuppressedIDs          map[string]string
 	SuppressedFingerprints map[string]string
 }
@@ -25,6 +50,7 @@ type Summary struct {
 func DefaultPolicy() Policy {
 	return Policy{
 		MinSeverity:            schema.SeverityMedium,
+		View:                   ViewActionable,
 		SuppressedIDs:          make(map[string]string),
 		SuppressedFingerprints: make(map[string]string),
 	}
@@ -124,10 +150,47 @@ func IsHidden(f schema.Finding, policy Policy) bool {
 	if _, ok := policy.SuppressedIDs[f.ID]; ok {
 		return true
 	}
+	switch policy.View {
+	case ViewAll, ViewAudit:
+		return false
+	case ViewCI:
+		return !hasFindingPrefix(f, "F-CI-")
+	case ViewEnv:
+		return !hasFindingPrefix(f, "F-ENV-")
+	}
 	if isEvidenceOnlyFinding(f) {
 		return true
 	}
+	view := ClassifyFinding(f)
+	if view.Actionability == ActionabilityLow {
+		return true
+	}
 	return severityRank(f.Severity) < severityRank(policy.MinSeverity)
+}
+
+func ClassifyFinding(f schema.Finding) FindingView {
+	view := FindingView{Finding: f, Actionability: ActionabilityLow}
+	switch {
+	case f.Severity == schema.SeverityCritical || f.Severity == schema.SeverityHigh:
+		view.Actionability = ActionabilityHigh
+	case f.ID == "F-ENV-001-OPTIONAL":
+		view.NoiseReason = "optional env key"
+	case f.ID == "F-CI-ENV-DEPLOY-INFO":
+		view.NoiseReason = "deployment-only CI env"
+	case isEvidenceOnlyFinding(f):
+		view.NoiseReason = "evidence-only finding"
+	case f.Severity == schema.SeverityMedium:
+		view.Actionability = ActionabilityMedium
+	case f.Severity == schema.SeverityLow || f.Severity == schema.SeverityInfo:
+		view.NoiseReason = "low visibility severity"
+	default:
+		view.NoiseReason = "unknown actionability"
+	}
+	return view
+}
+
+func hasFindingPrefix(f schema.Finding, prefix string) bool {
+	return strings.HasPrefix(strings.ToUpper(f.ID), strings.ToUpper(prefix))
 }
 
 func isEvidenceOnlyFinding(f schema.Finding) bool {

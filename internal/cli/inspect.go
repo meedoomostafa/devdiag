@@ -11,6 +11,7 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/output"
+	"github.com/meedoomostafa/devdiag/internal/relevance"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 	"github.com/meedoomostafa/devdiag/internal/tui"
 )
@@ -130,7 +131,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	if loaded != nil {
 		absPath = loaded.basePath
 		logger.Info("inspect", fmt.Sprintf("loading preloaded report mode=%v source=%s", loaded.mode, loaded.sourceName))
-		model = tui.NewReportModel(loaded.report, loaded.sourceName, loaded.mode, buildRedactEngine(), flagIncludeHidden)
+		model = tui.NewReportModel(loaded.report, loaded.sourceName, loaded.mode, buildRedactEngine(), flagIncludeHidden, relevance.ViewMode(flagView))
 	} else {
 		scanPath := "."
 		if len(args) > 0 {
@@ -153,7 +154,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 			CI:           inspectCI,
 		}
 
-		model = tui.NewScanModel(opts, buildRedactEngine(), flagIncludeHidden)
+		model = tui.NewScanModel(opts, buildRedactEngine(), flagIncludeHidden).WithViewMode(relevance.ViewMode(flagView))
 	}
 
 	p := tea.NewProgram(model, tea.WithAltScreen())

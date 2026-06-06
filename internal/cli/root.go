@@ -11,6 +11,7 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/logging"
 	"github.com/meedoomostafa/devdiag/internal/output"
 	"github.com/meedoomostafa/devdiag/internal/redact"
+	"github.com/meedoomostafa/devdiag/internal/relevance"
 )
 
 var (
@@ -23,6 +24,7 @@ var (
 	flagProfile       string
 	flagFailSeverity  string
 	flagIncludeHidden bool
+	flagView          string
 )
 
 var rootCmd = &cobra.Command{
@@ -42,6 +44,9 @@ var rootCmd = &cobra.Command{
 		if err := validateFailSeverity(flagFailSeverity); err != nil {
 			return err
 		}
+		if err := validateView(flagView); err != nil {
+			return err
+		}
 		return nil
 	},
 	SilenceUsage:  true,
@@ -58,6 +63,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagProfile, "profile", "", "Profile mode: ai-ml")
 	rootCmd.PersistentFlags().StringVar(&flagFailSeverity, "fail-severity", "high", "Minimum finding severity that returns exit code 1: off, info, low, medium, high, critical")
 	rootCmd.PersistentFlags().BoolVar(&flagIncludeHidden, "include-hidden", false, "Include low/info and configured hidden findings in rendered and saved reports")
+	rootCmd.PersistentFlags().StringVar(&flagView, "view", string(relevance.ViewActionable), "Finding visibility view: actionable, all, audit, ci, env")
 
 }
 
@@ -107,6 +113,22 @@ func validateFailSeverity(v string) error {
 		return nil
 	}
 	return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("invalid --fail-severity: %s (allowed: off, info, low, medium, high, critical)", v)}
+}
+
+func validateView(v string) error {
+	switch relevance.ViewMode(v) {
+	case relevance.ViewActionable, relevance.ViewAll, relevance.ViewAudit, relevance.ViewCI, relevance.ViewEnv:
+		return nil
+	default:
+		return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("invalid --view: %s (allowed: actionable, all, audit, ci, env)", v)}
+	}
+}
+
+func applyViewPolicy(policy *relevance.Policy) {
+	if policy == nil {
+		return
+	}
+	policy.View = relevance.ViewMode(flagView)
 }
 
 // buildRedactEngine creates the redaction engine from flags.

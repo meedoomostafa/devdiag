@@ -327,3 +327,82 @@ func TestApplyBaselineDoesNotOverrideExistingFingerprintReason(t *testing.T) {
 		t.Fatalf("expected config reason to be preserved, got %q", policy.SuppressedFingerprints[fp])
 	}
 }
+
+func TestFilterReport_ViewAllShowsLowInfoButKeepsSuppressions(t *testing.T) {
+	report := &schema.Report{
+		Collectors: []schema.CollectorResult{
+			{
+				Name: "config",
+				Evidence: []schema.Evidence{
+					{Source: "devdiag_noise_suppress_finding", Value: "id=F-SUPPRESSED-001 reason=accepted noise"},
+				},
+			},
+		},
+		Findings: []schema.Finding{
+			{ID: "F-LOW-001", Severity: schema.SeverityLow, Title: "Low"},
+			{ID: "F-RUNTIME-DECL-001", Severity: schema.SeverityInfo, Title: "Runtime declaration"},
+			{ID: "F-SUPPRESSED-001", Severity: schema.SeverityMedium, Title: "Suppressed"},
+		},
+	}
+	policy := PolicyFromReport(report, false)
+	policy.View = ViewAll
+
+	filtered, summary := FilterReport(report, policy)
+	if summary.Hidden != 1 {
+		t.Fatalf("hidden = %d, want 1 suppressed finding", summary.Hidden)
+	}
+	if len(filtered.Findings) != 2 {
+		t.Fatalf("visible findings = %d, want 2: %+v", len(filtered.Findings), filtered.Findings)
+	}
+	for _, finding := range filtered.Findings {
+		if finding.ID == "F-SUPPRESSED-001" {
+			t.Fatalf("suppressed finding should stay hidden in --view all without --include-hidden")
+		}
+	}
+}
+
+func TestFilterReport_ViewCIShowsDeployOnlyInfo(t *testing.T) {
+	report := &schema.Report{
+		Findings: []schema.Finding{
+			{ID: "F-CI-ENV-DEPLOY-INFO", Severity: schema.SeverityInfo, Title: "Deploy-only"},
+			{ID: "F-CI-ENV-001", Severity: schema.SeverityMedium, Title: "CI local mismatch"},
+			{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env mismatch"},
+		},
+	}
+	policy := DefaultPolicy()
+	policy.View = ViewCI
+
+	filtered, summary := FilterReport(report, policy)
+	if summary.Hidden != 1 {
+		t.Fatalf("hidden = %d, want 1 non-CI finding", summary.Hidden)
+	}
+	if len(filtered.Findings) != 2 {
+		t.Fatalf("visible findings = %d, want 2: %+v", len(filtered.Findings), filtered.Findings)
+	}
+	for _, finding := range filtered.Findings {
+		if finding.ID == "F-ENV-001" {
+			t.Fatalf("env finding should be hidden in ci view")
+		}
+	}
+}
+
+func TestClassifyFindingActionability(t *testing.T) {
+	tests := []struct {
+		name string
+		f    schema.Finding
+		want ActionabilityLevel
+	}{
+		{name: "high severity", f: schema.Finding{ID: "F-ENV-001", Severity: schema.SeverityHigh}, want: ActionabilityHigh},
+		{name: "optional env", f: schema.Finding{ID: "F-ENV-001-OPTIONAL", Severity: schema.SeverityInfo}, want: ActionabilityLow},
+		{name: "deploy info", f: schema.Finding{ID: "F-CI-ENV-DEPLOY-INFO", Severity: schema.SeverityInfo}, want: ActionabilityLow},
+		{name: "required env", f: schema.Finding{ID: "F-ENV-001", Severity: schema.SeverityMedium, Confidence: 0.7}, want: ActionabilityMedium},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			view := ClassifyFinding(tt.f)
+			if view.Actionability != tt.want {
+				t.Fatalf("actionability = %s, want %s", view.Actionability, tt.want)
+			}
+		})
+	}
+}
