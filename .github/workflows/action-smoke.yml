@@ -1,0 +1,63 @@
+name: Action Smoke
+
+on:
+  pull_request:
+    paths:
+      - action.yml
+      - scripts/action.sh
+      - .github/workflows/action-smoke.yml
+      - cmd/**
+      - internal/**
+      - go.mod
+      - go.sum
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  github-format:
+    name: GitHub format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: devdiag
+        uses: ./
+        with:
+          path: fixtures/minimal-repo
+          format: github
+          save-report: 'true'
+          fail-severity: off
+
+      - name: Assert report outputs
+        shell: bash
+        run: |
+          test -n "${{ steps.devdiag.outputs.report-path }}"
+          test -f "${{ steps.devdiag.outputs.report-path }}"
+          test "${{ steps.devdiag.outputs.report-uploaded }}" = "true"
+          test "${{ steps.devdiag.outputs.summary-written }}" = "true"
+          test "${{ steps.devdiag.outputs.scan-exit-code }}" = "0"
+
+  markdown-format:
+    name: Markdown format with hidden findings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: devdiag
+        uses: ./
+        with:
+          path: fixtures/minimal-repo
+          format: markdown
+          include-hidden: 'true'
+          save-report: 'true'
+          fail-severity: off
+
+      - name: Assert markdown outputs
+        shell: bash
+        run: |
+          test -n "${{ steps.devdiag.outputs.report-path }}"
+          test -f "${{ steps.devdiag.outputs.report-path }}"
+          test "${{ steps.devdiag.outputs.report-uploaded }}" = "true"
+          test "${{ steps.devdiag.outputs.summary-written }}" = "true"
