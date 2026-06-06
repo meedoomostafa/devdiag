@@ -3,6 +3,7 @@ package cli
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/output"
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -231,4 +233,51 @@ func populateHostInfo(collectors []schema.CollectorResult) schema.HostInfo {
 		}
 	}
 	return host
+}
+
+func loadReportFile(path string) (*schema.Report, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read report file: %w", err)
+	}
+	var r schema.Report
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, fmt.Errorf("parse report JSON: %w", err)
+	}
+	return &r, nil
+}
+
+func resolveReportFromRunID(base string, runID string) (*schema.Report, error) {
+	if err := artifact.ValidateRunID(runID); err != nil {
+		return nil, fmt.Errorf("invalid run ID: %w", err)
+	}
+	targetPath := filepath.Join(artifact.RunDir(base, runID), "report.json")
+	return loadReportFile(targetPath)
+}
+
+func resolveLatestReport(base string) (*schema.Report, string, error) {
+	latestID, err := artifact.FindLatestRunID(base)
+	if err != nil {
+		return nil, "", fmt.Errorf("find latest run ID: %w", err)
+	}
+	targetPath := filepath.Join(artifact.RunDir(base, latestID), "report.json")
+	rep, err := loadReportFile(targetPath)
+	if err != nil {
+		return nil, "", err
+	}
+	return rep, latestID, nil
+}
+
+func countSourceFlags(latest bool, runID string, reportPath string) int {
+	count := 0
+	if latest {
+		count++
+	}
+	if runID != "" {
+		count++
+	}
+	if reportPath != "" {
+		count++
+	}
+	return count
 }

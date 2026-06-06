@@ -1,10 +1,8 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -41,34 +39,8 @@ type loadedInspectReport struct {
 	basePath   string
 }
 
-func countInspectSourceFlags(latest bool, runID string, reportPath string) int {
-	count := 0
-	if latest {
-		count++
-	}
-	if runID != "" {
-		count++
-	}
-	if reportPath != "" {
-		count++
-	}
-	return count
-}
-
-func loadReportFile(path string) (*schema.Report, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read report file: %w", err)
-	}
-	var r schema.Report
-	if err := json.Unmarshal(data, &r); err != nil {
-		return nil, fmt.Errorf("parse report JSON: %w", err)
-	}
-	return &r, nil
-}
-
 func resolveInspectReport(args []string, latest bool, runID string, reportPath string) (*loadedInspectReport, error) {
-	flagCount := countInspectSourceFlags(latest, runID, reportPath)
+	flagCount := countSourceFlags(latest, runID, reportPath)
 	if flagCount > 1 {
 		return nil, fmt.Errorf("flags --latest, --run-id, and --report are mutually exclusive")
 	}
@@ -90,9 +62,6 @@ func resolveInspectReport(args []string, latest bool, runID string, reportPath s
 	}
 
 	if runID != "" {
-		if err := artifact.ValidateRunID(runID); err != nil {
-			return nil, fmt.Errorf("invalid run ID: %w", err)
-		}
 		startPath := "."
 		if len(args) > 0 {
 			startPath = args[0]
@@ -101,8 +70,7 @@ func resolveInspectReport(args []string, latest bool, runID string, reportPath s
 		if err != nil {
 			base = startPath
 		}
-		targetPath := filepath.Join(artifact.RunDir(base, runID), "report.json")
-		rep, err := loadReportFile(targetPath)
+		rep, err := resolveReportFromRunID(base, runID)
 		if err != nil {
 			return nil, err
 		}
@@ -123,12 +91,7 @@ func resolveInspectReport(args []string, latest bool, runID string, reportPath s
 		if err != nil {
 			base = startPath
 		}
-		latestID, err := artifact.FindLatestRunID(base)
-		if err != nil {
-			return nil, fmt.Errorf("find latest run ID: %w", err)
-		}
-		targetPath := filepath.Join(artifact.RunDir(base, latestID), "report.json")
-		rep, err := loadReportFile(targetPath)
+		rep, latestID, err := resolveLatestReport(base)
 		if err != nil {
 			return nil, err
 		}
