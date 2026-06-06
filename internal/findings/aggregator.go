@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/meedoomostafa/devdiag/internal/domain"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
@@ -57,26 +58,10 @@ func normalizeFinding(f schema.Finding) schema.Finding {
 }
 
 func defaultLayers(id string) []string {
-	switch {
-	case strings.HasPrefix(id, "F-CI-"):
-		return []string{"ci", "local"}
-	case strings.HasPrefix(id, "F-ENV-"):
-		return []string{"env"}
-	case strings.HasPrefix(id, "F-GIT-"):
-		return []string{"git"}
-	case strings.HasPrefix(id, "F-FS-"):
-		return []string{"filesystem"}
-	case strings.HasPrefix(id, "F-CONTAINER-"):
-		return []string{"containers"}
-	case strings.HasPrefix(id, "F-GPU-"), strings.HasPrefix(id, "F-AI-"):
-		return []string{"host", "runtime"}
-	case strings.HasPrefix(id, "F-CACHE-"):
-		return []string{"cache"}
-	case strings.HasPrefix(id, "F-TRACE-"):
-		return []string{"process"}
-	default:
-		return []string{"diagnostic"}
+	if d, ok := domain.FindDomainByFindingID(id); ok {
+		return d.DefaultLayers
 	}
+	return []string{"diagnostic"}
 }
 
 func findingFingerprint(f schema.Finding) string {

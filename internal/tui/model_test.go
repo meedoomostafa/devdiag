@@ -48,7 +48,7 @@ func TestDeriveDomain_FromID(t *testing.T) {
 		{"F-GPU-CUDA-001", "gpu"},
 		{"F-CACHE-STALE-001", "cache"},
 		{"F-HOST-OS-001", "host"},
-		{"F-PERMISSION-ROOT-001", "permissions"},
+		{"F-PERMISSION-ROOT-001", "filesystem"},
 		{"F-GIT-LEAK-001", "git"},
 		{"F-CONFIG-ERROR-001", "config"},
 		{"F-RUNTIME-DECL-001", "runtime"},

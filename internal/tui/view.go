@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/meedoomostafa/devdiag/internal/app"
+	"github.com/meedoomostafa/devdiag/internal/domain"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
@@ -104,12 +105,9 @@ func (m Model) renderHelp() string {
 	b.WriteString("\n")
 	b.WriteString("Domain Filters\n")
 	b.WriteString("  0            clear domain filter\n")
-	b.WriteString("  1            env\n")
-	b.WriteString("  2            ci\n")
-	b.WriteString("  3            containers\n")
-	b.WriteString("  4            runtime\n")
-	b.WriteString("  5            gpu\n")
-	b.WriteString("  6            trace\n")
+	for _, dom := range domain.GetTUIMappedDomains() {
+		b.WriteString(fmt.Sprintf("  %s            %s\n", dom.TUIKey, dom.Name))
+	}
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("Press ? or any key to close help."))
 	return b.String()

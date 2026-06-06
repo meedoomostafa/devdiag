@@ -3,6 +3,7 @@ package rules
 import (
 	"strings"
 
+	"github.com/meedoomostafa/devdiag/internal/domain"
 	"github.com/meedoomostafa/devdiag/internal/graph"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
@@ -60,7 +61,7 @@ func (e *ScopedEngine) Evaluate(snapshot graph.NormalizedSnapshot) ([]schema.Fin
 
 // NewEnvEngine evaluates M1Engine and filters to F-ENV- domain findings.
 func NewEnvEngine() PolicyEngine {
-	return NewScopedEngine(NewM1Engine(), "F-ENV-")
+	return NewScopedEngine(NewM1Engine(), domain.DomainScopePrefixes("env")...)
 }
 
 // NewPortEngine evaluates M1Engine and filters to F-PORT- domain findings.
@@ -70,17 +71,17 @@ func NewPortEngine() PolicyEngine {
 
 // NewRuntimeEngine evaluates M1Engine and filters to F-RUNTIME- domain findings.
 func NewRuntimeEngine() PolicyEngine {
-	return NewScopedEngine(NewM1Engine(), "F-RUNTIME-")
+	return NewScopedEngine(NewM1Engine(), domain.DomainScopePrefixes("runtime")...)
 }
 
 // NewGitEngine evaluates M1Engine and filters to F-GIT- and F-PM- domain findings.
 func NewGitEngine() PolicyEngine {
-	return NewScopedEngine(NewM1Engine(), "F-GIT-", "F-PM-")
+	return NewScopedEngine(NewM1Engine(), domain.DomainScopePrefixes("git")...)
 }
 
 // NewServiceEngine evaluates M1Engine and filters to F-SVC- domain findings.
 func NewServiceEngine() PolicyEngine {
-	return NewScopedEngine(NewM1Engine(), "F-SVC-")
+	return NewScopedEngine(NewM1Engine(), domain.DomainScopePrefixes("services")...)
 }
 
 // NewNetworkEngine evaluates M1Engine and filters to F-NET- domain findings.
@@ -90,21 +91,23 @@ func NewNetworkEngine() PolicyEngine {
 
 // NewFilesystemEngine evaluates M1Engine and filters to F-DISK-, F-FS-, and F-PERM- domain findings.
 func NewFilesystemEngine() PolicyEngine {
-	return NewScopedEngine(NewM1Engine(), "F-DISK-", "F-FS-", "F-PERM-")
+	return NewScopedEngine(NewM1Engine(), domain.DomainScopePrefixes("filesystem")...)
 }
 
 // NewSecurityEngine evaluates M1Engine and filters to F-SEC- domain findings.
 func NewSecurityEngine() PolicyEngine {
-	return NewScopedEngine(NewM1Engine(), "F-SEC-")
+	return NewScopedEngine(NewM1Engine(), domain.DomainScopePrefixes("security")...)
 }
 
 // NewContainerEngine evaluates M1/M6 engines and filters to container / GPU findings.
 func NewContainerEngine(includeGPU bool) PolicyEngine {
+	prefixes := domain.DomainScopePrefixes("containers")
 	if !includeGPU {
-		return NewScopedEngine(NewM1Engine(), "F-CONTAINER-", "F-DOCKER-", "F-PODMAN-", "F-COMPOSE-")
+		return NewScopedEngine(NewM1Engine(), prefixes...)
 	}
+	prefixes = append(prefixes, "F-GPU-")
 	return NewCompositeScopedEngine(
 		[]PolicyEngine{NewM1Engine(), NewM6Engine()},
-		"F-CONTAINER-", "F-DOCKER-", "F-PODMAN-", "F-COMPOSE-", "F-GPU-",
+		prefixes...,
 	)
 }

@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/meedoomostafa/devdiag/internal/app"
+	"github.com/meedoomostafa/devdiag/internal/domain"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
@@ -218,36 +219,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.statusBarMsg = "Domain filter cleared"
 		m = m.applyActiveFilters()
 		return m, nil
-	case "1":
-		m.activeFilters.Domain = "env"
-		m.statusBarMsg = "Filter: env"
-		m = m.applyActiveFilters()
-		return m, nil
-	case "2":
-		m.activeFilters.Domain = "ci"
-		m.statusBarMsg = "Filter: ci"
-		m = m.applyActiveFilters()
-		return m, nil
-	case "3":
-		m.activeFilters.Domain = "containers"
-		m.statusBarMsg = "Filter: containers"
-		m = m.applyActiveFilters()
-		return m, nil
-	case "4":
-		m.activeFilters.Domain = "runtime"
-		m.statusBarMsg = "Filter: runtime"
-		m = m.applyActiveFilters()
-		return m, nil
-	case "5":
-		m.activeFilters.Domain = "gpu"
-		m.statusBarMsg = "Filter: gpu"
-		m = m.applyActiveFilters()
-		return m, nil
-	case "6":
-		m.activeFilters.Domain = "trace"
-		m.statusBarMsg = "Filter: trace"
-		m = m.applyActiveFilters()
-		return m, nil
+	default:
+		if dom, ok := domain.FindDomainByTUIKey(msg.String()); ok {
+			m.activeFilters.Domain = dom.Name
+			m.statusBarMsg = "Filter: " + dom.Name
+			m = m.applyActiveFilters()
+			return m, nil
+		}
 	}
 
 	return m, nil

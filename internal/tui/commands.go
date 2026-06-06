@@ -4,51 +4,14 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/meedoomostafa/devdiag/internal/domain"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
 // deriveDomain guesses the domain from the finding ID and layers.
 func deriveDomain(f schema.Finding) string {
-	id := strings.ToUpper(f.ID)
-	// explicit ID prefixes
-	if strings.Contains(id, "-CI-") {
-		return "ci"
-	}
-	if strings.Contains(id, "-RUNTIME-") || strings.Contains(id, "-DECL-") {
-		return "runtime"
-	}
-	if strings.Contains(id, "-ENV-") {
-		return "env"
-	}
-	if strings.Contains(id, "-PORT-") || strings.Contains(id, "-NETWORK-") {
-		return "network"
-	}
-	if strings.Contains(id, "-SECURITY-") {
-		return "security"
-	}
-	if strings.Contains(id, "-CONTAINER-") || strings.Contains(id, "-DOCKER-") || strings.Contains(id, "-PODMAN-") {
-		return "containers"
-	}
-	if strings.Contains(id, "-GPU-") || strings.Contains(id, "-CUDA-") {
-		return "gpu"
-	}
-	if strings.Contains(id, "-CACHE-") {
-		return "cache"
-	}
-	if strings.Contains(id, "-HOST-") {
-		return "host"
-	}
-	if strings.Contains(id, "-PERMISSION-") {
-		return "permissions"
-	}
-	if strings.Contains(id, "-GIT-") {
-		return "git"
-	}
-	if strings.Contains(id, "-CONFIG-") {
-		return "config"
-	}
-	if strings.Contains(id, "-TRACE-") {
-		return "trace"
+	if d, ok := domain.FindDomainByFindingID(f.ID); ok {
+		return d.Name
 	}
 	// fallback to layers
 	for _, l := range f.Layers {
@@ -73,7 +36,7 @@ func deriveDomain(f schema.Finding) string {
 		case "host":
 			return "host"
 		case "permission":
-			return "permissions"
+			return "filesystem"
 		case "git":
 			return "git"
 		case "config":
@@ -85,32 +48,9 @@ func deriveDomain(f schema.Finding) string {
 
 // deriveTarget describes the primary target of a finding.
 func deriveTarget(f schema.Finding) string {
-	domain := deriveDomain(f)
-	switch domain {
-	case "ci":
-		return "CI pipeline"
-	case "runtime":
-		return "local runtime"
-	case "env":
-		return "environment"
-	case "network":
-		return "network services"
-	case "security":
-		return "security posture"
-	case "containers":
-		return "container environment"
-	case "gpu":
-		return "GPU/ML stack"
-	case "cache":
-		return "build cache"
-	case "host":
-		return "host system"
-	case "permissions":
-		return "file permissions"
-	case "git":
-		return "repository"
-	case "config":
-		return "configuration"
+	domName := deriveDomain(f)
+	if d, ok := domain.FindDomainByName(domName); ok {
+		return d.Target
 	}
 	return "project"
 }
