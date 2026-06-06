@@ -2,10 +2,12 @@ package cli
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/meedoomostafa/devdiag/internal/artifact"
+	"github.com/meedoomostafa/devdiag/internal/baseline"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/output"
 	"github.com/meedoomostafa/devdiag/internal/relevance"
@@ -13,9 +15,10 @@ import (
 )
 
 var (
-	reportLatest bool
-	reportRunID  string
-	reportPath   string
+	reportLatest       bool
+	reportRunID        string
+	reportPath         string
+	reportBaselinePath string
 )
 
 var reportCmd = &cobra.Command{
@@ -86,8 +89,30 @@ var reportCmd = &cobra.Command{
 		// Apply redaction defensively even for loaded reports
 		redacted := redactEngine.RedactReport(rep)
 
+		// Build relevance policy and apply baseline if available.
+		policy := relevance.PolicyFromReport(redacted, flagIncludeHidden)
+		baselinePath := reportBaselinePath
+		if baselinePath == "" && reportPath == "" {
+			// For --latest / --run-id modes, auto-discover baseline from base.
+			startPath := "."
+			if len(args) > 0 {
+				startPath = args[0]
+			}
+			if discoveredBase, err := artifact.DiscoverBase(startPath); err == nil {
+				baselinePath = baseline.DefaultPath(discoveredBase)
+			}
+		}
+		if baselinePath != "" {
+			b, err := baseline.Load(baselinePath)
+			if err != nil {
+				logger.Error("baseline", err.Error())
+				return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load baseline: %v", err)}
+			}
+			relevance.ApplyBaseline(&policy, b, time.Now())
+		}
+
 		// Filter using relevance rules, including --include-hidden
-		filtered, relevanceSummary := relevance.FilterReport(redacted, relevance.PolicyFromReport(redacted, flagIncludeHidden))
+		filtered, relevanceSummary := relevance.FilterReport(redacted, policy)
 
 		// Render the filtered report
 		renderer := pickRenderer(colorMode)
@@ -114,5 +139,6 @@ func init() {
 	reportCmd.Flags().BoolVar(&reportLatest, "latest", false, "Load the latest saved run report")
 	reportCmd.Flags().StringVar(&reportRunID, "run-id", "", "Load a saved run report by ID")
 	reportCmd.Flags().StringVar(&reportPath, "report", "", "Load a saved report JSON file path directly")
+	reportCmd.Flags().StringVar(&reportBaselinePath, "baseline", "", "Path to baseline file (required for --report mode; auto-discovered for --latest/--run-id)")
 	rootCmd.AddCommand(reportCmd)
 }

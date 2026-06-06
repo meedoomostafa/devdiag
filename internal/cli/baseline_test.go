@@ -1,0 +1,307 @@
+package cli
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/meedoomostafa/devdiag/internal/artifact"
+	"github.com/meedoomostafa/devdiag/internal/baseline"
+	"github.com/meedoomostafa/devdiag/internal/schema"
+)
+
+// setupBaselineTestProject creates a minimal saved report under a temp dir.
+func setupBaselineTestProject(t *testing.T, findings []schema.Finding) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	report := schema.Report{
+		SchemaVersion:   schema.SchemaVersion,
+		DevDiagVersion:  "test",
+		RunID:           "2026-06-06T12-00-00Z_abcd",
+		RedactionStatus: "default",
+		Repo:            schema.RepoInfo{Root: dir},
+		Collectors:      []schema.CollectorResult{{Name: "host", Status: schema.CollectorOK}},
+		Findings:        findings,
+	}
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	runsDir := artifact.RunDir(dir, report.RunID)
+	if err := os.MkdirAll(runsDir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	reportPath := filepath.Join(runsDir, "report.json")
+	if err := os.WriteFile(reportPath, data, 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// Create latest symlink
+	latestLink := artifact.LatestLink(dir)
+	os.Remove(latestLink)
+	if err := os.Symlink(report.RunID, latestLink); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	return dir
+}
+
+func TestBaselineCreateFromLatestReport(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+		{ID: "F-HIGH-001", Severity: schema.SeverityHigh, Title: "High issue"},
+	})
+
+	stdout, stderr, code := runBinary("baseline", "create", dir, "--reason", "accepted for v1.0")
+	if code != 0 {
+		t.Fatalf("exit=%d; stdout=%s; stderr=%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Created baseline with 2 entries") {
+		t.Fatalf("unexpected output: %s", stdout)
+	}
+
+	// Verify baseline file exists and is valid
+	b, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load baseline: %v", err)
+	}
+	if len(b.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(b.Entries))
+	}
+	if b.SchemaVersion != baseline.SchemaVersion {
+		t.Fatalf("schema = %q, want %q", b.SchemaVersion, baseline.SchemaVersion)
+	}
+}
+
+func TestBaselineCreateRefusesEmptyReason(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+
+	_, _, code := runBinary("baseline", "create", dir)
+	if code == 0 {
+		t.Fatal("expected non-zero exit for missing --reason")
+	}
+}
+
+func TestBaselineCreateRefusesOverwriteWithoutForce(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+
+	// Create baseline first time
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "first")
+	if code != 0 {
+		t.Fatalf("first create failed with exit %d", code)
+	}
+
+	// Try again without --force
+	_, _, code = runBinary("baseline", "create", dir, "--reason", "second")
+	if code == 0 {
+		t.Fatal("expected non-zero exit without --force")
+	}
+}
+
+func TestBaselineCreateWithForceOverwrites(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "first")
+	if code != 0 {
+		t.Fatalf("first create failed with exit %d", code)
+	}
+
+	_, _, code = runBinary("baseline", "create", dir, "--reason", "overwritten", "--force")
+	if code != 0 {
+		t.Fatalf("force overwrite failed with exit %d", code)
+	}
+
+	b, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if b.Entries[0].Reason != "overwritten" {
+		t.Fatalf("reason = %q, want overwritten", b.Entries[0].Reason)
+	}
+}
+
+func TestBaselineCreateWithExpiry(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "temporary", "--expires", "30d")
+	if code != 0 {
+		t.Fatalf("create with expiry failed with exit %d", code)
+	}
+
+	b, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if b.Entries[0].ExpiresAt == nil {
+		t.Fatal("expected ExpiresAt to be set")
+	}
+	if b.Entries[0].ExpiresAt.Before(time.Now()) {
+		t.Fatal("ExpiresAt should be in the future")
+	}
+}
+
+func TestBaselineCreateWithMinSeverity(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-LOW-001", Severity: schema.SeverityLow, Title: "Low"},
+		{ID: "F-MED-001", Severity: schema.SeverityMedium, Title: "Medium"},
+		{ID: "F-HIGH-001", Severity: schema.SeverityHigh, Title: "High"},
+	})
+
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "high only", "--min-severity", "high")
+	if code != 0 {
+		t.Fatalf("create with min-severity failed with exit %d", code)
+	}
+
+	b, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(b.Entries) != 1 {
+		t.Fatalf("entries = %d, want 1 (high only)", len(b.Entries))
+	}
+	if b.Entries[0].ID != "F-HIGH-001" {
+		t.Fatalf("entry = %q, want F-HIGH-001", b.Entries[0].ID)
+	}
+}
+
+func TestBaselineCreateWithRunID(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+
+	_, stderr, code := runBinary("baseline", "create", dir, "--reason", "run test", "--run-id", "2026-06-06T12-00-00Z_abcd")
+	if code != 0 {
+		t.Fatalf("create with --run-id failed with exit %d; stderr=%s", code, stderr)
+	}
+
+	b, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(b.Entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(b.Entries))
+	}
+}
+
+func TestBaselineCreateNoSavedReport(t *testing.T) {
+	dir := t.TempDir()
+
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "test")
+	if code == 0 {
+		t.Fatal("expected non-zero exit when no saved report exists")
+	}
+}
+
+func TestBaselineListEmptyBaseline(t *testing.T) {
+	dir := t.TempDir()
+
+	stdout, _, code := runBinary("baseline", "list", dir)
+	if code != 0 {
+		t.Fatalf("list failed with exit %d", code)
+	}
+	if !strings.Contains(stdout, "Total: 0 entries") {
+		t.Fatalf("unexpected output for empty baseline: %s", stdout)
+	}
+}
+
+func TestBaselineListWithEntries(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	past := now.Add(-24 * time.Hour)
+	future := now.Add(24 * time.Hour)
+
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "accepted", CreatedAt: now},
+			{ID: "F-EXPIRED-001", Reason: "old", CreatedAt: now, ExpiresAt: &past},
+			{ID: "F-ACTIVE-001", Reason: "current", CreatedAt: now, ExpiresAt: &future},
+		},
+	}
+	if err := baseline.Save(baseline.DefaultPath(dir), b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	stdout, _, code := runBinary("baseline", "list", dir)
+	if code != 0 {
+		t.Fatalf("list failed with exit %d", code)
+	}
+	if !strings.Contains(stdout, "3 entries") {
+		t.Fatalf("expected 3 entries in output: %s", stdout)
+	}
+	if !strings.Contains(stdout, "2 active") {
+		t.Fatalf("expected 2 active in output: %s", stdout)
+	}
+	if !strings.Contains(stdout, "1 expired") {
+		t.Fatalf("expected 1 expired in output: %s", stdout)
+	}
+}
+
+func TestReportReportModeDoesNotImplicitlyDiscoverBaseline(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+	now := time.Now().UTC()
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "baselined", CreatedAt: now},
+		},
+	}
+	if err := baseline.Save(baseline.DefaultPath(dir), b); err != nil {
+		t.Fatalf("save baseline: %v", err)
+	}
+
+	// Use --report with direct file path — baseline should NOT be discovered.
+	reportFilePath := filepath.Join(artifact.RunDir(dir, "2026-06-06T12-00-00Z_abcd"), "report.json")
+	stdout, stderr, code := runBinary("report", "--report", reportFilePath, "--format", "json")
+	if code != 0 {
+		t.Fatalf("report --report failed with exit %d; stderr=%s", code, stderr)
+	}
+
+	// The finding should still be visible (baseline not applied).
+	if !strings.Contains(stdout, "F-ENV-001") {
+		t.Fatalf("expected F-ENV-001 to be visible (no baseline applied), got: %s", stdout)
+	}
+}
+
+func TestReportReportModeWithExplicitBaseline(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+		{ID: "F-HIGH-001", Severity: schema.SeverityHigh, Title: "High issue"},
+	})
+	now := time.Now().UTC()
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "baselined", CreatedAt: now},
+		},
+	}
+	baselinePath := baseline.DefaultPath(dir)
+	if err := baseline.Save(baselinePath, b); err != nil {
+		t.Fatalf("save baseline: %v", err)
+	}
+
+	reportFilePath := filepath.Join(artifact.RunDir(dir, "2026-06-06T12-00-00Z_abcd"), "report.json")
+	stdout, stderr, code := runBinary("report", "--report", reportFilePath, "--baseline", baselinePath, "--format", "json", "--fail-severity", "off")
+	if code != 0 {
+		t.Fatalf("report --report --baseline failed with exit %d; stderr=%s", code, stderr)
+	}
+
+	if strings.Contains(stdout, "F-ENV-001") {
+		t.Fatalf("expected F-ENV-001 to be hidden by baseline, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "F-HIGH-001") {
+		t.Fatalf("expected F-HIGH-001 to remain visible, got: %s", stdout)
+	}
+}

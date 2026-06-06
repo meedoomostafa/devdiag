@@ -173,6 +173,72 @@ Resolving diagnostic issues is a structured, step-by-step path designed to preve
   devdiag fix --templates
   ```
 
+## Accepted Findings Baseline
+
+For teams or projects with known, accepted configuration drift (e.g., in local development vs. CI), DevDiag supports baselining findings. Instead of cluttering the main `devdiag.yaml` config file, you can snapshot and manage accepted findings in a separate baseline file located at `.devdiag/baseline.yaml`.
+
+Baselined findings are treated as suppressed: they are hidden from standard scan outputs, do not contribute to exit codes, and allow teams to maintain a clean-scan status while documenting deviations.
+
+### Creating a Baseline
+
+Create a baseline file from the latest saved run report in the target directory:
+
+```bash
+devdiag baseline create --reason "accepted local dev configuration"
+```
+
+To restrict the baseline to specific finding severities (e.g., only medium or higher):
+
+```bash
+devdiag baseline create --reason "critical bypass" --min-severity medium
+```
+
+To set a temporary suppression expiry (supports `d` for days, `h` for hours, `m` for minutes):
+
+```bash
+devdiag baseline create --reason "temporary certificates drift" --expires 30d
+```
+
+If a baseline already exists, use `--force` to overwrite it:
+
+```bash
+devdiag baseline create --reason "updated reason" --force
+```
+
+To specify the author of the baseline entry (defaults to `$USER`):
+
+```bash
+devdiag baseline create --reason "manual audit" --created-by "security-team"
+```
+
+To baseline a specific run rather than the latest:
+
+```bash
+devdiag baseline create --reason "fixed reference run" --run-id "2026-06-06T12-00-00Z_abcd"
+```
+
+### Viewing and Managing Baselines
+
+List all entries, their status (active or expired), and documented reasons:
+
+```bash
+devdiag baseline list [path]
+```
+
+### Scanning with Baselines
+
+- **Automatic Discovery**: During `devdiag scan .`, if a `.devdiag/baseline.yaml` file exists in the target directory, it is automatically loaded and applied to filter out matching active findings.
+- **Report Mode**: When rendering from a saved report JSON directly using the `report` command, automatic discovery is disabled to avoid unintended suppression. You must explicitly pass the `--baseline` flag:
+  ```bash
+  devdiag report --report .devdiag/runs/latest/report.json --baseline .devdiag/baseline.yaml
+  ```
+- **Showing Baselined Findings**: To inspect baselined/suppressed findings during a scan, use the `--include-hidden` flag:
+  ```bash
+  devdiag scan . --include-hidden
+  ```
+
+---
+
 ## Build
 
 ```bash

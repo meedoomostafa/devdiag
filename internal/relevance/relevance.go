@@ -2,7 +2,9 @@ package relevance
 
 import (
 	"strings"
+	"time"
 
+	"github.com/meedoomostafa/devdiag/internal/baseline"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
@@ -49,6 +51,23 @@ func PolicyFromReport(report *schema.Report, includeHidden bool) Policy {
 		}
 	}
 	return policy
+}
+
+// ApplyBaseline merges active (non-expired) baseline entries into the policy's
+// SuppressedIDs map. Config suppression reasons are not overridden by baseline
+// entries.
+func ApplyBaseline(policy *Policy, b *baseline.Baseline, now time.Time) {
+	if policy == nil || b == nil {
+		return
+	}
+	if policy.SuppressedIDs == nil {
+		policy.SuppressedIDs = make(map[string]string)
+	}
+	for _, entry := range baseline.ActiveEntries(b, now) {
+		if _, exists := policy.SuppressedIDs[entry.ID]; !exists {
+			policy.SuppressedIDs[entry.ID] = entry.Reason
+		}
+	}
 }
 
 func parseSuppressionEvidence(value string) (id, reason string) {

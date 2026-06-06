@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/meedoomostafa/devdiag/internal/app"
 	"github.com/meedoomostafa/devdiag/internal/artifact"
+	"github.com/meedoomostafa/devdiag/internal/baseline"
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/output"
 	"github.com/meedoomostafa/devdiag/internal/relevance"
@@ -70,7 +72,14 @@ var scanCmd = &cobra.Command{
 		}
 
 		redacted := redactEngine.RedactReport(report)
-		filtered, summary := relevance.FilterReport(redacted, relevance.PolicyFromReport(redacted, flagIncludeHidden))
+		policy := relevance.PolicyFromReport(redacted, flagIncludeHidden)
+		b, err := baseline.Load(baseline.DefaultPath(absPath))
+		if err != nil {
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load baseline: %v", err)}
+		}
+		relevance.ApplyBaseline(&policy, b, time.Now())
+		filtered, summary := relevance.FilterReport(redacted, policy)
 		renderer := pickRenderer(colorMode)
 		if humanRenderer, ok := renderer.(*output.HumanRenderer); ok {
 			humanRenderer.HiddenCount = summary.Hidden
