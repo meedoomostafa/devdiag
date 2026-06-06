@@ -515,30 +515,98 @@ devdiag scan . --format ndjson --fail-severity off
 
 ## GitHub Action
 
-The repository includes a composite action in `action.yml`. The action expects a
-`devdiag` binary to already be available on `PATH`, then emits GitHub
-annotations and uploads `devdiag-report` as a JSON artifact.
+DevDiag includes a robust composite GitHub Action (`action.yml`) that runs diagnostic scans directly inside your CI pipelines. 
+
+### Key Features
+- **Auto-Provisioning**: Automatically installs Go (using `actions/setup-go@v5`) and builds `devdiag` from the action's source code if a binary is not preinstalled in the runner's PATH.
+- **Zero-Drift Scan**: Runs `devdiag scan` exactly once, outputting formatting (like GitHub annotations) directly to stdout while simultaneously extracting the JSON report for artifact upload.
+- **Secret Masking**: Automatically registers sensitive inputs with GitHub's mask command (`::add-mask::`) to prevent credential leakage in logs.
+
+### Required Permissions
+
+To run the DevDiag action against your checked-out repository, ensure your workflow defines the minimum read permissions:
 
 ```yaml
-steps:
-  - uses: actions/checkout@v4
-  - uses: actions/setup-go@v5
-    with:
-      go-version: '1.25'
-  - run: |
-      mkdir -p "$RUNNER_TEMP/bin"
-      go build -o "$RUNNER_TEMP/bin/devdiag" ./cmd/devdiag
-      echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-  - uses: ./
-    with:
-      path: .
-      format: github
-      ci: 'true'
-      fail-on-findings: 'true'
-      fail-severity: high
+permissions:
+  contents: read
 ```
 
-Set `fail-on-findings: 'false'` to keep JSON artifact and annotation generation
-without failing the job for DevDiag exit code `1`. Other nonzero exits still
-fail the action. Use `fail-severity` to raise or lower the findings threshold;
-supported values are `off`, `info`, `low`, `medium`, `high`, and `critical`.
+### Action Inputs
+
+| Input | Description | Default |
+|---|---|---|
+| `path` | Path to scan | `.` |
+| `profile` | Diagnostic profile (e.g., `ai-ml`) | `""` |
+| `rule-pack` | Path to an external deterministic rule pack | `""` |
+| `redact` | Redaction level: `default`, `strict`, `off` | `default` |
+| `ci` | Force CI/local parity collection and evaluation | `true` |
+| `include-hidden` | Include low/info and configured hidden findings | `false` |
+| `save-report` | Save report and upload as JSON artifact | `true` |
+| `summary` | Write a short GitHub job summary | `true` |
+| `fail-severity` | Minimum finding severity that fails the action: `off`, `info`, `low`, `medium`, `high`, `critical` | `high` |
+| `artifact-name` | Name for the uploaded JSON report artifact | `devdiag-report` |
+| `format` | Output format: `github` (for inline annotations), `human`, `json`, `ndjson`, `markdown` | `github` |
+| `mask-values` | Newline-separated values to mask | `""` |
+| `use-system-devdiag` | Prefer using a preinstalled devdiag binary in PATH | `false` |
+
+### Action Outputs
+
+| Output | Description |
+|---|---|
+| `report-path` | Path to the generated JSON report artifact on the runner |
+| `summary-written` | Whether the action wrote a GitHub job summary (`true`/`false`) |
+| `scan-exit-code` | The raw exit code of the devdiag scan command |
+| `report-uploaded` | Whether the JSON report was uploaded as an artifact (`true`/`false`) |
+
+---
+
+### Usage Examples
+
+Always check out your repository code before executing the DevDiag scan:
+
+```yaml
+- uses: actions/checkout@v4
+```
+
+#### 1. Fail on High/Critical Findings (Default)
+Emits workflow annotations for findings and fails the build if high or critical issues are found:
+
+```yaml
+- name: Run DevDiag Scan
+  uses: meedoomostafa/devdiag@main
+```
+
+#### 2. Report-Only / Non-Blocking Mode
+Generates annotations and uploads artifacts without failing the build, allowing you to review environment diagnostics offline:
+
+```yaml
+- name: Run DevDiag Scan (Non-Blocking)
+  uses: meedoomostafa/devdiag@main
+  with:
+    fail-severity: off
+```
+
+#### 3. CI Parity Mode
+Checks for version drift and environment matches between your local container configs and GitHub Actions variables:
+
+```yaml
+- name: Run DevDiag CI Parity Scan
+  uses: meedoomostafa/devdiag@main
+  with:
+    ci: 'true'
+    fail-severity: medium
+```
+
+#### 4. Include Hidden Findings
+Includes low-severity and informational rules in the final artifact report for thorough security auditing:
+
+```yaml
+- name: Run Detailed DevDiag Scan
+  uses: meedoomostafa/devdiag@main
+  with:
+    include-hidden: 'true'
+    artifact-name: devdiag-audit-report
+```
+
+
+
