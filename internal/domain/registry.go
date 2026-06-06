@@ -185,12 +185,19 @@ func init() {
 	sortedPrefixMappings = mappings
 }
 
+func cloneDomain(d Domain) Domain {
+	d.Prefixes = append([]string(nil), d.Prefixes...)
+	d.ScopePrefixes = append([]string(nil), d.ScopePrefixes...)
+	d.DefaultLayers = append([]string(nil), d.DefaultLayers...)
+	return d
+}
+
 // FindDomainByFindingID matches a finding ID prefix to its registered domain using longest-prefix matching.
 func FindDomainByFindingID(id string) (Domain, bool) {
 	upperID := strings.ToUpper(id)
 	for _, m := range sortedPrefixMappings {
 		if strings.HasPrefix(upperID, m.prefix) {
-			return m.domain, true
+			return cloneDomain(m.domain), true
 		}
 	}
 	return Domain{}, false
@@ -200,7 +207,7 @@ func FindDomainByFindingID(id string) (Domain, bool) {
 func FindDomainByName(name string) (Domain, bool) {
 	for _, d := range DomainRegistry {
 		if strings.EqualFold(d.Name, name) {
-			return d, true
+			return cloneDomain(d), true
 		}
 	}
 	return Domain{}, false
@@ -210,7 +217,7 @@ func FindDomainByName(name string) (Domain, bool) {
 func FindDomainByTUIKey(key string) (Domain, bool) {
 	for _, d := range DomainRegistry {
 		if d.TUIKey == key {
-			return d, true
+			return cloneDomain(d), true
 		}
 	}
 	return Domain{}, false
@@ -221,7 +228,7 @@ func GetTUIMappedDomains() []Domain {
 	var list []Domain
 	for _, d := range DomainRegistry {
 		if d.TUIVisible && d.TUIKey != "" {
-			list = append(list, d)
+			list = append(list, cloneDomain(d))
 		}
 	}
 	return list

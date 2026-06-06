@@ -155,3 +155,54 @@ func TestFPermInFilesystemScopePrefixes(t *testing.T) {
 		t.Error("F-PERM- not found in filesystem ScopePrefixes")
 	}
 }
+
+func TestFindDomainByFindingIDReturnsDefensiveCopy(t *testing.T) {
+	d1, ok := FindDomainByFindingID("F-CI-RUNTIME-001")
+	if !ok {
+		t.Fatal("F-CI-RUNTIME-001 not found")
+	}
+	orig := d1.DefaultLayers[0]
+	d1.DefaultLayers[0] = "MUTATED"
+
+	d2, _ := FindDomainByFindingID("F-CI-RUNTIME-001")
+	if d2.DefaultLayers[0] == "MUTATED" {
+		t.Error("FindDomainByFindingID returned shared slice reference; mutation leaked")
+	}
+	if d2.DefaultLayers[0] != orig {
+		t.Errorf("unexpected layer mismatch: %q vs %q", d2.DefaultLayers[0], orig)
+	}
+}
+
+func TestFindDomainByNameReturnsDefensiveCopy(t *testing.T) {
+	d1, ok := FindDomainByName("ci")
+	if !ok {
+		t.Fatal("ci domain not found")
+	}
+	orig := d1.Prefixes[0]
+	d1.Prefixes[0] = "MUTATED"
+
+	d2, _ := FindDomainByName("ci")
+	if d2.Prefixes[0] == "MUTATED" {
+		t.Error("FindDomainByName returned shared slice reference; mutation leaked")
+	}
+	if d2.Prefixes[0] != orig {
+		t.Errorf("unexpected prefix mismatch: %q vs %q", d2.Prefixes[0], orig)
+	}
+}
+
+func TestGetTUIMappedDomainsReturnsDefensiveCopies(t *testing.T) {
+	list1 := GetTUIMappedDomains()
+	if len(list1) == 0 {
+		t.Fatal("empty TUI mapped domains")
+	}
+	orig := list1[0].DefaultLayers[0]
+	list1[0].DefaultLayers[0] = "MUTATED"
+
+	list2 := GetTUIMappedDomains()
+	if list2[0].DefaultLayers[0] == "MUTATED" {
+		t.Error("GetTUIMappedDomains returned shared slice reference; mutation leaked")
+	}
+	if list2[0].DefaultLayers[0] != orig {
+		t.Errorf("unexpected layer mismatch: %q vs %q", list2[0].DefaultLayers[0], orig)
+	}
+}
