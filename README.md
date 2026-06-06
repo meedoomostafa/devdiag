@@ -519,7 +519,7 @@ DevDiag includes a robust composite GitHub Action (`action.yml`) that runs diagn
 
 ### Key Features
 - **Auto-Provisioning**: Automatically installs Go (using `actions/setup-go@v5`) and builds `devdiag` from the action's source code if a binary is not preinstalled in the runner's PATH.
-- **Zero-Drift Scan**: Runs `devdiag scan` exactly once, outputting formatting (like GitHub annotations) directly to stdout while simultaneously extracting the JSON report for artifact upload.
+- **Saved-Report Rendering**: In the default `save-report: true` mode, the action runs `devdiag scan` once to save a JSON report, then renders the saved report via `devdiag report` for the requested output format. With `save-report: false`, it renders directly from `devdiag scan`.
 - **Secret Masking**: Automatically registers sensitive inputs with GitHub's mask command (`::add-mask::`) to prevent credential leakage in logs.
 
 ### Required Permissions
