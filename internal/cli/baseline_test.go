@@ -563,3 +563,225 @@ func TestReportWithFingerprintBaselineHidesOnlyMatchingSymptom(t *testing.T) {
 		t.Fatalf("expected finding with symptom 2 to be visible, got symptom: %q", rep.Findings[0].Symptom)
 	}
 }
+
+func TestBaselinePruneMissingBaselineExitsInvalidInput(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := runBinary("baseline", "prune", dir)
+	if code == 0 {
+		t.Fatal("expected non-zero exit for missing baseline pruning")
+	}
+	if !strings.Contains(stderr, "baseline not found") {
+		t.Fatalf("expected 'baseline not found' in stderr, got: %s", stderr)
+	}
+}
+
+func TestBaselinePruneInvalidBaselineExitsInvalidInput(t *testing.T) {
+	dir := t.TempDir()
+	baselinePath := baseline.DefaultPath(dir)
+	if err := os.MkdirAll(filepath.Dir(baselinePath), 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(baselinePath, []byte("invalid yaml { ["), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, stderr, code := runBinary("baseline", "prune", dir)
+	if code == 0 {
+		t.Fatal("expected non-zero exit for invalid baseline pruning")
+	}
+	if !strings.Contains(stderr, "load baseline") {
+		t.Fatalf("expected 'load baseline' in stderr, got: %s", stderr)
+	}
+}
+
+func TestBaselinePruneValidBaselinePrunesExpiredAndSaves(t *testing.T) {
+	dir := t.TempDir()
+	baselinePath := baseline.DefaultPath(dir)
+	now := time.Now().UTC()
+	past := now.Add(-24 * time.Hour)
+	future := now.Add(24 * time.Hour)
+
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-EXPIRED", Reason: "old", CreatedAt: now, ExpiresAt: &past},
+			{ID: "F-ACTIVE", Reason: "current", CreatedAt: now, ExpiresAt: &future},
+		},
+	}
+	if err := baseline.Save(baselinePath, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	stdout, stderr, code := runBinary("baseline", "prune", dir)
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d; stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "Pruned 1 expired entries. 1 active entries remaining.") {
+		t.Fatalf("unexpected stdout: %s", stdout)
+	}
+
+	loaded, err := baseline.Load(baselinePath)
+	if err != nil {
+		t.Fatalf("load baseline: %v", err)
+	}
+	if len(loaded.Entries) != 1 {
+		t.Fatalf("expected 1 remaining entry, got %d", len(loaded.Entries))
+	}
+	if loaded.Entries[0].ID != "F-ACTIVE" {
+		t.Fatalf("expected F-ACTIVE to remain, got %s", loaded.Entries[0].ID)
+	}
+}
+
+func TestBaselineAddCreatesMissingBaselineFile(t *testing.T) {
+	dir := t.TempDir()
+	stdout, stderr, code := runBinary("baseline", "add", "F-ENV-001", dir, "--reason", "added manually")
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d; stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "Added entry for F-ENV-001 (match: id) to baseline.") {
+		t.Fatalf("unexpected stdout: %s", stdout)
+	}
+
+	b, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(b.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(b.Entries))
+	}
+	if b.Entries[0].ID != "F-ENV-001" || b.Entries[0].Reason != "added manually" {
+		t.Fatalf("unexpected entry: %+v", b.Entries[0])
+	}
+}
+
+func TestBaselineAddInvalidFingerprintExitsInvalidInput(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := runBinary("baseline", "add", "F-ENV-001", dir, "--reason", "test", "--fingerprint", "invalid-fp")
+	if code == 0 {
+		t.Fatal("expected non-zero exit for invalid fingerprint add")
+	}
+	if !strings.Contains(stderr, "invalid --fingerprint") {
+		t.Fatalf("expected 'invalid --fingerprint' in stderr, got: %s", stderr)
+	}
+}
+
+func TestBaselineAddSameIDTwiceUpdates(t *testing.T) {
+	dir := t.TempDir()
+	_, _, code := runBinary("baseline", "add", "F-ENV-001", dir, "--reason", "first reason")
+	if code != 0 {
+		t.Fatalf("first add failed with exit %d", code)
+	}
+
+	stdout, _, code := runBinary("baseline", "add", "F-ENV-001", dir, "--reason", "second reason")
+	if code != 0 {
+		t.Fatalf("second add failed with exit %d", code)
+	}
+	if !strings.Contains(stdout, "Updated entry for F-ENV-001 (match: id) in baseline.") {
+		t.Fatalf("unexpected stdout: %s", stdout)
+	}
+
+	b, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(b.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(b.Entries))
+	}
+	if b.Entries[0].Reason != "second reason" {
+		t.Fatalf("expected reason to be updated, got %q", b.Entries[0].Reason)
+	}
+}
+
+func TestBaselineAddSameIDWithDifferentFingerprintsCreatesSeparate(t *testing.T) {
+	dir := t.TempDir()
+	fp1 := "aaa" + strings.Repeat("0", 61)
+	fp2 := "bbb" + strings.Repeat("0", 61)
+
+	_, _, code := runBinary("baseline", "add", "F-ENV-001", dir, "--reason", "first", "--fingerprint", fp1)
+	if code != 0 {
+		t.Fatalf("add fp1 failed: %d", code)
+	}
+
+	_, _, code = runBinary("baseline", "add", "F-ENV-001", dir, "--reason", "second", "--fingerprint", fp2)
+	if code != 0 {
+		t.Fatalf("add fp2 failed: %d", code)
+	}
+
+	b, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(b.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(b.Entries))
+	}
+}
+
+func TestBaselineRemoveIDOnlyDoesNotRemoveFingerprint(t *testing.T) {
+	dir := t.TempDir()
+	fp := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "broad", CreatedAt: time.Now()},
+			{ID: "F-ENV-001", Fingerprint: fp, Reason: "specific", CreatedAt: time.Now()},
+		},
+	}
+	if err := baseline.Save(baseline.DefaultPath(dir), b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	stdout, _, code := runBinary("baseline", "remove", "F-ENV-001", dir)
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d", code)
+	}
+	if !strings.Contains(stdout, "Removed entry for F-ENV-001 (match: id) from baseline.") {
+		t.Fatalf("unexpected stdout: %s", stdout)
+	}
+
+	loaded, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded.Entries) != 1 {
+		t.Fatalf("expected 1 entry to remain, got %d", len(loaded.Entries))
+	}
+	if loaded.Entries[0].Fingerprint != fp {
+		t.Fatalf("expected fingerprint entry to remain, got %q", loaded.Entries[0].Fingerprint)
+	}
+}
+
+func TestBaselineRemoveFingerprintDoesNotRemoveIDOnly(t *testing.T) {
+	dir := t.TempDir()
+	fp := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "broad", CreatedAt: time.Now()},
+			{ID: "F-ENV-001", Fingerprint: fp, Reason: "specific", CreatedAt: time.Now()},
+		},
+	}
+	if err := baseline.Save(baseline.DefaultPath(dir), b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	stdout, _, code := runBinary("baseline", "remove", "F-ENV-001", dir, "--fingerprint", fp)
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d", code)
+	}
+	if !strings.Contains(stdout, "Removed entry for F-ENV-001 (match: fingerprint) from baseline.") {
+		t.Fatalf("unexpected stdout: %s", stdout)
+	}
+
+	loaded, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded.Entries) != 1 {
+		t.Fatalf("expected 1 entry to remain, got %d", len(loaded.Entries))
+	}
+	if loaded.Entries[0].Fingerprint != "" {
+		t.Fatalf("expected ID-only entry to remain, got %q", loaded.Entries[0].Fingerprint)
+	}
+}

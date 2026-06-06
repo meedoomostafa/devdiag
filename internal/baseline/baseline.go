@@ -85,8 +85,8 @@ func Fingerprint(f schema.Finding) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// isValidFingerprint checks if the given string is a valid 64-character SHA-256 hex string.
-func isValidFingerprint(v string) bool {
+// IsValidFingerprint checks if the given string is a valid 64-character SHA-256 hex string.
+func IsValidFingerprint(v string) bool {
 	if len(v) != 64 {
 		return false
 	}
@@ -110,11 +110,91 @@ func validate(b *Baseline) error {
 		if entry.CreatedAt.IsZero() {
 			return fmt.Errorf("baseline entry %d (%s) has zero created_at", i, entry.ID)
 		}
-		if entry.Fingerprint != "" && !isValidFingerprint(entry.Fingerprint) {
+		if entry.Fingerprint != "" && !IsValidFingerprint(entry.Fingerprint) {
 			return fmt.Errorf("baseline entry %d (%s) has invalid fingerprint", i, entry.ID)
 		}
 	}
 	return nil
+}
+
+// Prune removes expired entries from the baseline and returns the pruned count.
+func (b *Baseline) Prune(now time.Time) int {
+	if b == nil {
+		return 0
+	}
+	active := make([]Entry, 0, len(b.Entries))
+	var pruned int
+	for _, entry := range b.Entries {
+		if entry.ExpiresAt != nil && entry.ExpiresAt.Before(now) {
+			pruned++
+			continue
+		}
+		active = append(active, entry)
+	}
+	b.Entries = active
+	return pruned
+}
+
+// Add updates an existing entry (matching ID and Fingerprint) or appends a new one.
+// It normalizes and validates the entry, returning true if updated, false if appended.
+func (b *Baseline) Add(entry Entry) (updated bool, err error) {
+	if b == nil {
+		return false, fmt.Errorf("baseline is nil")
+	}
+
+	entry.ID = strings.ToUpper(strings.TrimSpace(entry.ID))
+	entry.Reason = strings.TrimSpace(entry.Reason)
+	entry.CreatedBy = strings.TrimSpace(entry.CreatedBy)
+
+	if entry.ID == "" {
+		return false, fmt.Errorf("entry ID cannot be empty")
+	}
+	if entry.Reason == "" {
+		return false, fmt.Errorf("entry reason cannot be empty")
+	}
+	if entry.Fingerprint != "" && !IsValidFingerprint(entry.Fingerprint) {
+		return false, fmt.Errorf("invalid fingerprint: %q", entry.Fingerprint)
+	}
+
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = time.Now().UTC()
+	}
+
+	if b.SchemaVersion == "" {
+		b.SchemaVersion = SchemaVersion
+	}
+
+	for i, existing := range b.Entries {
+		if existing.ID == entry.ID && existing.Fingerprint == entry.Fingerprint {
+			b.Entries[i] = entry
+			return true, nil
+		}
+	}
+
+	b.Entries = append(b.Entries, entry)
+	return false, nil
+}
+
+// Remove removes the entry matching the given ID and fingerprint.
+// Returns true if found and removed, false if not found.
+func (b *Baseline) Remove(id string, fingerprint string) bool {
+	if b == nil {
+		return false
+	}
+	id = strings.ToUpper(strings.TrimSpace(id))
+	fingerprint = strings.TrimSpace(fingerprint)
+
+	if id == "" {
+		return false
+	}
+
+	for i, entry := range b.Entries {
+		if entry.ID == id && entry.Fingerprint == fingerprint {
+			b.Entries = append(b.Entries[:i], b.Entries[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 // Save writes a baseline file with owner-only permissions.

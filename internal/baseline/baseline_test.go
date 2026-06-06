@@ -530,3 +530,154 @@ func TestSaveSortsByIDThenFingerprint(t *testing.T) {
 		t.Fatalf("expected third fingerprint to be %s, got %s", fpBBB, loaded.Entries[2].Fingerprint)
 	}
 }
+
+func TestBaselinePrune(t *testing.T) {
+	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-24 * time.Hour)
+	future := now.Add(24 * time.Hour)
+
+	b := &Baseline{
+		SchemaVersion: SchemaVersion,
+		Entries: []Entry{
+			{ID: "F-EXPIRED", Reason: "old", CreatedAt: now, ExpiresAt: &past},
+			{ID: "F-ACTIVE", Reason: "current", CreatedAt: now, ExpiresAt: &future},
+			{ID: "F-NO-EXPIRY", Reason: "forever", CreatedAt: now},
+		},
+	}
+
+	pruned := b.Prune(now)
+	if pruned != 1 {
+		t.Fatalf("expected to prune 1 entry, pruned %d", pruned)
+	}
+	if len(b.Entries) != 2 {
+		t.Fatalf("expected 2 remaining entries, got %d", len(b.Entries))
+	}
+	for _, e := range b.Entries {
+		if e.ID == "F-EXPIRED" {
+			t.Fatal("expired entry should have been pruned")
+		}
+	}
+}
+
+func TestBaselinePruneKeepsNonExpiredFingerprint(t *testing.T) {
+	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	future := now.Add(24 * time.Hour)
+	fp := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+	b := &Baseline{
+		SchemaVersion: SchemaVersion,
+		Entries: []Entry{
+			{ID: "F-ENV-001", Fingerprint: fp, Reason: "current", CreatedAt: now, ExpiresAt: &future},
+		},
+	}
+
+	pruned := b.Prune(now)
+	if pruned != 0 {
+		t.Fatalf("expected 0 pruned, got %d", pruned)
+	}
+	if len(b.Entries) != 1 {
+		t.Fatalf("expected entry to remain, got %d", len(b.Entries))
+	}
+}
+
+func TestBaselineAddRejectsInvalidFingerprint(t *testing.T) {
+	b := &Baseline{SchemaVersion: SchemaVersion}
+	entry := Entry{
+		ID:          "F-ENV-001",
+		Reason:      "reason",
+		Fingerprint: "invalid-fp",
+	}
+	_, err := b.Add(entry)
+	if err == nil {
+		t.Fatal("expected error when adding invalid fingerprint")
+	}
+}
+
+func TestBaselineAddUpdatesSameIDAndFingerprint(t *testing.T) {
+	b := &Baseline{SchemaVersion: SchemaVersion}
+	fp := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	e1 := Entry{ID: "F-ENV-001", Fingerprint: fp, Reason: "first", CreatedAt: time.Now()}
+	e2 := Entry{ID: "F-ENV-001", Fingerprint: fp, Reason: "updated", CreatedAt: time.Now()}
+
+	updated, err := b.Add(e1)
+	if err != nil || updated {
+		t.Fatalf("first add: updated=%v, err=%v", updated, err)
+	}
+
+	updated, err = b.Add(e2)
+	if err != nil || !updated {
+		t.Fatalf("second add: updated=%v, err=%v", updated, err)
+	}
+
+	if len(b.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(b.Entries))
+	}
+	if b.Entries[0].Reason != "updated" {
+		t.Fatalf("expected reason to be updated, got %q", b.Entries[0].Reason)
+	}
+}
+
+func TestBaselineAddDoesNotMergeSameIDWithDifferentFingerprint(t *testing.T) {
+	b := &Baseline{SchemaVersion: SchemaVersion}
+	fp1 := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	fp2 := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b856"
+	e1 := Entry{ID: "F-ENV-001", Fingerprint: fp1, Reason: "first", CreatedAt: time.Now()}
+	e2 := Entry{ID: "F-ENV-001", Fingerprint: fp2, Reason: "second", CreatedAt: time.Now()}
+
+	_, err := b.Add(e1)
+	if err != nil {
+		t.Fatalf("add e1: %v", err)
+	}
+	_, err = b.Add(e2)
+	if err != nil {
+		t.Fatalf("add e2: %v", err)
+	}
+
+	if len(b.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(b.Entries))
+	}
+}
+
+func TestBaselineRemoveWithEmptyFingerprintRemovesOnlyIDOnlyEntry(t *testing.T) {
+	fp := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	b := &Baseline{
+		SchemaVersion: SchemaVersion,
+		Entries: []Entry{
+			{ID: "F-ENV-001", Fingerprint: "", Reason: "broad"},
+			{ID: "F-ENV-001", Fingerprint: fp, Reason: "specific"},
+		},
+	}
+
+	removed := b.Remove("F-ENV-001", "")
+	if !removed {
+		t.Fatal("expected ID-only entry to be removed")
+	}
+	if len(b.Entries) != 1 {
+		t.Fatalf("expected 1 remaining entry, got %d", len(b.Entries))
+	}
+	if b.Entries[0].Fingerprint != fp {
+		t.Fatalf("expected fingerprint entry to remain, got ID %s with fingerprint %q", b.Entries[0].ID, b.Entries[0].Fingerprint)
+	}
+}
+
+func TestBaselineRemoveWithFingerprintRemovesOnlyExactFingerprintEntry(t *testing.T) {
+	fp := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	b := &Baseline{
+		SchemaVersion: SchemaVersion,
+		Entries: []Entry{
+			{ID: "F-ENV-001", Fingerprint: "", Reason: "broad"},
+			{ID: "F-ENV-001", Fingerprint: fp, Reason: "specific"},
+		},
+	}
+
+	removed := b.Remove("F-ENV-001", fp)
+	if !removed {
+		t.Fatal("expected fingerprint entry to be removed")
+	}
+	if len(b.Entries) != 1 {
+		t.Fatalf("expected 1 remaining entry, got %d", len(b.Entries))
+	}
+	if b.Entries[0].Fingerprint != "" {
+		t.Fatalf("expected ID-only entry to remain, got ID %s with fingerprint %q", b.Entries[0].ID, b.Entries[0].Fingerprint)
+	}
+}
