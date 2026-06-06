@@ -265,7 +265,7 @@ func (e *M1Engine) composeRules(result schema.CollectorResult, collectors map[st
 			Confidence:   0.6,
 			Symptom:      fmt.Sprintf("Compose file references environment variable %s which may not be defined", varName),
 			Evidence:     evs,
-			LikelyCauses: []string{"Variable may be missing from .env, .env.local, or host environment"},
+			LikelyCauses: []string{"Variable was not found in collected local env file evidence"},
 		})
 	}
 

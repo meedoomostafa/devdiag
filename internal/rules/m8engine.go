@@ -874,6 +874,9 @@ func isIgnoredCIEnv(key, value string) bool {
 	if strings.HasPrefix(key, "GITHUB_") || strings.HasPrefix(key, "RUNNER_") || strings.HasPrefix(key, "ACTIONS_") {
 		return true
 	}
+	if isDeploymentOnlyHeuristics(key) {
+		return false
+	}
 	value = strings.TrimSpace(value)
 	return strings.HasPrefix(value, "${{ github.") || strings.HasPrefix(value, "${{ runner.") || strings.HasPrefix(value, "${{ env.")
 }
