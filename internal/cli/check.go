@@ -8,6 +8,7 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/collectors"
 	composecollector "github.com/meedoomostafa/devdiag/internal/collectors/compose"
 	composestatuscollector "github.com/meedoomostafa/devdiag/internal/collectors/composestatus"
+	configcollector "github.com/meedoomostafa/devdiag/internal/collectors/config"
 	diskcollector "github.com/meedoomostafa/devdiag/internal/collectors/disk"
 	dockercollector "github.com/meedoomostafa/devdiag/internal/collectors/docker"
 	envcollector "github.com/meedoomostafa/devdiag/internal/collectors/env"
@@ -109,6 +110,7 @@ var checkEnvCmd = &cobra.Command{
 	Args:  cobra.MaximumNArgs(1),
 	RunE: makeCheckRun(func() rules.PolicyEngine { return rules.NewEnvEngine() }, func(path string) []collectors.Collector {
 		return []collectors.Collector{
+			&configcollector.Collector{Root: path},
 			&envcollector.Collector{Root: path},
 			&composecollector.Collector{Root: path},
 		}
