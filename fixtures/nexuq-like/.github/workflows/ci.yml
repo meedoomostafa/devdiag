@@ -1,0 +1,16 @@
+name: CI
+
+on:
+  push:
+
+env:
+  CONFIRM_DEPLOY: deploy-v1
+  RELEASE_SHA: ${{ github.sha }}
+  OCI_SSH_PRIVATE_KEY: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+  OCI_HOST: ${{ vars.OCI_HOST }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: dotnet test

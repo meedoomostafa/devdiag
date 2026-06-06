@@ -1,0 +1,18 @@
+schema_version: "1"
+
+policy:
+  fail_severity: high
+
+env:
+  optional:
+    - Payment__Stripe__SecretKey
+    - Payment__Stripe__WebhookSecret
+    - NEXUQ_PUBLIC_URL
+
+ci:
+  env:
+    deployment_only:
+      - CONFIRM_DEPLOY
+      - RELEASE_SHA
+      - OCI_SSH_PRIVATE_KEY
+      - OCI_HOST

@@ -1,0 +1,10 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: ${NEXUQ_POSTGRES_PASSWORD:?Set NEXUQ_POSTGRES_PASSWORD in .env}
+
+  redis:
+    image: redis:7
+    environment:
+      REDIS_PASSWORD: ${NEXUQ_REDIS_PASSWORD:?Set NEXUQ_REDIS_PASSWORD in .env}
