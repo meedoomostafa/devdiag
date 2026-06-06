@@ -166,7 +166,8 @@ if [ "${SAVE_REPORT_ENABLED}" = "true" ]; then
       set -e
       FINAL_EXIT="$RENDER_EXIT"
     else
-      FINAL_EXIT="$SCAN_EXIT"
+      echo "Error: save-report=true but no saved report was found after scan" >&2
+      FINAL_EXIT=8
     fi
   else
     FINAL_EXIT="$SCAN_EXIT"

@@ -507,6 +507,41 @@ func TestActionScript(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "PR 6: save-report=true with successful scan but missing report fails",
+			env: map[string]string{
+				"CI":                        "true",
+				"SUMMARY":                   "true",
+				"FAIL_ON_FINDINGS":          "true",
+				"INCLUDE_HIDDEN":            "false",
+				"SAVE_REPORT":               "true",
+				"FAIL_SEVERITY":             "medium",
+				"FORMAT":                    "markdown",
+				"REDACT":                    "strict",
+				"DEV_DIAG_SCAN_EXIT":        "0",
+				"DEV_DIAG_SKIP_MOCK_REPORT": "true",
+			},
+			mockExitCode: "0",
+			wantExitCode: 8,
+			verify: func(t *testing.T, tmpDir string, env map[string]string, stdout string, stderr string) {
+				ghOutput := readGHFile(t, filepath.Join(tmpDir, "gh-output"))
+				if ghOutput["scan-exit-code"] != "0" {
+					t.Errorf("expected scan-exit-code=0, got %s", ghOutput["scan-exit-code"])
+				}
+				if ghOutput["report-uploaded"] != "false" {
+					t.Errorf("expected report-uploaded=false, got %s", ghOutput["report-uploaded"])
+				}
+				if _, ok := ghOutput["render-exit-code"]; ok {
+					t.Errorf("expected render-exit-code output to be absent or empty, got %s", ghOutput["render-exit-code"])
+				}
+				invocations := readMockInvocations(t, tmpDir)
+				for _, inv := range invocations {
+					if inv[0] == "report" {
+						t.Errorf("unexpected report subcommand call: %v", inv)
+					}
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -546,16 +581,18 @@ func TestActionScript(t *testing.T) {
 # Save arguments to log
 echo "$@" >> "%s"
 
-# Mock saving report if --save-report is passed
-for arg in "$@"; do
-  if [ "$arg" = "--save-report" ]; then
-    # The last argument is path
-    PATH_ARG="${@: -1}"
-    RUNS_DIR="${PATH_ARG}/.devdiag/runs/mockrun123"
-    mkdir -p "${RUNS_DIR}"
-    echo '{"RunID": "mockrun123", "Findings": [{"id": "F-ENV-001", "title": "Mock Finding", "severity": "high"}]}' > "${RUNS_DIR}/report.json"
-  fi
-done
+# Mock saving report if --save-report is passed and not skipped
+if [ "${DEV_DIAG_SKIP_MOCK_REPORT:-}" != "true" ]; then
+  for arg in "$@"; do
+    if [ "$arg" = "--save-report" ]; then
+      # The last argument is path
+      PATH_ARG="${@: -1}"
+      RUNS_DIR="${PATH_ARG}/.devdiag/runs/mockrun123"
+      mkdir -p "${RUNS_DIR}"
+      echo '{"RunID": "mockrun123", "Findings": [{"id": "F-ENV-001", "title": "Mock Finding", "severity": "high"}]}' > "${RUNS_DIR}/report.json"
+    fi
+  done
+fi
 
 SCAN_EXIT="${DEV_DIAG_SCAN_EXIT:-%s}"
 REPORT_EXIT="${DEV_DIAG_REPORT_EXIT:-%s}"
