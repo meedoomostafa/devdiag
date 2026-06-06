@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -38,7 +40,8 @@ findings are not present and cannot be baselined from that report.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 
-		if baselineCreateReason == "" {
+		reason := strings.TrimSpace(baselineCreateReason)
+		if reason == "" {
 			return exitCodeError{code: exitcode.InvalidInput, message: "--reason is required"}
 		}
 
@@ -78,7 +81,7 @@ findings are not present and cannot be baselined from that report.`,
 		// Build create options.
 		now := time.Now().UTC()
 		opts := baseline.CreateOptions{
-			Reason:    baselineCreateReason,
+			Reason:    reason,
 			CreatedAt: now,
 			CreatedBy: resolveCreatedBy(),
 		}
@@ -148,20 +151,148 @@ var baselineListCmd = &cobra.Command{
 		fmt.Fprintf(w, "Total: %d entries (%d active, %d expired)\n", len(b.Entries), len(active), expired)
 		if len(b.Entries) > 0 {
 			fmt.Fprintln(w)
+			tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "FINDING ID\tSTATUS\tEXPIRES AT\tCREATED BY\tCREATED AT\tREASON")
 			for _, entry := range b.Entries {
 				status := "active"
 				if entry.ExpiresAt != nil && entry.ExpiresAt.Before(now) {
 					status = "expired"
 				}
-				fmt.Fprintf(w, "  %-25s [%s]", entry.ID, status)
-				if entry.Reason != "" {
-					fmt.Fprintf(w, "  %s", entry.Reason)
+				expiresStr := "-"
+				if entry.ExpiresAt != nil {
+					expiresStr = formatBaselineTime(*entry.ExpiresAt)
 				}
-				fmt.Fprintln(w)
+				createdStr := formatBaselineTime(entry.CreatedAt)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					entry.ID,
+					status,
+					expiresStr,
+					entry.CreatedBy,
+					createdStr,
+					entry.Reason,
+				)
 			}
+			tw.Flush()
 		}
 		return nil
 	},
+}
+
+var baselineValidateCmd = &cobra.Command{
+	Use:   "validate [path]",
+	Short: "Validate the baseline file format and schema",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		logger := buildLogger()
+
+		scanPath := "."
+		if len(args) > 0 {
+			scanPath = args[0]
+		}
+		absPath, err := resolveExistingDirectory(scanPath)
+		if err != nil {
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+		}
+
+		baselinePath := baseline.DefaultPath(absPath)
+		_, err = loadExistingBaseline(baselinePath)
+		if err != nil {
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("validate baseline: %v", err)}
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "Baseline at %s is valid.\n", baselinePath)
+		return nil
+	},
+}
+
+var baselinePathCmd = &cobra.Command{
+	Use:   "path [path]",
+	Short: "Print the absolute path to the baseline file",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		logger := buildLogger()
+
+		scanPath := "."
+		if len(args) > 0 {
+			scanPath = args[0]
+		}
+		absPath, err := resolveExistingDirectory(scanPath)
+		if err != nil {
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+		}
+
+		baselinePath := baseline.DefaultPath(absPath)
+		fmt.Fprintln(cmd.OutOrStdout(), baselinePath)
+		return nil
+	},
+}
+
+var baselineStatusCmd = &cobra.Command{
+	Use:   "status [path]",
+	Short: "Show status and statistics of the baseline file",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		logger := buildLogger()
+
+		scanPath := "."
+		if len(args) > 0 {
+			scanPath = args[0]
+		}
+		absPath, err := resolveExistingDirectory(scanPath)
+		if err != nil {
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+		}
+
+		baselinePath := baseline.DefaultPath(absPath)
+		if _, err := os.Stat(baselinePath); err != nil {
+			if os.IsNotExist(err) {
+				fmt.Fprintf(cmd.OutOrStdout(), "Baseline: Not Found (%s)\n", baselinePath)
+				return nil
+			}
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InternalError, message: err.Error()}
+		}
+
+		b, err := baseline.Load(baselinePath)
+		if err != nil {
+			logger.Error("baseline", err.Error())
+			return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load baseline: %v", err)}
+		}
+
+		now := time.Now().UTC()
+		active := baseline.ActiveEntries(b, now)
+		expired := len(b.Entries) - len(active)
+
+		w := cmd.OutOrStdout()
+		fmt.Fprintf(w, "Baseline Path: %s\n", baselinePath)
+		fmt.Fprintln(w, "Status: Valid")
+		fmt.Fprintf(w, "Active Entries: %d\n", len(active))
+		fmt.Fprintf(w, "Expired Entries: %d\n", expired)
+		return nil
+	},
+}
+
+func loadExistingBaseline(path string) (*baseline.Baseline, error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("baseline not found: %s", path)
+		}
+		return nil, err
+	}
+	return baseline.Load(path)
+}
+
+const baselineTimeFormat = "2006-01-02 15:04:05"
+
+func formatBaselineTime(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.UTC().Format(baselineTimeFormat)
 }
 
 // resolveCreatedBy determines the author of the baseline entry.
@@ -205,5 +336,8 @@ func init() {
 
 	baselineCmd.AddCommand(baselineCreateCmd)
 	baselineCmd.AddCommand(baselineListCmd)
+	baselineCmd.AddCommand(baselineValidateCmd)
+	baselineCmd.AddCommand(baselinePathCmd)
+	baselineCmd.AddCommand(baselineStatusCmd)
 	rootCmd.AddCommand(baselineCmd)
 }

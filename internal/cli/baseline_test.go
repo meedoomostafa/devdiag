@@ -305,3 +305,174 @@ func TestReportReportModeWithExplicitBaseline(t *testing.T) {
 		t.Fatalf("expected F-HIGH-001 to remain visible, got: %s", stdout)
 	}
 }
+
+func TestBaselineCreateRefusesWhitespaceReason(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "   ")
+	if code == 0 {
+		t.Fatal("expected non-zero exit for whitespace-only --reason")
+	}
+}
+
+func TestBaselineValidateMissingFileReturnsInvalidInput(t *testing.T) {
+	dir := t.TempDir()
+
+	stdout, stderr, code := runBinary("baseline", "validate", dir)
+	if code == 0 {
+		t.Fatalf("expected non-zero exit for missing baseline validation, got stdout=%s; stderr=%s", stdout, stderr)
+	}
+	if !strings.Contains(stderr, "baseline not found") {
+		t.Fatalf("expected error message to contain 'baseline not found', got: %s", stderr)
+	}
+}
+
+func TestBaselineValidateInvalidFile(t *testing.T) {
+	dir := t.TempDir()
+	baselinePath := baseline.DefaultPath(dir)
+	if err := os.MkdirAll(filepath.Dir(baselinePath), 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(baselinePath, []byte("invalid yaml { ["), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, stderr, code := runBinary("baseline", "validate", dir)
+	if code == 0 {
+		t.Fatal("expected non-zero exit for invalid baseline validation")
+	}
+	if !strings.Contains(stderr, "validate baseline") {
+		t.Fatalf("expected error message to contain 'validate baseline', got: %s", stderr)
+	}
+}
+
+func TestBaselineValidateValidFile(t *testing.T) {
+	dir := t.TempDir()
+	baselinePath := baseline.DefaultPath(dir)
+	now := time.Now().UTC()
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "accepted", CreatedAt: now},
+		},
+	}
+	if err := baseline.Save(baselinePath, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	stdout, stderr, code := runBinary("baseline", "validate", dir)
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d; stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "is valid") {
+		t.Fatalf("expected stdout to mention 'is valid', got: %s", stdout)
+	}
+}
+
+func TestBaselinePathOutput(t *testing.T) {
+	dir := t.TempDir()
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	expectedPath := baseline.DefaultPath(absDir)
+
+	stdout, stderr, code := runBinary("baseline", "path", dir)
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d; stderr=%s", code, stderr)
+	}
+	gotPath := strings.TrimSpace(stdout)
+	if gotPath != expectedPath {
+		t.Fatalf("got path = %q, want %q", gotPath, expectedPath)
+	}
+}
+
+func TestBaselineStatusMissing(t *testing.T) {
+	dir := t.TempDir()
+	stdout, stderr, code := runBinary("baseline", "status", dir)
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d; stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "Baseline: Not Found") {
+		t.Fatalf("expected 'Baseline: Not Found', got: %s", stdout)
+	}
+}
+
+func TestBaselineStatusInvalid(t *testing.T) {
+	dir := t.TempDir()
+	baselinePath := baseline.DefaultPath(dir)
+	if err := os.MkdirAll(filepath.Dir(baselinePath), 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(baselinePath, []byte("invalid yaml { ["), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, stderr, code := runBinary("baseline", "status", dir)
+	if code == 0 {
+		t.Fatal("expected non-zero exit for invalid baseline status")
+	}
+	if !strings.Contains(stderr, "load baseline") {
+		t.Fatalf("expected error message to contain 'load baseline', got: %s", stderr)
+	}
+}
+
+func TestBaselineStatusValid(t *testing.T) {
+	dir := t.TempDir()
+	baselinePath := baseline.DefaultPath(dir)
+	now := time.Now().UTC()
+	past := now.Add(-24 * time.Hour)
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "accepted", CreatedAt: now},
+			{ID: "F-EXPIRED", Reason: "old", CreatedAt: now, ExpiresAt: &past},
+		},
+	}
+	if err := baseline.Save(baselinePath, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	stdout, stderr, code := runBinary("baseline", "status", dir)
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d; stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "Status: Valid") {
+		t.Fatalf("expected 'Status: Valid', got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "Active Entries: 1") {
+		t.Fatalf("expected 'Active Entries: 1', got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "Expired Entries: 1") {
+		t.Fatalf("expected 'Expired Entries: 1', got: %s", stdout)
+	}
+}
+
+func TestBaselineListFormattingTableColumns(t *testing.T) {
+	dir := t.TempDir()
+	baselinePath := baseline.DefaultPath(dir)
+	now := time.Now().UTC()
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "accepted", CreatedAt: now, CreatedBy: "medo"},
+		},
+	}
+	if err := baseline.Save(baselinePath, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	stdout, _, code := runBinary("baseline", "list", dir)
+	if code != 0 {
+		t.Fatalf("list failed with exit %d", code)
+	}
+
+	// Verify headers and fields are present
+	for _, expected := range []string{"FINDING ID", "STATUS", "EXPIRES AT", "CREATED BY", "CREATED AT", "REASON", "F-ENV-001", "active", "medo", "accepted"} {
+		if !strings.Contains(stdout, expected) {
+			t.Fatalf("expected list output to contain %q, got:\n%s", expected, stdout)
+		}
+	}
+}
