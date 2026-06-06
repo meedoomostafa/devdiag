@@ -245,6 +245,78 @@ func TestReportRespectsIncludeHidden(t *testing.T) {
 	}
 }
 
+func TestReportViewCIIncludesDeployOnlyInfo(t *testing.T) {
+	dir := t.TempDir()
+	rep := schema.Report{
+		RunID: "run-view-ci-test",
+		Findings: []schema.Finding{
+			{ID: "F-CI-ENV-DEPLOY-INFO", Title: "Deploy-only CI env", Severity: schema.SeverityInfo},
+			{ID: "F-CI-ENV-001", Title: "CI local mismatch", Severity: schema.SeverityMedium},
+			{ID: "F-ENV-001", Title: "Env mismatch", Severity: schema.SeverityMedium},
+		},
+	}
+	data, _ := json.Marshal(rep)
+	repPath := filepath.Join(dir, "report.json")
+	_ = os.WriteFile(repPath, data, 0o644)
+
+	stdout, stderr, code := runBinaryInDir(dir, "report", "--report", repPath, "--format", "json", "--view", "ci", "--fail-severity", "off")
+	if code != 0 {
+		t.Fatalf("report --view ci exit code = %d, want 0; stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	var parsed schema.Report
+	if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
+		t.Fatalf("report --view ci JSON is invalid: %v; stdout=%s", err, stdout)
+	}
+	if len(parsed.Findings) != 2 {
+		t.Fatalf("report --view ci findings = %d, want 2: %+v", len(parsed.Findings), parsed.Findings)
+	}
+	for _, finding := range parsed.Findings {
+		if !strings.HasPrefix(finding.ID, "F-CI-") {
+			t.Fatalf("report --view ci leaked non-CI finding: %+v", finding)
+		}
+	}
+}
+
+func TestReportViewAllIncludesLowInfoWithoutSuppressed(t *testing.T) {
+	dir := t.TempDir()
+	rep := schema.Report{
+		RunID: "run-view-all-test",
+		Collectors: []schema.CollectorResult{
+			{
+				Name: "config",
+				Evidence: []schema.Evidence{
+					{Source: "devdiag_noise_suppress_finding", Value: "id=F-SUPPRESSED-001 reason=accepted"},
+				},
+			},
+		},
+		Findings: []schema.Finding{
+			{ID: "F-LOW-001", Title: "Low", Severity: schema.SeverityLow},
+			{ID: "F-RUNTIME-DECL-001", Title: "Runtime declaration", Severity: schema.SeverityInfo},
+			{ID: "F-SUPPRESSED-001", Title: "Suppressed", Severity: schema.SeverityMedium},
+		},
+	}
+	data, _ := json.Marshal(rep)
+	repPath := filepath.Join(dir, "report.json")
+	_ = os.WriteFile(repPath, data, 0o644)
+
+	stdout, stderr, code := runBinaryInDir(dir, "report", "--report", repPath, "--format", "json", "--view", "all", "--fail-severity", "off")
+	if code != 0 {
+		t.Fatalf("report --view all exit code = %d, want 0; stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	var parsed schema.Report
+	if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
+		t.Fatalf("report --view all JSON is invalid: %v; stdout=%s", err, stdout)
+	}
+	if len(parsed.Findings) != 2 {
+		t.Fatalf("report --view all findings = %d, want 2: %+v", len(parsed.Findings), parsed.Findings)
+	}
+	for _, finding := range parsed.Findings {
+		if finding.ID == "F-SUPPRESSED-001" {
+			t.Fatal("report --view all should not bypass configured suppressions without --include-hidden")
+		}
+	}
+}
+
 func TestReportRespectsFailSeverity(t *testing.T) {
 	dir := t.TempDir()
 	rep := schema.Report{

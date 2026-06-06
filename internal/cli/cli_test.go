@@ -157,7 +157,6 @@ func gitHubActionDevDiagScript(t *testing.T) string {
 	return string(data)
 }
 
-
 func writeFakeDevDiagForAction(t *testing.T, binDir, callsPath string) {
 	t.Helper()
 	script := `#!/usr/bin/env bash
@@ -213,7 +212,6 @@ exit "${DEV_DIAG_EXIT:-1}"
 	t.Setenv("DEV_DIAG_CALLS", callsPath)
 }
 
-
 func TestInvalidFormat_ReturnsExitCode2(t *testing.T) {
 	_, _, code := runBinary("scan", ".", "--format", "invalid")
 	if code != 2 {
@@ -232,6 +230,13 @@ func TestInvalidColor_ReturnsExitCode2(t *testing.T) {
 	_, _, code := runBinary("scan", ".", "--color", "invalid")
 	if code != 2 {
 		t.Errorf("invalid --color exit code = %d, want 2", code)
+	}
+}
+
+func TestInvalidView_ReturnsExitCode2(t *testing.T) {
+	_, _, code := runBinary("scan", ".", "--view", "everything")
+	if code != 2 {
+		t.Errorf("invalid --view exit code = %d, want 2", code)
 	}
 }
 
@@ -482,7 +487,6 @@ func TestGitHubActionMetadataSupportsArtifactsSummaryAndConfigurableFindings(t *
 	}
 }
 
-
 func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "action-live-signoff.yml"))
 	if err != nil {
@@ -517,6 +521,36 @@ func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Fatalf("action live signoff workflow missing %q:\n%s", want, workflow)
+		}
+	}
+}
+
+func TestActionSmokeWorkflowContract(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "action-smoke.yml"))
+	if err != nil {
+		t.Fatalf("read action smoke workflow: %v", err)
+	}
+	workflow := string(data)
+	for _, want := range []string{
+		"name: Action Smoke",
+		"pull_request:",
+		"workflow_dispatch:",
+		"permissions:",
+		"contents: read",
+		"uses: actions/checkout@v6",
+		"uses: ./",
+		"format: github",
+		"format: markdown",
+		"include-hidden: 'true'",
+		"save-report: 'true'",
+		"fail-severity: off",
+		"test -n \"${{ steps.devdiag.outputs.report-path }}\"",
+		"test -f \"${{ steps.devdiag.outputs.report-path }}\"",
+		"steps.devdiag.outputs.summary-written",
+		"steps.devdiag.outputs.report-uploaded",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("action smoke workflow missing %q:\n%s", want, workflow)
 		}
 	}
 }
@@ -724,7 +758,6 @@ func TestGitHubActionRunScriptAllowsFindingsAndWritesArtifactSummary(t *testing.
 		t.Fatalf("read generated report artifact: %v", err)
 	}
 
-
 	if !strings.Contains(string(reportData), `"schema_version":"test"`) {
 		t.Fatalf("report artifact missing fake JSON payload: %s", reportData)
 	}
@@ -754,7 +787,6 @@ func TestGitHubActionRunScriptAllowsFindingsAndWritesArtifactSummary(t *testing.
 		}
 	}
 }
-
 
 func TestGitHubActionRunScriptForwardsSeverityThresholdAndMasksValues(t *testing.T) {
 	dir := t.TempDir()
@@ -2482,6 +2514,39 @@ func TestTraceCommand_StracelessJSONReportsUnavailable(t *testing.T) {
 		t.Fatalf("trace collector status = %+v, want one unavailable collector", report.Collectors)
 	}
 	assertCollectorEvidence(t, report.Collectors[0], "trace_unavailable_reason", "strace_not_found")
+}
+
+func TestTraceUnavailable_RendersClearStatus(t *testing.T) {
+	workDir := t.TempDir()
+	env := append([]string{}, os.Environ()...)
+	emptyPath := t.TempDir()
+	replacedPath := false
+	for i, item := range env {
+		if strings.HasPrefix(item, "PATH=") {
+			env[i] = "PATH=" + emptyPath
+			replacedPath = true
+			break
+		}
+	}
+	if !replacedPath {
+		env = append(env, "PATH="+emptyPath)
+	}
+
+	stdout, stderr, code := runBinaryInDirWithEnv(workDir, env, "trace", "--backend", "strace", "--scope", "file", "--no-color", "--", "npm", "run", "dev")
+	if code != int(exitcode.TraceUnavailable) {
+		t.Fatalf("trace without strace exit code = %d, want %d; stderr=%s stdout=%s", code, exitcode.TraceUnavailable, stderr, stdout)
+	}
+	for _, want := range []string{
+		"DevDiag trace unavailable",
+		"Backend: strace",
+		"Reason: strace_not_found",
+		"Command: npm",
+		"F-TRACE-UNAVAILABLE-001",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("trace human output missing %q:\nstdout=%s\nstderr=%s", want, stdout, stderr)
+		}
+	}
 }
 
 func TestTraceCommand_PtraceDeniedJSONReportsUnavailable(t *testing.T) {
