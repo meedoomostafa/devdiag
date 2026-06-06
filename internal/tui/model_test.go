@@ -911,3 +911,99 @@ func TestTuiTraceDomainFilter(t *testing.T) {
 		t.Errorf("expected status bar message with 'Filter: trace', got %q", mTrace.statusBarMsg)
 	}
 }
+
+func TestModel_HeaderShowsModeFindingsAndCollectors(t *testing.T) {
+	report := &schema.Report{
+		Repo: schema.RepoInfo{Root: "/home/me/project"},
+		Collectors: []schema.CollectorResult{
+			{Name: "env", Status: schema.CollectorOK},
+			{Name: "trace", Status: schema.CollectorUnavailable},
+		},
+		Findings: []schema.Finding{
+			{ID: "F-ENV-001", Title: "Missing Env Key", Severity: schema.SeverityMedium},
+			{ID: "F-TRACE-UNAVAILABLE-001", Title: "Trace unavailable", Severity: schema.SeverityInfo},
+		},
+	}
+	m := NewReportModel(report, "my-report.json", ModeReport, nil, false)
+	m.width = 100
+	m.height = 30
+
+	view := m.View()
+	for _, want := range []string{
+		"Mode: saved report",
+		"Findings: 1 actionable, 1 hidden",
+		"Collectors: 1 ok, 1 unavailable",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("TUI view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestModel_EvidencePanelPagination(t *testing.T) {
+	finding := schema.Finding{
+		ID:       "F-ENV-001",
+		Title:    "Missing Env Key",
+		Severity: schema.SeverityMedium,
+		Evidence: []schema.Evidence{
+			{Source: "missing_keys", Value: "KEY_1"},
+			{Source: "missing_keys", Value: "KEY_2"},
+			{Source: "missing_keys", Value: "KEY_3"},
+			{Source: "missing_keys", Value: "KEY_4"},
+			{Source: "missing_keys", Value: "KEY_5"},
+			{Source: "missing_keys", Value: "KEY_6"},
+		},
+	}
+	m := NewReportModel(&schema.Report{Findings: []schema.Finding{finding}}, "run-1", ModeRun, nil, true)
+	m.width = 100
+	m.height = 18
+
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	evidence := newM.(Model)
+	view := evidence.View()
+	if !strings.Contains(view, "Evidence") || !strings.Contains(view, "Page 1/2") {
+		t.Fatalf("evidence panel missing page 1 state:\n%s", view)
+	}
+	if !strings.Contains(view, "KEY_1") {
+		t.Fatalf("evidence panel should include first evidence page:\n%s", view)
+	}
+
+	newM, _ = evidence.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	evidence = newM.(Model)
+	view = evidence.View()
+	if !strings.Contains(view, "Page 2/2") || !strings.Contains(view, "KEY_6") {
+		t.Fatalf("evidence panel missing page 2 state:\n%s", view)
+	}
+}
+
+func TestModel_CommandActionsCopyDryRunAndRefuseExecute(t *testing.T) {
+	report := &schema.Report{
+		Findings: []schema.Finding{
+			{
+				ID:       "F-ENV-001",
+				Title:    "Missing Env Key",
+				Severity: schema.SeverityMedium,
+				Fixes:    []schema.Fix{{Title: "Add env key"}},
+			},
+		},
+	}
+	m := NewReportModel(report, "run-1", ModeRun, nil, false)
+
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	copied := newM.(Model)
+	if !strings.Contains(copied.statusBarMsg, "Copy command:") || !strings.Contains(copied.statusBarMsg, "devdiag scan") {
+		t.Fatalf("expected copy command status, got %q", copied.statusBarMsg)
+	}
+
+	newM, _ = copied.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	refused := newM.(Model)
+	if !strings.Contains(refused.statusBarMsg, "Command execution disabled") {
+		t.Fatalf("expected command execution refusal, got %q", refused.statusBarMsg)
+	}
+
+	newM, _ = refused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	fix := newM.(Model)
+	if !strings.Contains(fix.statusBarMsg, "Fix dry-run: devdiag fix F-ENV-001 --dry-run") {
+		t.Fatalf("expected fix dry-run status, got %q", fix.statusBarMsg)
+	}
+}

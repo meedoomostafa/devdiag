@@ -129,6 +129,13 @@ const (
 	ModeRun
 )
 
+type detailPane int
+
+const (
+	paneDetail detailPane = iota
+	paneEvidence
+)
+
 // Model is the Bubble Tea model for the inspect TUI.
 type Model struct {
 	// Mode and source info
@@ -165,6 +172,9 @@ type Model struct {
 	showHidden    bool
 	hiddenCount   int
 	activeFilters ActiveFilters
+	activePane    detailPane
+	evidencePage  int
+	viewMode      relevance.ViewMode
 
 	// Dimensions (updated by WindowSizeMsg)
 	width  int
@@ -185,11 +195,17 @@ func NewScanModel(opts app.ScanOptions, engine *redact.Engine, includeHidden ...
 		includeHidden: showHidden,
 		showHidden:    showHidden,
 		activeFilters: DefaultFilters(),
+		activePane:    paneDetail,
+		viewMode:      relevance.ViewActionable,
 	}
 }
 
 // NewReportModel creates a TUI model for an already preloaded/loaded report.
-func NewReportModel(report *schema.Report, sourceName string, mode ModelMode, engine *redact.Engine, includeHidden bool) Model {
+func NewReportModel(report *schema.Report, sourceName string, mode ModelMode, engine *redact.Engine, includeHidden bool, viewModes ...relevance.ViewMode) Model {
+	viewMode := relevance.ViewActionable
+	if len(viewModes) > 0 && viewModes[0] != "" {
+		viewMode = viewModes[0]
+	}
 	m := Model{
 		mode:          mode,
 		sourceName:    sourceName,
@@ -197,11 +213,24 @@ func NewReportModel(report *schema.Report, sourceName string, mode ModelMode, en
 		includeHidden: includeHidden,
 		showHidden:    includeHidden,
 		activeFilters: DefaultFilters(),
+		activePane:    paneDetail,
+		viewMode:      viewMode,
 	}
 	if engine != nil && report != nil {
 		report = engine.RedactReport(report)
 	}
 	m = m.applyVisibility(report)
+	return m
+}
+
+func (m Model) WithViewMode(viewMode relevance.ViewMode) Model {
+	if viewMode == "" {
+		viewMode = relevance.ViewActionable
+	}
+	m.viewMode = viewMode
+	if m.fullReport != nil {
+		m = m.applyVisibility(m.fullReport)
+	}
 	return m
 }
 
@@ -232,6 +261,8 @@ func (m Model) StartScan() (Model, tea.Cmd) {
 	m.filtered = nil
 	m.selected = 0
 	m.scrollOffset = 0
+	m.activePane = paneDetail
+	m.evidencePage = 0
 
 	return m, tea.Batch(startScan(m.opts, m.sessionID), m.spinner.Tick)
 }
@@ -246,6 +277,7 @@ func (m Model) applyActiveFilters() Model {
 func (m Model) applyVisibility(report *schema.Report) Model {
 	m.fullReport = report
 	policy := relevance.PolicyFromReport(report, m.showHidden)
+	policy.View = m.viewMode
 	filteredReport, summary := relevance.FilterReport(report, policy)
 	m.report = filteredReport
 	m.hiddenCount = summary.Hidden
@@ -253,6 +285,7 @@ func (m Model) applyVisibility(report *schema.Report) Model {
 	m.filtered = ApplyFilters(m.findings, m.activeFilters)
 	m.selected = 0
 	m.scrollOffset = 0
+	m.evidencePage = 0
 	return m
 }
 

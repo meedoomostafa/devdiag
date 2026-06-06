@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/base64"
 	"strings"
 	"sync"
 
@@ -198,6 +199,32 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "v":
 		m.verbose = !m.verbose
 		return m, nil
+	case "e":
+		m.activePane = paneEvidence
+		m.evidencePage = 0
+		return m, nil
+	case "tab":
+		if m.activePane == paneEvidence {
+			m.activePane = paneDetail
+		} else {
+			m.activePane = paneEvidence
+		}
+		return m, nil
+	case "pgdown":
+		m.nextEvidencePage()
+		return m, nil
+	case "pgup":
+		m.prevEvidencePage()
+		return m, nil
+	case "c":
+		cmd := m.copySuggestedCommand()
+		return m, cmd
+	case "x":
+		m.statusBarMsg = "Command execution disabled until a read-only command registry is available"
+		return m, nil
+	case "f":
+		m.showFixDryRun()
+		return m, nil
 	case "h":
 		if m.fullReport != nil {
 			m.showHidden = !m.showHidden
@@ -290,6 +317,7 @@ func (m *Model) nextFinding() {
 	}
 	if m.selected < len(m.filtered)-1 {
 		m.selected++
+		m.evidencePage = 0
 		m.adjustScroll()
 	}
 }
@@ -297,8 +325,76 @@ func (m *Model) nextFinding() {
 func (m *Model) prevFinding() {
 	if m.selected > 0 {
 		m.selected--
+		m.evidencePage = 0
 		m.adjustScroll()
 	}
+}
+
+func (m *Model) selectedFinding() (InspectFinding, bool) {
+	if m.selected < 0 || m.selected >= len(m.filtered) {
+		return InspectFinding{}, false
+	}
+	return m.filtered[m.selected], true
+}
+
+func evidencePageSize() int {
+	return 5
+}
+
+func (m *Model) evidencePageCount() int {
+	f, ok := m.selectedFinding()
+	if !ok || len(f.Finding.Evidence) == 0 {
+		return 1
+	}
+	size := evidencePageSize()
+	pages := (len(f.Finding.Evidence) + size - 1) / size
+	if pages < 1 {
+		return 1
+	}
+	return pages
+}
+
+func (m *Model) nextEvidencePage() {
+	if m.activePane != paneEvidence {
+		m.activePane = paneEvidence
+	}
+	if m.evidencePage < m.evidencePageCount()-1 {
+		m.evidencePage++
+	}
+}
+
+func (m *Model) prevEvidencePage() {
+	if m.activePane != paneEvidence {
+		m.activePane = paneEvidence
+	}
+	if m.evidencePage > 0 {
+		m.evidencePage--
+	}
+}
+
+func (m *Model) copySuggestedCommand() tea.Cmd {
+	f, ok := m.selectedFinding()
+	if !ok || len(f.SuggestedCommands) == 0 {
+		m.statusBarMsg = "No suggested command to copy"
+		return nil
+	}
+	command := f.SuggestedCommands[0].Command
+	m.statusBarMsg = "Copy command: " + command
+	encoded := base64.StdEncoding.EncodeToString([]byte(command))
+	return tea.Printf("\x1b]52;c;%s\a", encoded)
+}
+
+func (m *Model) showFixDryRun() {
+	f, ok := m.selectedFinding()
+	if !ok {
+		m.statusBarMsg = "No finding selected"
+		return
+	}
+	if len(f.Finding.Fixes) == 0 {
+		m.statusBarMsg = "No fix dry-run available for " + f.Finding.ID
+		return
+	}
+	m.statusBarMsg = "Fix dry-run: devdiag fix " + f.Finding.ID + " --dry-run"
 }
 
 // cancelScan cancels the active scan goroutine if one exists.

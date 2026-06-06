@@ -99,6 +99,12 @@ func (m Model) renderHelp() string {
 	b.WriteString("  up / k       previous finding\n")
 	b.WriteString("  down / j     next finding\n")
 	b.WriteString("  v            toggle verbose evidence\n")
+	b.WriteString("  e            open evidence panel\n")
+	b.WriteString("  tab          switch detail/evidence panel\n")
+	b.WriteString("  pgup/pgdn    previous/next evidence page\n")
+	b.WriteString("  c            show command to copy\n")
+	b.WriteString("  x            run safe read-only command (disabled)\n")
+	b.WriteString("  f            show fix dry-run command\n")
 	b.WriteString("  h            toggle hidden low/info findings\n")
 	b.WriteString("  /            filter findings\n")
 	b.WriteString("  ?            toggle this help\n")
@@ -256,21 +262,25 @@ func (m Model) renderFindings() string {
 	}
 
 	title := appTitleStyle.Render(" " + m.inspectTitle() + " ")
+	header := helpStyle.Render(m.renderModeSummary())
 
 	listContent := m.renderList(listWidth)
-	listPanel := listStyle.Width(listWidth).Height(m.height - 3).Render(listContent)
+	listPanel := listStyle.Width(listWidth).Height(m.height - 4).Render(listContent)
 
 	detailContent := m.renderDetail(detailWidth)
-	detailPanel := detailStyle.Width(detailWidth).Height(m.height - 3).Render(detailContent)
+	if m.activePane == paneEvidence {
+		detailContent = m.renderEvidencePanel(detailWidth)
+	}
+	detailPanel := detailStyle.Width(detailWidth).Height(m.height - 4).Render(detailContent)
 
-	footerText := "q:quit r:rerun ↑k:prev ↓j:next h:hidden v:verbose /:filter 0-6:domain ?:help"
+	footerText := "q:quit r:rerun ↑k:prev ↓j:next h:hidden v:verbose e:evidence tab:pane c:copy f:fix 0-6:domain ?:help"
 	if m.statusBarMsg != "" {
 		footerText = fmt.Sprintf("%s | %s", footerText, m.statusBarMsg)
 	}
 	footer := helpStyle.Render(footerText)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, detailPanel)
-	return lipgloss.JoinVertical(lipgloss.Left, title, body, footer)
+	return lipgloss.JoinVertical(lipgloss.Left, title, header, body, footer)
 }
 
 // renderCompact shows a single-column stacked layout for small terminals.
@@ -298,7 +308,7 @@ func (m Model) renderCompact() string {
 		b.WriteString("No findings.\n\n")
 	}
 
-	footerText := "q:quit r:rerun ↑k:prev ↓j:next h:hidden 0-6:domain ?:help"
+	footerText := "q:quit r:rerun ↑k:prev ↓j:next h:hidden e:evidence 0-6:domain ?:help"
 	if m.statusBarMsg != "" {
 		footerText = fmt.Sprintf("%s | %s", footerText, m.statusBarMsg)
 	}
@@ -439,6 +449,43 @@ func (m Model) renderDetail(width int) string {
 	return b.String()
 }
 
+func (m Model) renderEvidencePanel(width int) string {
+	f, ok := m.selectedFinding()
+	if !ok {
+		return ""
+	}
+	var b strings.Builder
+	pageCount := m.evidencePageCount()
+	if m.evidencePage >= pageCount {
+		m.evidencePage = pageCount - 1
+	}
+	if m.evidencePage < 0 {
+		m.evidencePage = 0
+	}
+	b.WriteString(lipgloss.NewStyle().Bold(true).Render("Evidence"))
+	b.WriteString(fmt.Sprintf("  Page %d/%d\n\n", m.evidencePage+1, pageCount))
+	if len(f.Finding.Evidence) == 0 {
+		b.WriteString("No evidence attached to this finding.\n")
+		return b.String()
+	}
+	size := evidencePageSize()
+	start := m.evidencePage * size
+	end := start + size
+	if end > len(f.Finding.Evidence) {
+		end = len(f.Finding.Evidence)
+	}
+	for _, ev := range f.Finding.Evidence[start:end] {
+		val := ev.Value
+		if len(val) > width-6 {
+			val = val[:width-9] + "..."
+		}
+		b.WriteString(fmt.Sprintf("%s\n", lipgloss.NewStyle().Bold(true).Render(ev.Source)))
+		b.WriteString(wrapText(val, width-2))
+		b.WriteString("\n\n")
+	}
+	return b.String()
+}
+
 func wrapText(text string, width int) string {
 	if width <= 0 {
 		width = 40
@@ -472,4 +519,66 @@ func (m Model) inspectTitle() string {
 	default:
 		return "DevDiag Inspect"
 	}
+}
+
+func (m Model) modeLabel() string {
+	switch m.mode {
+	case ModeScan:
+		return "scan"
+	case ModeReport:
+		return "saved report"
+	case ModeRun:
+		if m.sourceName != "" {
+			return "run " + m.sourceName
+		}
+		return "run"
+	default:
+		return "unknown"
+	}
+}
+
+func (m Model) renderModeSummary() string {
+	collectorSummary := m.collectorStatusSummary()
+	return fmt.Sprintf("Mode: %s | Findings: %d actionable, %d hidden | Collectors: %s",
+		m.modeLabel(), len(m.findings), m.hiddenCount, collectorSummary)
+}
+
+func (m Model) collectorStatusSummary() string {
+	if m.report == nil || len(m.report.Collectors) == 0 {
+		return "0"
+	}
+	counts := map[schema.CollectorStatus]int{}
+	for _, collector := range m.report.Collectors {
+		status := collector.Status
+		if status == "" {
+			status = schema.CollectorOK
+		}
+		counts[status]++
+	}
+	order := []schema.CollectorStatus{
+		schema.CollectorOK,
+		schema.CollectorPartial,
+		schema.CollectorTimeout,
+		schema.CollectorUnavailable,
+		schema.CollectorPermissionDenied,
+		schema.CollectorFailed,
+	}
+	labels := map[schema.CollectorStatus]string{
+		schema.CollectorOK:               "ok",
+		schema.CollectorPartial:          "partial",
+		schema.CollectorTimeout:          "timeout",
+		schema.CollectorUnavailable:      "unavailable",
+		schema.CollectorPermissionDenied: "permission denied",
+		schema.CollectorFailed:           "failed",
+	}
+	var parts []string
+	for _, status := range order {
+		if counts[status] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", counts[status], labels[status]))
+		}
+	}
+	if len(parts) == 0 {
+		return "0"
+	}
+	return strings.Join(parts, ", ")
 }
