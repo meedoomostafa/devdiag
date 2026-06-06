@@ -476,3 +476,90 @@ func TestBaselineListFormattingTableColumns(t *testing.T) {
 		}
 	}
 }
+
+func TestBaselineCreateWithFingerprintWritesFingerprint(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue", Symptom: "symptom 1"},
+	})
+
+	stdout, stderr, code := runBinary("baseline", "create", dir, "--reason", "accepted specific", "--fingerprint")
+	if code != 0 {
+		t.Fatalf("exit=%d; stdout=%s; stderr=%s", code, stdout, stderr)
+	}
+
+	b, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load baseline: %v", err)
+	}
+	if len(b.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(b.Entries))
+	}
+	if b.Entries[0].Fingerprint == "" {
+		t.Fatal("expected entry to have a fingerprint")
+	}
+}
+
+func TestBaselineListShowsMatchMode(t *testing.T) {
+	dir := t.TempDir()
+	baselinePath := baseline.DefaultPath(dir)
+	now := time.Now().UTC()
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "accepted 1", CreatedAt: now, CreatedBy: "medo"},
+			{ID: "F-ENV-002", Reason: "accepted 2", CreatedAt: now, CreatedBy: "medo", Fingerprint: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+		},
+	}
+	if err := baseline.Save(baselinePath, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	stdout, _, code := runBinary("baseline", "list", dir)
+	if code != 0 {
+		t.Fatalf("list failed with exit %d", code)
+	}
+
+	for _, expected := range []string{"MATCH", "id", "fingerprint"} {
+		if !strings.Contains(stdout, expected) {
+			t.Fatalf("expected list output to contain %q, got:\n%s", expected, stdout)
+		}
+	}
+}
+
+func TestReportWithFingerprintBaselineHidesOnlyMatchingSymptom(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue", Symptom: "symptom 1"},
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue", Symptom: "symptom 2"},
+	})
+
+	now := time.Now().UTC()
+	fp := baseline.Fingerprint(schema.Finding{ID: "F-ENV-001", Symptom: "symptom 1"})
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Fingerprint: fp, Reason: "accepted symptom 1", CreatedAt: now},
+		},
+	}
+	baselinePath := baseline.DefaultPath(dir)
+	if err := baseline.Save(baselinePath, b); err != nil {
+		t.Fatalf("save baseline: %v", err)
+	}
+
+	reportFilePath := filepath.Join(artifact.RunDir(dir, "2026-06-06T12-00-00Z_abcd"), "report.json")
+	stdout, stderr, code := runBinary("report", "--report", reportFilePath, "--baseline", baselinePath, "--format", "json", "--fail-severity", "off")
+	if code != 0 {
+		t.Fatalf("report failed with exit %d; stderr=%s", code, stderr)
+	}
+
+	var rep schema.Report
+	if err := json.Unmarshal([]byte(stdout), &rep); err != nil {
+		t.Fatalf("invalid json: %v; stdout=%s", err, stdout)
+	}
+
+	if len(rep.Findings) != 1 {
+		t.Fatalf("expected 1 visible finding, got %d", len(rep.Findings))
+	}
+	if rep.Findings[0].Symptom != "symptom 2" {
+		t.Fatalf("expected finding with symptom 2 to be visible, got symptom: %q", rep.Findings[0].Symptom)
+	}
+}

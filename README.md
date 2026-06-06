@@ -217,6 +217,15 @@ To baseline a specific run rather than the latest:
 devdiag baseline create --reason "fixed reference run" --run-id "2026-06-06T12-00-00Z_abcd"
 ```
 
+To create a baseline with exact instance-level fingerprinting (so only finding instances with the exact same ID and symptom are suppressed, rather than silencing all findings of a given ID globally):
+
+```bash
+devdiag baseline create --reason "accepted specific instance" --fingerprint
+```
+
+> [!NOTE]
+> **Redaction Caveat**: Fingerprints are computed from finding ID + symptom as present in the saved/redacted report. Changing redaction mode or changing diagnostic wording may require regenerating the fingerprint baseline.
+
 ### Viewing and Managing Baselines
 
 List all entries, their status (active or expired), and documented reasons:

@@ -3,6 +3,7 @@ package baseline
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -387,5 +388,145 @@ func TestParseExpiryDurationRejectsInvalid(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected error for input %q", input)
 		}
+	}
+}
+
+func TestFingerprintNormalizesID(t *testing.T) {
+	f1 := schema.Finding{ID: "f-env-001", Symptom: "test"}
+	f2 := schema.Finding{ID: " F-ENV-001 ", Symptom: "test"}
+
+	fp1 := Fingerprint(f1)
+	fp2 := Fingerprint(f2)
+	if fp1 != fp2 {
+		t.Fatalf("expected fingerprints to match normalized ID, got %q and %q", fp1, fp2)
+	}
+}
+
+func TestLoadRejectsInvalidFingerprint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "baseline.yaml")
+	data := []byte(`schema_version: devdiag.baseline/v1
+entries:
+  - id: F-ENV-001
+    reason: "test"
+    created_at: 2026-06-06T12:00:00Z
+    fingerprint: "invalidhex123"
+`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid fingerprint on load")
+	}
+}
+
+func TestLoadAcceptsValidFingerprint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "baseline.yaml")
+	validFP := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	data := []byte(`schema_version: devdiag.baseline/v1
+entries:
+  - id: F-ENV-001
+    reason: "test"
+    created_at: 2026-06-06T12:00:00Z
+    fingerprint: "` + validFP + `"
+`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	b, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if b.Entries[0].Fingerprint != validFP {
+		t.Fatalf("loaded fingerprint = %q, want %q", b.Entries[0].Fingerprint, validFP)
+	}
+}
+
+func TestCreateFromFindingsWithoutFingerprintDeduplicatesByID(t *testing.T) {
+	findings := []schema.Finding{
+		{ID: "F-ENV-001", Symptom: "test 1"},
+		{ID: "F-ENV-001", Symptom: "test 2"},
+	}
+	b := CreateFromFindings(findings, CreateOptions{
+		Reason:    "test",
+		CreatedAt: time.Now(),
+	})
+	if len(b.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(b.Entries))
+	}
+}
+
+func TestCreateFromFindingsWithFingerprintKeepsSameIDDifferentSymptoms(t *testing.T) {
+	findings := []schema.Finding{
+		{ID: "F-ENV-001", Symptom: "test 1"},
+		{ID: "F-ENV-001", Symptom: "test 2"},
+	}
+	b := CreateFromFindings(findings, CreateOptions{
+		Reason:         "test",
+		CreatedAt:      time.Now(),
+		UseFingerprint: true,
+	})
+	if len(b.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(b.Entries))
+	}
+	if b.Entries[0].Fingerprint == "" || b.Entries[1].Fingerprint == "" {
+		t.Fatal("expected non-empty fingerprints in entries")
+	}
+	if b.Entries[0].Fingerprint == b.Entries[1].Fingerprint {
+		t.Fatal("expected different fingerprints for different symptoms")
+	}
+}
+
+func TestCreateFromFindingsWithFingerprintDeduplicatesSameIDAndSameSymptom(t *testing.T) {
+	findings := []schema.Finding{
+		{ID: "F-ENV-001", Symptom: "test 1"},
+		{ID: "F-ENV-001", Symptom: "test 1"},
+	}
+	b := CreateFromFindings(findings, CreateOptions{
+		Reason:         "test",
+		CreatedAt:      time.Now(),
+		UseFingerprint: true,
+	})
+	if len(b.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(b.Entries))
+	}
+}
+
+func TestSaveSortsByIDThenFingerprint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "baseline.yaml")
+
+	now := time.Now().UTC()
+	fpAAA := "aaa" + strings.Repeat("0", 61)
+	fpBBB := "bbb" + strings.Repeat("0", 61)
+	fpCCC := "ccc" + strings.Repeat("0", 61)
+
+	b := &Baseline{
+		SchemaVersion: SchemaVersion,
+		Entries: []Entry{
+			{ID: "F-ENV-001", Fingerprint: fpBBB, CreatedAt: now},
+			{ID: "F-ENV-001", Fingerprint: fpAAA, CreatedAt: now},
+			{ID: "F-CI", Fingerprint: fpCCC, CreatedAt: now},
+		},
+	}
+	if err := Save(path, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if loaded.Entries[0].ID != "F-CI" {
+		t.Fatalf("expected first ID to be F-CI, got %s", loaded.Entries[0].ID)
+	}
+	if loaded.Entries[1].Fingerprint != fpAAA {
+		t.Fatalf("expected second fingerprint to be %s, got %s", fpAAA, loaded.Entries[1].Fingerprint)
+	}
+	if loaded.Entries[2].Fingerprint != fpBBB {
+		t.Fatalf("expected third fingerprint to be %s, got %s", fpBBB, loaded.Entries[2].Fingerprint)
 	}
 }

@@ -10,9 +10,10 @@ import (
 
 // Policy controls which findings stay visible in user-facing reports.
 type Policy struct {
-	IncludeHidden bool
-	MinSeverity   schema.Severity
-	SuppressedIDs map[string]string
+	IncludeHidden          bool
+	MinSeverity            schema.Severity
+	SuppressedIDs          map[string]string
+	SuppressedFingerprints map[string]string
 }
 
 // Summary describes the effect of applying a Policy.
@@ -23,8 +24,9 @@ type Summary struct {
 
 func DefaultPolicy() Policy {
 	return Policy{
-		MinSeverity:   schema.SeverityMedium,
-		SuppressedIDs: make(map[string]string),
+		MinSeverity:            schema.SeverityMedium,
+		SuppressedIDs:          make(map[string]string),
+		SuppressedFingerprints: make(map[string]string),
 	}
 }
 
@@ -54,8 +56,8 @@ func PolicyFromReport(report *schema.Report, includeHidden bool) Policy {
 }
 
 // ApplyBaseline merges active (non-expired) baseline entries into the policy's
-// SuppressedIDs map. Config suppression reasons are not overridden by baseline
-// entries.
+// SuppressedIDs or SuppressedFingerprints map. Config suppression reasons are not
+// overridden by baseline entries.
 func ApplyBaseline(policy *Policy, b *baseline.Baseline, now time.Time) {
 	if policy == nil || b == nil {
 		return
@@ -63,9 +65,18 @@ func ApplyBaseline(policy *Policy, b *baseline.Baseline, now time.Time) {
 	if policy.SuppressedIDs == nil {
 		policy.SuppressedIDs = make(map[string]string)
 	}
+	if policy.SuppressedFingerprints == nil {
+		policy.SuppressedFingerprints = make(map[string]string)
+	}
 	for _, entry := range baseline.ActiveEntries(b, now) {
-		if _, exists := policy.SuppressedIDs[entry.ID]; !exists {
-			policy.SuppressedIDs[entry.ID] = entry.Reason
+		if entry.Fingerprint != "" {
+			if _, exists := policy.SuppressedFingerprints[entry.Fingerprint]; !exists {
+				policy.SuppressedFingerprints[entry.Fingerprint] = entry.Reason
+			}
+		} else {
+			if _, exists := policy.SuppressedIDs[entry.ID]; !exists {
+				policy.SuppressedIDs[entry.ID] = entry.Reason
+			}
 		}
 	}
 }
@@ -103,6 +114,12 @@ func FilterReport(report *schema.Report, policy Policy) (*schema.Report, Summary
 func IsHidden(f schema.Finding, policy Policy) bool {
 	if policy.IncludeHidden {
 		return false
+	}
+	if len(policy.SuppressedFingerprints) > 0 {
+		fp := baseline.Fingerprint(f)
+		if _, ok := policy.SuppressedFingerprints[fp]; ok {
+			return true
+		}
 	}
 	if _, ok := policy.SuppressedIDs[f.ID]; ok {
 		return true

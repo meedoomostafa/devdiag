@@ -15,12 +15,13 @@ import (
 )
 
 var (
-	baselineCreateReason    string
-	baselineCreateExpires   string
-	baselineCreateCreatedBy string
-	baselineCreateForce     bool
-	baselineCreateRunID     string
-	baselineCreateMinSev    string
+	baselineCreateReason      string
+	baselineCreateExpires     string
+	baselineCreateCreatedBy   string
+	baselineCreateForce       bool
+	baselineCreateRunID       string
+	baselineCreateMinSev      string
+	baselineCreateFingerprint bool
 )
 
 var baselineCmd = &cobra.Command{
@@ -81,9 +82,10 @@ findings are not present and cannot be baselined from that report.`,
 		// Build create options.
 		now := time.Now().UTC()
 		opts := baseline.CreateOptions{
-			Reason:    reason,
-			CreatedAt: now,
-			CreatedBy: resolveCreatedBy(),
+			Reason:         reason,
+			CreatedAt:      now,
+			CreatedBy:      resolveCreatedBy(),
+			UseFingerprint: baselineCreateFingerprint,
 		}
 
 		// Parse expiry.
@@ -152,19 +154,24 @@ var baselineListCmd = &cobra.Command{
 		if len(b.Entries) > 0 {
 			fmt.Fprintln(w)
 			tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "FINDING ID\tSTATUS\tEXPIRES AT\tCREATED BY\tCREATED AT\tREASON")
+			fmt.Fprintln(tw, "FINDING ID\tMATCH\tSTATUS\tEXPIRES AT\tCREATED BY\tCREATED AT\tREASON")
 			for _, entry := range b.Entries {
 				status := "active"
 				if entry.ExpiresAt != nil && entry.ExpiresAt.Before(now) {
 					status = "expired"
+				}
+				matchMode := "id"
+				if entry.Fingerprint != "" {
+					matchMode = "fingerprint"
 				}
 				expiresStr := "-"
 				if entry.ExpiresAt != nil {
 					expiresStr = formatBaselineTime(*entry.ExpiresAt)
 				}
 				createdStr := formatBaselineTime(entry.CreatedAt)
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 					entry.ID,
+					matchMode,
 					status,
 					expiresStr,
 					entry.CreatedBy,
@@ -333,6 +340,7 @@ func init() {
 	baselineCreateCmd.Flags().BoolVar(&baselineCreateForce, "force", false, "Overwrite existing baseline file")
 	baselineCreateCmd.Flags().StringVar(&baselineCreateRunID, "run-id", "", "Use a specific saved run instead of latest")
 	baselineCreateCmd.Flags().StringVar(&baselineCreateMinSev, "min-severity", "", "Minimum finding severity to include (info, low, medium, high, critical)")
+	baselineCreateCmd.Flags().BoolVar(&baselineCreateFingerprint, "fingerprint", false, "Create baseline entries with exact finding fingerprints (opt-in)")
 
 	baselineCmd.AddCommand(baselineCreateCmd)
 	baselineCmd.AddCommand(baselineListCmd)

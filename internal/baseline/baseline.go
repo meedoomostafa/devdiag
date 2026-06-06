@@ -1,6 +1,7 @@
 package baseline
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -19,11 +20,12 @@ const SchemaVersion = "devdiag.baseline/v1"
 
 // Entry represents a single suppressed finding in a baseline file.
 type Entry struct {
-	ID        string     `json:"id" yaml:"id"`
-	Reason    string     `json:"reason,omitempty" yaml:"reason,omitempty"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty" yaml:"expires_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at" yaml:"created_at"`
-	CreatedBy string     `json:"created_by,omitempty" yaml:"created_by,omitempty"`
+	ID          string     `json:"id" yaml:"id"`
+	Reason      string     `json:"reason,omitempty" yaml:"reason,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty" yaml:"expires_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at" yaml:"created_at"`
+	CreatedBy   string     `json:"created_by,omitempty" yaml:"created_by,omitempty"`
+	Fingerprint string     `json:"fingerprint,omitempty" yaml:"fingerprint,omitempty"`
 }
 
 // Baseline represents a baseline file containing suppressed findings.
@@ -34,11 +36,12 @@ type Baseline struct {
 
 // CreateOptions controls baseline creation from findings.
 type CreateOptions struct {
-	Reason      string
-	CreatedAt   time.Time
-	CreatedBy   string
-	ExpiresAt   *time.Time
-	MinSeverity schema.Severity
+	Reason         string
+	CreatedAt      time.Time
+	CreatedBy      string
+	ExpiresAt      *time.Time
+	MinSeverity    schema.Severity
+	UseFingerprint bool
 }
 
 // DefaultPath returns the default baseline file path under the project root.
@@ -70,6 +73,31 @@ func Load(path string) (*Baseline, error) {
 	return &b, nil
 }
 
+// Fingerprint computes a SHA-256 hash of the normalized finding ID and Symptom.
+func Fingerprint(f schema.Finding) string {
+	id := strings.ToUpper(strings.TrimSpace(f.ID))
+	symptom := f.Symptom
+
+	h := sha256.New()
+	h.Write([]byte(id))
+	h.Write([]byte("\n"))
+	h.Write([]byte(symptom))
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// isValidFingerprint checks if the given string is a valid 64-character SHA-256 hex string.
+func isValidFingerprint(v string) bool {
+	if len(v) != 64 {
+		return false
+	}
+	for _, r := range v {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
 // validate checks baseline invariants.
 func validate(b *Baseline) error {
 	if b.SchemaVersion != SchemaVersion {
@@ -82,6 +110,9 @@ func validate(b *Baseline) error {
 		if entry.CreatedAt.IsZero() {
 			return fmt.Errorf("baseline entry %d (%s) has zero created_at", i, entry.ID)
 		}
+		if entry.Fingerprint != "" && !isValidFingerprint(entry.Fingerprint) {
+			return fmt.Errorf("baseline entry %d (%s) has invalid fingerprint", i, entry.ID)
+		}
 	}
 	return nil
 }
@@ -89,10 +120,13 @@ func validate(b *Baseline) error {
 // Save writes a baseline file with owner-only permissions.
 // Parent directories are created with 0700 permissions.
 func Save(path string, b *Baseline) error {
-	// Sort entries by ID for deterministic diffs.
+	// Sort entries by ID, then Fingerprint for deterministic diffs.
 	sorted := make([]Entry, len(b.Entries))
 	copy(sorted, b.Entries)
 	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].ID == sorted[j].ID {
+			return sorted[i].Fingerprint < sorted[j].Fingerprint
+		}
 		return sorted[i].ID < sorted[j].ID
 	})
 	toSave := &Baseline{
@@ -133,26 +167,39 @@ func ActiveEntries(b *Baseline, now time.Time) []Entry {
 }
 
 // CreateFromFindings snapshots findings into baseline entries.
-// Duplicate finding IDs produce a single entry. Findings with empty IDs
-// are ignored. Entries are sorted by ID for deterministic output.
+// Duplicate finding IDs produce a single entry (or ID + Fingerprint combinations
+// if opts.UseFingerprint is true). Findings with empty IDs are ignored.
+// Entries are sorted by ID, then Fingerprint for deterministic output.
 func CreateFromFindings(findings []schema.Finding, opts CreateOptions) *Baseline {
 	seen := make(map[string]bool, len(findings))
 	entries := make([]Entry, 0, len(findings))
 	minRank := severityRank(opts.MinSeverity)
 	for _, f := range findings {
 		id := strings.TrimSpace(f.ID)
-		if id == "" || seen[id] {
+		if id == "" {
+			continue
+		}
+		var fingerprint string
+		var key string
+		if opts.UseFingerprint {
+			fingerprint = Fingerprint(f)
+			key = id + ":" + fingerprint
+		} else {
+			key = id
+		}
+		if seen[key] {
 			continue
 		}
 		if severityRank(f.Severity) < minRank {
 			continue
 		}
-		seen[id] = true
+		seen[key] = true
 		entry := Entry{
-			ID:        id,
-			Reason:    opts.Reason,
-			CreatedAt: opts.CreatedAt,
-			CreatedBy: opts.CreatedBy,
+			ID:          id,
+			Reason:      opts.Reason,
+			CreatedAt:   opts.CreatedAt,
+			CreatedBy:   opts.CreatedBy,
+			Fingerprint: fingerprint,
 		}
 		if opts.ExpiresAt != nil {
 			t := *opts.ExpiresAt
@@ -161,6 +208,9 @@ func CreateFromFindings(findings []schema.Finding, opts CreateOptions) *Baseline
 		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].ID == entries[j].ID {
+			return entries[i].Fingerprint < entries[j].Fingerprint
+		}
 		return entries[i].ID < entries[j].ID
 	})
 	return &Baseline{

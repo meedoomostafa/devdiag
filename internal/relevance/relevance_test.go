@@ -231,3 +231,99 @@ func TestBaselineAndConfigSuppressionBothSuppress(t *testing.T) {
 		t.Fatalf("remaining = %q, want F-HIGH-001", filtered.Findings[0].ID)
 	}
 }
+
+func TestFingerprintBaselineDoesNotSuppressSameIDDifferentSymptom(t *testing.T) {
+	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	f1 := schema.Finding{ID: "F-ENV-001", Symptom: "symptom 1", Severity: schema.SeverityMedium}
+	f2 := schema.Finding{ID: "F-ENV-001", Symptom: "symptom 2", Severity: schema.SeverityMedium}
+
+	report := &schema.Report{
+		Findings: []schema.Finding{f1, f2},
+	}
+	policy := DefaultPolicy()
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Fingerprint: baseline.Fingerprint(f1), Reason: "accepted 1", CreatedAt: now},
+		},
+	}
+	ApplyBaseline(&policy, b, now)
+
+	filtered, summary := FilterReport(report, policy)
+	if summary.Hidden != 1 {
+		t.Fatalf("expected 1 hidden, got %d", summary.Hidden)
+	}
+	if len(filtered.Findings) != 1 {
+		t.Fatalf("expected 1 visible, got %d", len(filtered.Findings))
+	}
+	if filtered.Findings[0].Symptom != "symptom 2" {
+		t.Fatalf("expected symptom 2 to remain visible, got %q", filtered.Findings[0].Symptom)
+	}
+}
+
+func TestIDBaselineStillSuppressesAllSameIDFindings(t *testing.T) {
+	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	f1 := schema.Finding{ID: "F-ENV-001", Symptom: "symptom 1", Severity: schema.SeverityMedium}
+	f2 := schema.Finding{ID: "F-ENV-001", Symptom: "symptom 2", Severity: schema.SeverityMedium}
+
+	report := &schema.Report{
+		Findings: []schema.Finding{f1, f2},
+	}
+	policy := DefaultPolicy()
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Reason: "accepted ID-only", CreatedAt: now},
+		},
+	}
+	ApplyBaseline(&policy, b, now)
+
+	_, summary := FilterReport(report, policy)
+	if summary.Hidden != 2 {
+		t.Fatalf("expected both same-ID findings to be hidden, got %d", summary.Hidden)
+	}
+}
+
+func TestIncludeHiddenBypassesFingerprintSuppression(t *testing.T) {
+	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	f1 := schema.Finding{ID: "F-ENV-001", Symptom: "symptom 1", Severity: schema.SeverityMedium}
+
+	report := &schema.Report{
+		Findings: []schema.Finding{f1},
+	}
+	policy := DefaultPolicy()
+	policy.IncludeHidden = true
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Fingerprint: baseline.Fingerprint(f1), Reason: "accepted 1", CreatedAt: now},
+		},
+	}
+	ApplyBaseline(&policy, b, now)
+
+	_, summary := FilterReport(report, policy)
+	if summary.Hidden != 0 {
+		t.Fatalf("expected 0 hidden under IncludeHidden, got %d", summary.Hidden)
+	}
+}
+
+func TestApplyBaselineDoesNotOverrideExistingFingerprintReason(t *testing.T) {
+	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	f1 := schema.Finding{ID: "F-ENV-001", Symptom: "symptom 1", Severity: schema.SeverityMedium}
+	fp := baseline.Fingerprint(f1)
+
+	policy := DefaultPolicy()
+	policy.SuppressedFingerprints[fp] = "original config reason"
+
+	b := &baseline.Baseline{
+		SchemaVersion: baseline.SchemaVersion,
+		Entries: []baseline.Entry{
+			{ID: "F-ENV-001", Fingerprint: fp, Reason: "baseline override", CreatedAt: now},
+		},
+	}
+	ApplyBaseline(&policy, b, now)
+
+	if policy.SuppressedFingerprints[fp] != "original config reason" {
+		t.Fatalf("expected config reason to be preserved, got %q", policy.SuppressedFingerprints[fp])
+	}
+}
