@@ -1195,3 +1195,14 @@ func TestBaselineImportPreservesSeparateFingerprintsWithSameID(t *testing.T) {
 		t.Fatalf("expected 2 entries, got %d", len(loaded.Entries))
 	}
 }
+
+func TestScanExplicitMissingBaselineFailsBeforeCollectors(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := runBinary("scan", dir, "--baseline", filepath.Join(dir, "missing-baseline-early.yaml"))
+	if code == 0 {
+		t.Fatal("expected non-zero exit when explicit baseline is missing")
+	}
+	if !strings.Contains(stderr, "baseline not found") {
+		t.Fatalf("expected error message to contain 'baseline not found', got: %s", stderr)
+	}
+}

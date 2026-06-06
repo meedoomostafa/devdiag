@@ -26,6 +26,9 @@ var (
 var reportCmd = &cobra.Command{
 	Use:   "report [path]",
 	Short: "Render previously saved DevDiag reports without running a new scan",
+	Example: `  devdiag report --latest .
+  devdiag report --latest . --no-baseline
+  devdiag report --report .devdiag/runs/<run-id>/report.json --baseline .devdiag/baseline.yaml`,
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()

@@ -41,6 +41,14 @@ var (
 var baselineCmd = &cobra.Command{
 	Use:   "baseline",
 	Short: "Manage accepted-findings baseline",
+	Long: `Manage the list of accepted or suppressed findings for the project.
+Baseline entries allow you to suppress specific finding IDs or exact finding instances (fingerprints)
+so they do not fail scans or pollute reports, allowing teams to maintain a clean-scan status.`,
+	Example: `  devdiag scan . --save-report --include-hidden
+  devdiag baseline create . --reason "accepted local drift" --fingerprint
+  devdiag baseline list .
+  devdiag baseline export . --format yaml --output baseline.yaml
+  devdiag baseline import ./team-baseline.yaml .`,
 }
 
 var baselineCreateCmd = &cobra.Command{
@@ -51,6 +59,17 @@ All visible findings from the saved report become baseline entries.
 
 If the saved report was created without --include-hidden, low/info/evidence-only
 findings are not present and cannot be baselined from that report.`,
+	Example: `  # Create baseline from the latest saved report under current directory
+  devdiag baseline create --reason "Suppressing known dev warnings"
+
+  # Create baseline specifying an author and duration-based expiry
+  devdiag baseline create --reason "Temporary cert drift" --expires 30d --created-by "dev-team"
+
+  # Create baseline only for medium and higher severity findings
+  devdiag baseline create --reason "Critical suppressions" --min-severity medium
+
+  # Create a baseline using exact instance-level fingerprinting
+  devdiag baseline create --reason "Specific container ports" --fingerprint`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
@@ -137,6 +156,13 @@ findings are not present and cannot be baselined from that report.`,
 var baselineListCmd = &cobra.Command{
 	Use:   "list [path]",
 	Short: "List entries in the current baseline file",
+	Long: `List all suppressed findings defined in the baseline file, including finding IDs,
+match modes (ID-only or fingerprint), status (active or expired), creation info, and reasons.`,
+	Example: `  # List all baseline entries for the current project
+  devdiag baseline list
+
+  # List baseline entries for a project at a specific path
+  devdiag baseline list /path/to/project`,
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
@@ -199,6 +225,13 @@ var baselineListCmd = &cobra.Command{
 var baselineValidateCmd = &cobra.Command{
 	Use:   "validate [path]",
 	Short: "Validate the baseline file format and schema",
+	Long: `Validate that the baseline file format, schema, and version are correct.
+Returns a non-zero exit code if the file does not exist, is malformed, or contains invalid entries.`,
+	Example: `  # Validate the default baseline file (.devdiag/baseline.yaml) in the current directory
+  devdiag baseline validate
+
+  # Validate the baseline file in a custom directory
+  devdiag baseline validate /path/to/project`,
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
@@ -228,6 +261,12 @@ var baselineValidateCmd = &cobra.Command{
 var baselinePathCmd = &cobra.Command{
 	Use:   "path [path]",
 	Short: "Print the absolute path to the baseline file",
+	Long: `Print the absolute path to the baseline file for the target directory.`,
+	Example: `  # Print the baseline path for the current directory
+  devdiag baseline path
+
+  # Print the baseline path for a custom directory
+  devdiag baseline path /path/to/project`,
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
@@ -251,6 +290,13 @@ var baselinePathCmd = &cobra.Command{
 var baselineStatusCmd = &cobra.Command{
 	Use:   "status [path]",
 	Short: "Show status and statistics of the baseline file",
+	Long: `Display statistics about the baseline file, such as the total count of active and expired entries,
+and whether the file schema is valid.`,
+	Example: `  # Show baseline status for the current directory
+  devdiag baseline status
+
+  # Show baseline status for a custom directory
+  devdiag baseline status /path/to/project`,
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
@@ -314,6 +360,13 @@ func baselineMatchMode(fingerprint string) string {
 var baselinePruneCmd = &cobra.Command{
 	Use:   "prune [path]",
 	Short: "Prune expired entries from the baseline file",
+	Long: `Remove all expired suppression entries from the baseline file.
+This command modifies the baseline file in place.`,
+	Example: `  # Prune expired entries from the default baseline file
+  devdiag baseline prune
+
+  # Prune expired entries from a baseline file in a custom directory
+  devdiag baseline prune /path/to/project`,
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
@@ -351,6 +404,17 @@ var baselinePruneCmd = &cobra.Command{
 var baselineAddCmd = &cobra.Command{
 	Use:   "add <finding-id> [path]",
 	Short: "Manually add or update a baseline suppression entry",
+	Long: `Manually insert or update a single finding suppression entry in the baseline file.
+The finding ID is case-insensitive. If an entry with the exact same ID and fingerprint already exists,
+its reason, expiry, and author will be updated.`,
+	Example: `  # Manually suppress F-ENV-001 with a reason
+  devdiag baseline add F-ENV-001 --reason "Intentional local database drift"
+
+  # Suppress F-ENV-001 for 14 days for a specific teammate
+  devdiag baseline add F-ENV-001 --reason "Investigating SSL setup" --expires 14d --created-by "alice"
+
+  # Suppress F-ENV-001 matching only a specific instance fingerprint
+  devdiag baseline add F-ENV-001 --reason "Exclude dev port mismatch" --fingerprint e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`,
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
@@ -435,6 +499,13 @@ var baselineAddCmd = &cobra.Command{
 var baselineRemoveCmd = &cobra.Command{
 	Use:   "remove <finding-id> [path]",
 	Short: "Manually remove a baseline suppression entry",
+	Long: `Manually delete a suppression entry from the baseline file by finding ID (and optional fingerprint).
+Requires an exact match on finding ID and fingerprint.`,
+	Example: `  # Remove the ID-only suppression for F-ENV-001
+  devdiag baseline remove F-ENV-001
+
+  # Remove the fingerprint-specific suppression for F-ENV-001
+  devdiag baseline remove F-ENV-001 --fingerprint e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`,
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
@@ -496,6 +567,13 @@ func loadBaselineForCommand(path string, explicit bool) (*baseline.Baseline, err
 var baselineExportCmd = &cobra.Command{
 	Use:   "export [path]",
 	Short: "Export baseline entries in YAML or JSON format",
+	Long: `Export all baseline entries (including active and expired) in YAML or JSON format.
+Prints to stdout by default, or writes to a file with secure (0600) permissions if --output is specified.`,
+	Example: `  # Export the current baseline to stdout in JSON format
+  devdiag baseline export --format json
+
+  # Export the current baseline to a file in YAML format
+  devdiag baseline export --format yaml --output shared-baseline.yaml`,
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
@@ -553,6 +631,13 @@ var baselineExportCmd = &cobra.Command{
 var baselineImportCmd = &cobra.Command{
 	Use:   "import <source-file> [path]",
 	Short: "Import and merge baseline entries from another baseline file",
+	Long: `Import baseline entries from a source YAML baseline file and merge them into the target baseline.
+Entries with unique ID+fingerprint combinations are appended. Overlapping entries are updated with the source values.`,
+	Example: `  # Import entries from a shared baseline file into the local baseline
+  devdiag baseline import ./team-baseline.yaml
+
+  # Import entries from a shared baseline file into a target directory's baseline
+  devdiag baseline import ./team-baseline.yaml /path/to/project`,
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()

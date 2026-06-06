@@ -268,6 +268,44 @@ devdiag baseline import ./team-baseline.yaml .
   devdiag scan . --include-hidden
   ```
 
+### CI Recipes
+
+Integrating DevDiag diagnostics with baselines in CI/CD pipelines ensures clean builds and prevents regression of environment issues. Here are common configuration recipes for various CI environments.
+
+#### Block only on new findings
+1. Generate or commit `.devdiag/baseline.yaml`.
+2. Run a diagnostic scan utilizing the default baseline:
+   ```bash
+   devdiag scan . --baseline .devdiag/baseline.yaml
+   ```
+
+#### Use a CI-specific baseline
+If you keep your baseline files versioned under a custom path (relative to the current working directory), target that file:
+```bash
+devdiag scan . --baseline ./ci/devdiag-baseline.yaml
+```
+
+#### Audit everything, ignoring baseline suppressions
+For pre-release checks or auditing where all drift must be surfaced regardless of suppressions:
+```bash
+devdiag scan . --no-baseline --include-hidden
+```
+
+#### Share baseline updates between team members
+Export baseline entries to a shared file, import/merge them on other workspaces, and validate the target baseline schema:
+```bash
+# Export active and expired entries to a shared file
+devdiag baseline export . --format yaml --output baseline.yaml
+
+# Import and merge entries on another machine
+devdiag baseline import ./team-baseline.yaml .
+
+# Validate target baseline format and schema
+devdiag baseline validate .
+```
+
+Explicit relative `--baseline` paths (e.g. `--baseline ./ci/devdiag-baseline.yaml`) always resolve relative to the current working directory.
+
 ---
 
 ## Build

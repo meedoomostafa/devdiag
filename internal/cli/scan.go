@@ -31,6 +31,10 @@ var scanNoBaseline bool
 var scanCmd = &cobra.Command{
 	Use:   "scan [path]",
 	Short: "Run a diagnostic scan on the given path",
+	Example: `  devdiag scan .
+  devdiag scan . --baseline ./ci/baseline.yaml
+  devdiag scan . --no-baseline
+  devdiag scan . --include-hidden`,
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
@@ -53,6 +57,26 @@ var scanCmd = &cobra.Command{
 		if err != nil {
 			logger.Error("scan", err.Error())
 			return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+		}
+
+		var loadedBaseline *baseline.Baseline
+		if !scanNoBaseline {
+			baselinePath := scanBaselinePath
+			explicit := scanBaselinePath != ""
+			if explicit {
+				var err error
+				baselinePath, err = filepath.Abs(scanBaselinePath)
+				if err != nil {
+					return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+				}
+			} else {
+				baselinePath = baseline.DefaultPath(absPath)
+			}
+			loadedBaseline, err = loadBaselineForCommand(baselinePath, explicit)
+			if err != nil {
+				logger.Error("baseline", err.Error())
+				return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load baseline: %v", err)}
+			}
 		}
 
 		logger.Info("scan", fmt.Sprintf("scanning path=%s", absPath))
@@ -80,24 +104,8 @@ var scanCmd = &cobra.Command{
 		redacted := redactEngine.RedactReport(report)
 		policy := relevance.PolicyFromReport(redacted, flagIncludeHidden)
 
-		if !scanNoBaseline {
-			baselinePath := scanBaselinePath
-			explicit := scanBaselinePath != ""
-			if explicit {
-				var err error
-				baselinePath, err = filepath.Abs(scanBaselinePath)
-				if err != nil {
-					return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
-				}
-			} else {
-				baselinePath = baseline.DefaultPath(absPath)
-			}
-			b, err := loadBaselineForCommand(baselinePath, explicit)
-			if err != nil {
-				logger.Error("baseline", err.Error())
-				return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load baseline: %v", err)}
-			}
-			relevance.ApplyBaseline(&policy, b, time.Now())
+		if loadedBaseline != nil {
+			relevance.ApplyBaseline(&policy, loadedBaseline, time.Now())
 		}
 
 		filtered, summary := relevance.FilterReport(redacted, policy)
