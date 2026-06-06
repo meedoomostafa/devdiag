@@ -97,17 +97,26 @@ if [ ! -d "${PATH_ARG:-.}/.devdiag" ]; then
   HAD_DEVDIAG=false
 fi
 
-SCAN_ARGS=("--format" "${FORMAT:-github}" "--redact" "${REDACT:-default}" "--fail-severity" "${EFFECTIVE_FAIL_SEVERITY}")
 if [ "${SAVE_REPORT_ENABLED}" = "true" ]; then
-  SCAN_ARGS+=("--save-report")
-fi
-SCAN_ARGS+=("${PROFILE_ARGS[@]}" "${RULE_PACK_ARGS[@]}" "${CI_ARGS[@]}" "${HIDDEN_ARGS[@]}" -- "${PATH_ARG:-.}")
+  # Run scan once with json format, fail-severity off, saving report.
+  # Forward include-hidden so that hidden findings are actually persisted.
+  SCAN_ARGS=("--format" "json" "--redact" "${REDACT:-default}" "--fail-severity" "off" "--save-report")
+  SCAN_ARGS+=("${PROFILE_ARGS[@]}" "${RULE_PACK_ARGS[@]}" "${CI_ARGS[@]}" "${HIDDEN_ARGS[@]}" -- "${PATH_ARG:-.}")
 
-# Run devdiag scan ONCE
-set +e
-devdiag scan "${SCAN_ARGS[@]}"
-SCAN_EXIT=$?
-set -e
+  set +e
+  devdiag scan "${SCAN_ARGS[@]}" >/dev/null
+  SCAN_EXIT=$?
+  set -e
+else
+  # Run scan once directly in target format
+  SCAN_ARGS=("--format" "${FORMAT:-github}" "--redact" "${REDACT:-default}" "--fail-severity" "${EFFECTIVE_FAIL_SEVERITY}")
+  SCAN_ARGS+=("${PROFILE_ARGS[@]}" "${RULE_PACK_ARGS[@]}" "${CI_ARGS[@]}" "${HIDDEN_ARGS[@]}" -- "${PATH_ARG:-.}")
+
+  set +e
+  devdiag scan "${SCAN_ARGS[@]}"
+  SCAN_EXIT=$?
+  set -e
+fi
 
 LATEST_REPORT=""
 # Find the saved report and copy it to the deterministic REPORT_PATH
@@ -131,8 +140,6 @@ if [ "${SAVE_REPORT_ENABLED}" = "true" ] && [ -d "${PATH_ARG:-.}/.devdiag/runs" 
   fi
 fi
 
-
-
 # Clean up .devdiag if it did not exist before scan
 if [ "${HAD_DEVDIAG}" = "false" ] && [ -d "${PATH_ARG:-.}/.devdiag" ]; then
   rm -rf "${PATH_ARG:-.}/.devdiag"
@@ -140,11 +147,32 @@ fi
 
 REPORT_UPLOADED="false"
 FINAL_REPORT_PATH=""
+if [ "${SAVE_REPORT_ENABLED}" = "true" ] && [ -f "$REPORT_PATH" ]; then
+  REPORT_UPLOADED="true"
+  FINAL_REPORT_PATH="$REPORT_PATH"
+fi
+
+RENDER_EXIT=""
 if [ "${SAVE_REPORT_ENABLED}" = "true" ]; then
-  if [ -f "$REPORT_PATH" ]; then
-    REPORT_UPLOADED="true"
-    FINAL_REPORT_PATH="$REPORT_PATH"
+  if [ "$SCAN_EXIT" -eq 0 ] || [ "$SCAN_EXIT" -eq 1 ]; then
+    if [ "${REPORT_UPLOADED}" = "true" ]; then
+      REPORT_ARGS=("--report" "$REPORT_PATH" --format "${FORMAT:-github}" --fail-severity "${EFFECTIVE_FAIL_SEVERITY}" --redact "${REDACT:-default}")
+      if [ "${INCLUDE_HIDDEN_ENABLED}" = "true" ]; then
+        REPORT_ARGS+=("--include-hidden")
+      fi
+      set +e
+      devdiag report "${REPORT_ARGS[@]}"
+      RENDER_EXIT=$?
+      set -e
+      FINAL_EXIT="$RENDER_EXIT"
+    else
+      FINAL_EXIT="$SCAN_EXIT"
+    fi
+  else
+    FINAL_EXIT="$SCAN_EXIT"
   fi
+else
+  FINAL_EXIT="$SCAN_EXIT"
 fi
 
 SUMMARY_WRITTEN="false"
@@ -157,6 +185,9 @@ if [ "${SUMMARY_ENABLED}" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
       echo "- Report path: \`${FINAL_REPORT_PATH}\`"
     fi
     echo "- Scan exit: \`${SCAN_EXIT}\`"
+    if [ -n "${RENDER_EXIT}" ]; then
+      echo "- Render exit: \`${RENDER_EXIT}\`"
+    fi
   } >> "${GITHUB_STEP_SUMMARY}"
   SUMMARY_WRITTEN="true"
 fi
@@ -166,12 +197,15 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
   echo "summary-written=${SUMMARY_WRITTEN}" >> "${GITHUB_OUTPUT}"
   echo "scan-exit-code=${SCAN_EXIT}" >> "${GITHUB_OUTPUT}"
   echo "report-uploaded=${REPORT_UPLOADED}" >> "${GITHUB_OUTPUT}"
+  if [ -n "${RENDER_EXIT}" ]; then
+    echo "render-exit-code=${RENDER_EXIT}" >> "${GITHUB_OUTPUT}"
+  fi
 fi
 
 # Handle fail-on-findings/fail-severity exit code check
 # exit code 1 represents findings exist. If fail-on-findings is false, exit with 0.
-if [ "$SCAN_EXIT" -eq 1 ] && [ "${FAIL_ON_FINDINGS_ENABLED}" = "false" ]; then
+if [ "$FINAL_EXIT" -eq 1 ] && [ "${FAIL_ON_FINDINGS_ENABLED}" = "false" ]; then
   exit 0
 fi
 
-exit "$SCAN_EXIT"
+exit "$FINAL_EXIT"

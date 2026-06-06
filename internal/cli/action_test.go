@@ -127,8 +127,11 @@ func TestActionScript(t *testing.T) {
 			wantExitCode: 0,
 			verify: func(t *testing.T, tmpDir string, env map[string]string, stdout string, stderr string) {
 				ghOutput := readGHFile(t, filepath.Join(tmpDir, "gh-output"))
-				if ghOutput["scan-exit-code"] != "1" {
-					t.Errorf("expected scan-exit-code=1, got %s", ghOutput["scan-exit-code"])
+				if ghOutput["scan-exit-code"] != "0" {
+					t.Errorf("expected scan-exit-code=0, got %s", ghOutput["scan-exit-code"])
+				}
+				if ghOutput["render-exit-code"] != "1" {
+					t.Errorf("expected render-exit-code=1, got %s", ghOutput["render-exit-code"])
 				}
 				args := readMockArgs(t, tmpDir)
 				if !contains(args, "--fail-severity") || getArgValue(args, "--fail-severity") != "off" {
@@ -341,6 +344,169 @@ func TestActionScript(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "PR 6: save-report=true calls scan then report with include-hidden",
+			env: map[string]string{
+				"CI":               "true",
+				"SUMMARY":          "true",
+				"FAIL_ON_FINDINGS": "true",
+				"INCLUDE_HIDDEN":   "true",
+				"SAVE_REPORT":      "true",
+				"FAIL_SEVERITY":    "medium",
+				"FORMAT":           "markdown",
+				"REDACT":           "strict",
+				"PROFILE":          "ai-ml",
+				"RULE_PACK":        "packs.yaml",
+			},
+			mockExitCode: "0",
+			wantExitCode: 0,
+			verify: func(t *testing.T, tmpDir string, env map[string]string, stdout string, stderr string) {
+				invocations := readMockInvocations(t, tmpDir)
+				if len(invocations) != 2 {
+					t.Fatalf("expected 2 mock invocations, got %d. Invocations: %v", len(invocations), invocations)
+				}
+
+				// First invocation: scan
+				scanArgs := invocations[0]
+				if scanArgs[0] != "scan" {
+					t.Errorf("expected first command to be scan, got %s", scanArgs[0])
+				}
+				if getArgValue(scanArgs, "--format") != "json" {
+					t.Errorf("expected scan --format json, got %s", getArgValue(scanArgs, "--format"))
+				}
+				if getArgValue(scanArgs, "--fail-severity") != "off" {
+					t.Errorf("expected scan --fail-severity off, got %s", getArgValue(scanArgs, "--fail-severity"))
+				}
+				if !contains(scanArgs, "--save-report") {
+					t.Errorf("expected scan to have --save-report")
+				}
+				if !contains(scanArgs, "--include-hidden") {
+					t.Errorf("expected scan to have --include-hidden when INCLUDE_HIDDEN=true")
+				}
+
+				// Second invocation: report
+				reportArgs := invocations[1]
+				if reportArgs[0] != "report" {
+					t.Errorf("expected second command to be report, got %s", reportArgs[0])
+				}
+				reportPath := filepath.Join(tmpDir, "temp-runner", "devdiag-artifacts", "devdiag-report.json")
+				if getArgValue(reportArgs, "--report") != reportPath {
+					t.Errorf("expected report --report %s, got %s", reportPath, getArgValue(reportArgs, "--report"))
+				}
+				if getArgValue(reportArgs, "--format") != "markdown" {
+					t.Errorf("expected report --format markdown, got %s", getArgValue(reportArgs, "--format"))
+				}
+				if getArgValue(reportArgs, "--fail-severity") != "medium" {
+					t.Errorf("expected report --fail-severity medium, got %s", getArgValue(reportArgs, "--fail-severity"))
+				}
+				if !contains(reportArgs, "--include-hidden") {
+					t.Errorf("expected report to have --include-hidden when INCLUDE_HIDDEN=true")
+				}
+
+				// Verify outputs
+				ghOutput := readGHFile(t, filepath.Join(tmpDir, "gh-output"))
+				if ghOutput["scan-exit-code"] != "0" {
+					t.Errorf("expected scan-exit-code=0, got %s", ghOutput["scan-exit-code"])
+				}
+				if ghOutput["render-exit-code"] != "0" {
+					t.Errorf("expected render-exit-code=0, got %s", ghOutput["render-exit-code"])
+				}
+			},
+		},
+		{
+			name: "PR 6: save-report=false calls scan only, no report call, empty render-exit-code",
+			env: map[string]string{
+				"CI":               "true",
+				"SUMMARY":          "true",
+				"FAIL_ON_FINDINGS": "true",
+				"INCLUDE_HIDDEN":   "false",
+				"SAVE_REPORT":      "false",
+				"FAIL_SEVERITY":    "medium",
+				"FORMAT":           "markdown",
+				"REDACT":           "strict",
+			},
+			mockExitCode: "0",
+			wantExitCode: 0,
+			verify: func(t *testing.T, tmpDir string, env map[string]string, stdout string, stderr string) {
+				invocations := readMockInvocations(t, tmpDir)
+				if len(invocations) != 1 {
+					t.Fatalf("expected exactly 1 mock invocation, got %d. Invocations: %v", len(invocations), invocations)
+				}
+				scanArgs := invocations[0]
+				if scanArgs[0] != "scan" {
+					t.Errorf("expected command to be scan, got %s", scanArgs[0])
+				}
+				if getArgValue(scanArgs, "--format") != "markdown" {
+					t.Errorf("expected scan --format markdown, got %s", getArgValue(scanArgs, "--format"))
+				}
+				if getArgValue(scanArgs, "--fail-severity") != "medium" {
+					t.Errorf("expected scan --fail-severity medium, got %s", getArgValue(scanArgs, "--fail-severity"))
+				}
+				if contains(scanArgs, "--save-report") {
+					t.Errorf("expected scan not to have --save-report")
+				}
+
+				ghOutput := readGHFile(t, filepath.Join(tmpDir, "gh-output"))
+				if ghOutput["scan-exit-code"] != "0" {
+					t.Errorf("expected scan-exit-code=0, got %s", ghOutput["scan-exit-code"])
+				}
+				if _, ok := ghOutput["render-exit-code"]; ok {
+					t.Errorf("expected render-exit-code output to be absent or empty, got %s", ghOutput["render-exit-code"])
+				}
+			},
+		},
+		{
+			name: "PR 6: fail-on-findings=false suppresses report findings-only exit code 1",
+			env: map[string]string{
+				"CI":                   "true",
+				"SUMMARY":              "true",
+				"FAIL_ON_FINDINGS":     "false",
+				"INCLUDE_HIDDEN":       "false",
+				"SAVE_REPORT":          "true",
+				"FAIL_SEVERITY":        "medium",
+				"FORMAT":               "markdown",
+				"REDACT":               "strict",
+				"DEV_DIAG_SCAN_EXIT":   "0",
+				"DEV_DIAG_REPORT_EXIT": "1",
+			},
+			mockExitCode: "0",
+			wantExitCode: 0,
+			verify: func(t *testing.T, tmpDir string, env map[string]string, stdout string, stderr string) {
+				ghOutput := readGHFile(t, filepath.Join(tmpDir, "gh-output"))
+				if ghOutput["scan-exit-code"] != "0" {
+					t.Errorf("expected scan-exit-code=0, got %s", ghOutput["scan-exit-code"])
+				}
+				if ghOutput["render-exit-code"] != "1" {
+					t.Errorf("expected render-exit-code=1, got %s", ghOutput["render-exit-code"])
+				}
+			},
+		},
+		{
+			name: "PR 6: non-finding scan failure (code 3) propagates even if report exists",
+			env: map[string]string{
+				"CI":                   "true",
+				"SUMMARY":              "true",
+				"FAIL_ON_FINDINGS":     "true",
+				"INCLUDE_HIDDEN":       "false",
+				"SAVE_REPORT":          "true",
+				"FAIL_SEVERITY":        "medium",
+				"FORMAT":               "markdown",
+				"REDACT":               "strict",
+				"DEV_DIAG_SCAN_EXIT":   "3",
+				"DEV_DIAG_REPORT_EXIT": "0",
+			},
+			mockExitCode: "0",
+			wantExitCode: 3,
+			verify: func(t *testing.T, tmpDir string, env map[string]string, stdout string, stderr string) {
+				ghOutput := readGHFile(t, filepath.Join(tmpDir, "gh-output"))
+				if ghOutput["scan-exit-code"] != "3" {
+					t.Errorf("expected scan-exit-code=3, got %s", ghOutput["scan-exit-code"])
+				}
+				if _, ok := ghOutput["render-exit-code"]; ok {
+					t.Errorf("expected no render-exit-code output since scan failed before render, got %s", ghOutput["render-exit-code"])
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -378,7 +544,7 @@ func TestActionScript(t *testing.T) {
 			mockArgsLog := filepath.Join(tmpDir, "mock-args.log")
 			mockScript := fmt.Sprintf(`#!/usr/bin/env bash
 # Save arguments to log
-echo "$@" > "%s"
+echo "$@" >> "%s"
 
 # Mock saving report if --save-report is passed
 for arg in "$@"; do
@@ -387,12 +553,27 @@ for arg in "$@"; do
     PATH_ARG="${@: -1}"
     RUNS_DIR="${PATH_ARG}/.devdiag/runs/mockrun123"
     mkdir -p "${RUNS_DIR}"
-    echo '{"RunID": "mockrun123", "Findings": []}' > "${RUNS_DIR}/report.json"
+    echo '{"RunID": "mockrun123", "Findings": [{"id": "F-ENV-001", "title": "Mock Finding", "severity": "high"}]}' > "${RUNS_DIR}/report.json"
   fi
 done
 
-exit %s
-`, mockArgsLog, tt.mockExitCode)
+SCAN_EXIT="${DEV_DIAG_SCAN_EXIT:-%s}"
+REPORT_EXIT="${DEV_DIAG_REPORT_EXIT:-%s}"
+
+if [ "$1" = "scan" ]; then
+  # If scan is run with fail-severity off and SCAN_EXIT is 1, exit with 0.
+  for arg in "$@"; do
+    if [ "$arg" = "off" ] && [ "$SCAN_EXIT" = "1" ]; then
+      SCAN_EXIT="0"
+    fi
+  done
+  exit "$SCAN_EXIT"
+elif [ "$1" = "report" ]; then
+  exit "$REPORT_EXIT"
+else
+  exit "%s"
+fi
+`, mockArgsLog, tt.mockExitCode, tt.mockExitCode, tt.mockExitCode)
 
 			if err := os.WriteFile(mockDevdiagPath, []byte(mockScript), 0755); err != nil {
 				t.Fatal(err)
@@ -473,6 +654,23 @@ func readMockArgs(t *testing.T, tmpDir string) []string {
 	return fields
 }
 
+func readMockInvocations(t *testing.T, tmpDir string) [][]string {
+	logPath := filepath.Join(tmpDir, "mock-args.log")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	var res [][]string
+	for _, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		res = append(res, strings.Fields(l))
+	}
+	return res
+}
+
 func contains(slice []string, s string) bool {
 	for _, item := range slice {
 		if item == s {
@@ -483,8 +681,8 @@ func contains(slice []string, s string) bool {
 }
 
 func getArgValue(slice []string, argName string) string {
-	for i, item := range slice {
-		if item == argName && i+1 < len(slice) {
+	for i := len(slice) - 2; i >= 0; i-- {
+		if slice[i] == argName {
 			return slice[i+1]
 		}
 	}

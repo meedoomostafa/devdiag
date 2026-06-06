@@ -70,6 +70,9 @@ outputs:
   report-uploaded:
     description: 'Whether the JSON report was uploaded as an artifact'
     value: ${{ steps.devdiag.outputs.report-uploaded }}
+  render-exit-code:
+    description: 'The exit code of the devdiag report command when save-report is true'
+    value: ${{ steps.devdiag.outputs.render-exit-code }}
 runs:
   using: 'composite'
   steps:
