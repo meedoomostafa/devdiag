@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -872,7 +873,7 @@ func TestScanExitCode0_ForInfoFinding(t *testing.T) {
 
 func TestScanHumanDefaultHidesInfoFindingAndQuietLogs(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/devdiag\n\ngo 1.25\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/devdiag\n\ngo "+getTestGoVersion()+"\n"), 0o644); err != nil {
 		t.Fatalf("write go.mod: %v", err)
 	}
 
@@ -893,7 +894,7 @@ func TestScanHumanDefaultHidesInfoFindingAndQuietLogs(t *testing.T) {
 
 func TestScanJSONVisibilityRequiresIncludeHiddenForInfoFinding(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/devdiag\n\ngo 1.25\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/devdiag\n\ngo "+getTestGoVersion()+"\n"), 0o644); err != nil {
 		t.Fatalf("write go.mod: %v", err)
 	}
 
@@ -926,6 +927,32 @@ func TestScanJSONVisibilityRequiresIncludeHiddenForInfoFinding(t *testing.T) {
 	if !found {
 		t.Fatalf("include-hidden JSON should include F-RUNTIME-DECL-001, got %v", report.Findings)
 	}
+}
+
+func getTestGoVersion() string {
+	ver := runtime.Version()
+	ver = strings.TrimPrefix(ver, "go")
+	parts := strings.Split(ver, ".")
+	if len(parts) >= 2 {
+		major := keepDigits(parts[0])
+		minor := keepDigits(parts[1])
+		if major != "" && minor != "" {
+			return major + "." + minor
+		}
+	}
+	return "1.25"
+}
+
+func keepDigits(s string) string {
+	var res []rune
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			res = append(res, r)
+		} else {
+			break
+		}
+	}
+	return string(res)
 }
 
 func TestRulesList_JSON_ReturnsValidJSON(t *testing.T) {
