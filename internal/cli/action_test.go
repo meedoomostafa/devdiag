@@ -262,6 +262,85 @@ func TestActionScript(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "SUMMARY=yes writes summary output",
+			env: map[string]string{
+				"CI":               "true",
+				"SUMMARY":          "yes",
+				"FAIL_ON_FINDINGS": "true",
+				"INCLUDE_HIDDEN":   "false",
+				"SAVE_REPORT":      "true",
+				"FAIL_SEVERITY":    "high",
+				"FORMAT":           "github",
+				"REDACT":           "default",
+			},
+			mockExitCode: "0",
+			wantExitCode: 0,
+			verify: func(t *testing.T, tmpDir string, env map[string]string, stdout string, stderr string) {
+				ghOutput := readGHFile(t, filepath.Join(tmpDir, "gh-output"))
+				if ghOutput["summary-written"] != "true" {
+					t.Errorf("expected summary-written=true, got %s", ghOutput["summary-written"])
+				}
+
+				summaryBytes, err := os.ReadFile(filepath.Join(tmpDir, "gh-summary"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				summaryContent := string(summaryBytes)
+				if !strings.Contains(summaryContent, "### DevDiag scan") {
+					t.Errorf("expected summary content to contain '### DevDiag scan', got %q", summaryContent)
+				}
+			},
+		},
+		{
+			name: "SUMMARY=1 writes summary output",
+			env: map[string]string{
+				"CI":               "true",
+				"SUMMARY":          "1",
+				"FAIL_ON_FINDINGS": "true",
+				"INCLUDE_HIDDEN":   "false",
+				"SAVE_REPORT":      "true",
+				"FAIL_SEVERITY":    "high",
+				"FORMAT":           "github",
+				"REDACT":           "default",
+			},
+			mockExitCode: "0",
+			wantExitCode: 0,
+			verify: func(t *testing.T, tmpDir string, env map[string]string, stdout string, stderr string) {
+				ghOutput := readGHFile(t, filepath.Join(tmpDir, "gh-output"))
+				if ghOutput["summary-written"] != "true" {
+					t.Errorf("expected summary-written=true, got %s", ghOutput["summary-written"])
+				}
+			},
+		},
+		{
+			name: "SUMMARY=false does not write summary output",
+			env: map[string]string{
+				"CI":               "true",
+				"SUMMARY":          "false",
+				"FAIL_ON_FINDINGS": "true",
+				"INCLUDE_HIDDEN":   "false",
+				"SAVE_REPORT":      "true",
+				"FAIL_SEVERITY":    "high",
+				"FORMAT":           "github",
+				"REDACT":           "default",
+			},
+			mockExitCode: "0",
+			wantExitCode: 0,
+			verify: func(t *testing.T, tmpDir string, env map[string]string, stdout string, stderr string) {
+				ghOutput := readGHFile(t, filepath.Join(tmpDir, "gh-output"))
+				if ghOutput["summary-written"] != "false" {
+					t.Errorf("expected summary-written=false, got %s", ghOutput["summary-written"])
+				}
+				summaryBytes, err := os.ReadFile(filepath.Join(tmpDir, "gh-summary"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(summaryBytes) > 0 {
+					t.Errorf("expected empty summary file, got %q", string(summaryBytes))
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

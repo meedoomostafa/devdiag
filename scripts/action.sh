@@ -10,9 +10,9 @@ if [ -n "${RUNNER_TEMP:-}" ]; then
 fi
 
 normalize_bool() {
-  case "${1,,}" in
-    true|1|yes) echo "true" ;;
-    false|0|no) echo "false" ;;
+  case "$1" in
+    [Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|1) echo "true" ;;
+    [Ff][Aa][Ll][Ss][Ee]|[Nn][Oo]|0) echo "false" ;;
     *) return 1 ;;
   esac
 }
@@ -39,11 +39,17 @@ if ! SAVE_REPORT_ENABLED=$(normalize_bool "${SAVE_REPORT:-true}"); then
 fi
 
 normalize_fail_severity() {
-  case "${1,,}" in
-    off|info|low|medium|high|critical) echo "${1,,}" ;;
+  case "$1" in
+    [Oo][Ff][Ff]) echo "off" ;;
+    [Ii][Nn][Ff][Oo]) echo "info" ;;
+    [Ll][Oo][Ww]) echo "low" ;;
+    [Mm][Ee][Dd][Ii][Uu][Mm]) echo "medium" ;;
+    [Hh][Ii][Gg][Hh]) echo "high" ;;
+    [Cc][Rr][Ii][Tt][Ii][Cc][Aa][Ll]) echo "critical" ;;
     *) return 1 ;;
   esac
 }
+
 
 if ! FAIL_SEVERITY_NORMALIZED=$(normalize_fail_severity "${FAIL_SEVERITY:-high}"); then
   echo "Error: fail-severity input must be one of: off, info, low, medium, high, critical"
@@ -142,7 +148,7 @@ if [ "${SAVE_REPORT_ENABLED}" = "true" ]; then
 fi
 
 SUMMARY_WRITTEN="false"
-if [ "${SUMMARY:-true}" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+if [ "${SUMMARY_ENABLED}" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
     echo "### DevDiag scan"
     echo ""
