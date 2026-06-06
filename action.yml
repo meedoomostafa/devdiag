@@ -21,30 +21,42 @@ inputs:
     description: 'Force CI/local parity collection and evaluation'
     required: false
     default: 'true'
+  include-hidden:
+    description: 'Include low/info and configured hidden findings in rendered and saved reports'
+    required: false
+    default: 'false'
+  save-report:
+    description: 'Save report and upload as JSON artifact'
+    required: false
+    default: 'true'
   summary:
     description: 'Write a short GitHub job summary'
     required: false
     default: 'true'
   fail-on-findings:
-    description: 'Fail the action when DevDiag reports high or critical findings'
+    description: 'Fail the action when DevDiag reports high or critical findings (deprecated, use fail-severity)'
     required: false
     default: 'true'
   fail-severity:
     description: 'Minimum finding severity that fails the action: off, info, low, medium, high, critical'
     required: false
     default: 'high'
-  mask-values:
-    description: 'Newline-separated literal values to register with GitHub add-mask before running DevDiag'
-    required: false
-    default: ''
   artifact-name:
     description: 'Name for the uploaded JSON report artifact'
     required: false
     default: 'devdiag-report'
   format:
-    description: 'Output format: github, json, markdown'
+    description: 'Output format: github, human, json, ndjson, markdown'
     required: false
     default: 'github'
+  mask-values:
+    description: 'Newline-separated literal values to register with GitHub add-mask before running DevDiag'
+    required: false
+    default: ''
+  use-system-devdiag:
+    description: 'Whether to prefer using a preinstalled devdiag binary in PATH instead of building from the action source'
+    required: false
+    default: 'false'
 outputs:
   report-path:
     description: 'Path to the generated JSON report artifact'
@@ -52,109 +64,58 @@ outputs:
   summary-written:
     description: 'Whether the action wrote a GitHub job summary'
     value: ${{ steps.devdiag.outputs.summary-written }}
+  scan-exit-code:
+    description: 'The raw exit code of the devdiag scan command'
+    value: ${{ steps.devdiag.outputs.scan-exit-code }}
+  report-uploaded:
+    description: 'Whether the JSON report was uploaded as an artifact'
+    value: ${{ steps.devdiag.outputs.report-uploaded }}
 runs:
   using: 'composite'
   steps:
-    - id: devdiag
+    - name: Check tool availability
+      id: check-tools
       run: |
-        if ! command -v devdiag &> /dev/null; then
-          echo "devdiag not found in PATH"
-          exit 1
-        fi
-        normalize_bool() {
-          case "${1,,}" in
-            true|1|yes) echo "true" ;;
-            false|0|no) echo "false" ;;
-            *) return 1 ;;
-          esac
-        }
-        if ! CI_ENABLED=$(normalize_bool "$CI"); then
-          echo "ci input must be true or false"
-          exit 2
-        fi
-        if ! SUMMARY_ENABLED=$(normalize_bool "$SUMMARY"); then
-          echo "summary input must be true or false"
-          exit 2
-        fi
-        if ! FAIL_ON_FINDINGS_ENABLED=$(normalize_bool "$FAIL_ON_FINDINGS"); then
-          echo "fail-on-findings input must be true or false"
-          exit 2
-        fi
-        normalize_fail_severity() {
-          case "${1,,}" in
-            off|info|low|medium|high|critical) echo "${1,,}" ;;
-            *) return 1 ;;
-          esac
-        }
-        if ! FAIL_SEVERITY_NORMALIZED=$(normalize_fail_severity "$FAIL_SEVERITY"); then
-          echo "fail-severity input must be one of: off, info, low, medium, high, critical"
-          exit 2
-        fi
-        if [ "$FAIL_ON_FINDINGS_ENABLED" = "false" ]; then
-          EFFECTIVE_FAIL_SEVERITY="off"
+        if command -v devdiag >/dev/null 2>&1; then
+          echo "devdiag-found=true" >> "$GITHUB_OUTPUT"
         else
-          EFFECTIVE_FAIL_SEVERITY="$FAIL_SEVERITY_NORMALIZED"
+          echo "devdiag-found=false" >> "$GITHUB_OUTPUT"
         fi
-        if [ -n "$MASK_VALUES" ]; then
-          while IFS= read -r MASK_VALUE; do
-            if [ -n "$MASK_VALUE" ]; then
-              echo "::add-mask::$MASK_VALUE"
-            fi
-          done <<< "$MASK_VALUES"
+        if command -v go >/dev/null 2>&1; then
+          echo "go-found=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "go-found=false" >> "$GITHUB_OUTPUT"
         fi
-        PROFILE_ARGS=()
-        if [ -n "$PROFILE" ]; then
-          PROFILE_ARGS+=(--profile "$PROFILE")
-        fi
-        RULE_PACK_ARGS=()
-        if [ -n "$RULE_PACK" ]; then
-          RULE_PACK_ARGS+=(--rule-pack "$RULE_PACK")
-        fi
-        CI_ARGS=()
-        if [ "$CI_ENABLED" = "true" ]; then
-          CI_ARGS+=(--ci)
-        fi
-        REPORT_DIR="$RUNNER_TEMP/devdiag-artifacts"
-        REPORT_PATH="$REPORT_DIR/devdiag-report.json"
-        SUMMARY_WRITTEN="false"
-        mkdir -p "$REPORT_DIR"
-        set +e
-        devdiag scan --format "$FORMAT" --redact "$REDACT" --fail-severity "$EFFECTIVE_FAIL_SEVERITY" "${PROFILE_ARGS[@]}" "${RULE_PACK_ARGS[@]}" "${CI_ARGS[@]}" -- "$PATH_ARG"
-        SCAN_EXIT=$?
-        devdiag scan --format json --redact "$REDACT" --fail-severity "$EFFECTIVE_FAIL_SEVERITY" "${PROFILE_ARGS[@]}" "${RULE_PACK_ARGS[@]}" "${CI_ARGS[@]}" -- "$PATH_ARG" > "$REPORT_PATH"
-        JSON_EXIT=$?
-        set -e
-        if [ ! -s "$REPORT_PATH" ]; then
-          printf '{"error":"devdiag json report was not generated"}\n' > "$REPORT_PATH"
-        fi
-        if [ "$SUMMARY_ENABLED" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-          {
-            echo "### DevDiag scan"
-            echo ""
-            echo "- Report artifact: \`$ARTIFACT_NAME\`"
-            echo "- Report path: \`$REPORT_PATH\`"
-            echo "- Annotation scan exit: \`$SCAN_EXIT\`"
-            echo "- JSON report exit: \`$JSON_EXIT\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-          grep -q "### DevDiag scan" "$GITHUB_STEP_SUMMARY"
-          SUMMARY_WRITTEN="true"
-        fi
-        echo "report-path=$REPORT_PATH" >> "$GITHUB_OUTPUT"
-        echo "summary-written=$SUMMARY_WRITTEN" >> "$GITHUB_OUTPUT"
-        FINAL_EXIT=0
-        for EXIT_CODE in "$SCAN_EXIT" "$JSON_EXIT"; do
-          if [ "$EXIT_CODE" -eq 0 ]; then
-            continue
+      shell: bash
+
+    - name: Set up Go
+      if: steps.check-tools.outputs.go-found != 'true' && (inputs.use-system-devdiag != 'true' || steps.check-tools.outputs.devdiag-found != 'true')
+      uses: actions/setup-go@v5
+      with:
+        go-version: 'stable'
+
+    - name: Ensure devdiag binary is prepared
+      run: |
+        if [ "${{ inputs.use-system-devdiag }}" = "true" ] && [ "${{ steps.check-tools.outputs.devdiag-found }}" = "true" ]; then
+          echo "Using preinstalled devdiag binary from system PATH."
+        else
+          if [ -f "${{ github.action_path }}/go.mod" ]; then
+            echo "Building devdiag from action source in ${{ github.action_path }}..."
+            mkdir -p "$RUNNER_TEMP/devdiag-bin"
+            (cd "${{ github.action_path }}" && go build -v -o "$RUNNER_TEMP/devdiag-bin/devdiag" ./cmd/devdiag)
+            echo "$RUNNER_TEMP/devdiag-bin" >> "$GITHUB_PATH"
+          else
+            echo "Error: devdiag not preinstalled and action source is not available."
+            exit 1
           fi
-          if [ "$EXIT_CODE" -eq 1 ] && [ "$FAIL_ON_FINDINGS_ENABLED" = "false" ]; then
-            continue
-          fi
-          FINAL_EXIT="$EXIT_CODE"
-          if [ "$EXIT_CODE" -ne 1 ]; then
-            break
-          fi
-        done
-        exit "$FINAL_EXIT"
+        fi
+      shell: bash
+
+    - name: Execute DevDiag scan
+      id: devdiag
+      run: |
+        # Run action helper script
+        "${{ github.action_path }}/scripts/action.sh"
       shell: bash
       env:
         PATH_ARG: ${{ inputs.path }}
@@ -168,8 +129,12 @@ runs:
         MASK_VALUES: ${{ inputs.mask-values }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         RULE_PACK: ${{ inputs.rule-pack }}
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-      if: always()
+        INCLUDE_HIDDEN: ${{ inputs.include-hidden }}
+        SAVE_REPORT: ${{ inputs.save-report }}
+
+    - name: Upload JSON Report Artifact
+      uses: actions/upload-artifact@v4
+      if: always() && inputs.save-report == 'true' && steps.devdiag.outputs.report-uploaded == 'true'
       with:
         name: ${{ inputs.artifact-name }}
         path: ${{ runner.temp }}/devdiag-artifacts/devdiag-report.json
