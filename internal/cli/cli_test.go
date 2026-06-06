@@ -508,6 +508,11 @@ func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 		"fail-severity: medium",
 		"artifact-name: devdiag-report-threshold-${{ matrix.go-version }}",
 		"steps.threshold.outcome",
+		"artifact-name: devdiag-report-markdown-${{ matrix.go-version }}",
+		"save-report: 'false'",
+		"steps.report_only.outputs.render-exit-code",
+		"steps.direct_scan.outputs.scan-exit-code",
+		"fail-severity: off",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Fatalf("action live signoff workflow missing %q:\n%s", want, workflow)

@@ -556,7 +556,15 @@ permissions:
 | `report-path` | Path to the generated JSON report artifact on the runner |
 | `summary-written` | Whether the action wrote a GitHub job summary (`true`/`false`) |
 | `scan-exit-code` | The raw exit code of the devdiag scan command |
+| `render-exit-code` | The exit code of the devdiag report command (present only when `save-report` is `true`) |
 | `report-uploaded` | Whether the JSON report was uploaded as an artifact (`true`/`false`) |
+
+### Execution Modes (`save-report`)
+
+The GitHub Action runs under one of two modes depending on the `save-report` setting:
+
+- **`save-report: true` (Default)**: Runs `devdiag scan --format json --save-report` once to perform diagnostics and save a JSON report. It then copies the saved report to the artifact path for upload, and calls `devdiag report` to render the saved report in the requested output format. `render-exit-code` is populated.
+- **`save-report: false`**: Runs `devdiag scan` directly with the requested output format. No JSON report is saved or uploaded, and `render-exit-code` is empty.
 
 ---
 

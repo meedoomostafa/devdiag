@@ -47,8 +47,9 @@ jobs:
           YAML
           printf '18\n' > "$fixture/.nvmrc"
           printf 'LOCAL_ONLY=1\n' > "$fixture/.env"
+
       - id: allow
-        name: Run DevDiag action without failing on findings
+        name: "Mode A: Run DevDiag action (Default artifact/report mode)"
         uses: ./
         with:
           path: ${{ runner.temp }}/devdiag-action-fixture
@@ -60,32 +61,84 @@ jobs:
           redact: default
           mask-values: secret123
           artifact-name: devdiag-report-${{ matrix.go-version }}
-      - name: Verify action output, summary, and local report
+
+      - name: Verify Mode A Outputs & Artifacts
         shell: bash
         run: |
           report_path='${{ steps.allow.outputs.report-path }}'
           test -n "$report_path"
           test -f "$report_path"
           test '${{ steps.allow.outputs.summary-written }}' = 'true'
+          test '${{ steps.allow.outputs.report-uploaded }}' = 'true'
+          test -n '${{ steps.allow.outputs.scan-exit-code }}'
+          test -n '${{ steps.allow.outputs.render-exit-code }}'
           grep -q '### DevDiag scan' "$GITHUB_STEP_SUMMARY"
           jq -e '.. | strings | select(contains("<redacted>"))' "$report_path" >/dev/null
           ! grep -q 'secret123' "$report_path"
           jq -e '.schema_version and .collectors and .findings' "$report_path"
           sha256sum "$report_path" | tee "$RUNNER_TEMP/devdiag-report.sha256"
-      - name: Download uploaded report artifact
+
+      - name: Download uploaded report artifact (Mode A)
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: devdiag-report-${{ matrix.go-version }}
-          path: ${{ runner.temp }}/devdiag-action-download
-      - name: Verify downloaded report artifact
+          path: ${{ runner.temp }}/devdiag-action-download-default
+
+      - name: Verify downloaded report artifact (Mode A)
         shell: bash
         run: |
-          downloaded="$RUNNER_TEMP/devdiag-action-download/devdiag-report.json"
+          downloaded="$RUNNER_TEMP/devdiag-action-download-default/devdiag-report.json"
           test -f "$downloaded"
           jq -e '.schema_version and .collectors and .findings' "$downloaded"
           jq -e '.. | strings | select(contains("<redacted>"))' "$downloaded" >/dev/null
           ! grep -q 'secret123' "$downloaded"
           sha256sum "$downloaded"
+
+      - id: report_only
+        name: "Mode B: Run DevDiag action (Report-only/non-blocking mode)"
+        uses: ./
+        with:
+          path: ${{ runner.temp }}/devdiag-action-fixture
+          format: markdown
+          ci: 'true'
+          summary: 'true'
+          fail-on-findings: 'false'
+          fail-severity: off
+          redact: default
+          mask-values: secret123
+          artifact-name: devdiag-report-markdown-${{ matrix.go-version }}
+
+      - name: Verify Mode B Outputs & Artifacts
+        shell: bash
+        run: |
+          report_path='${{ steps.report_only.outputs.report-path }}'
+          test -n "$report_path"
+          test -f "$report_path"
+          test '${{ steps.report_only.outputs.summary-written }}' = 'true'
+          test '${{ steps.report_only.outputs.report-uploaded }}' = 'true'
+          test -n '${{ steps.report_only.outputs.scan-exit-code }}'
+          test '${{ steps.report_only.outputs.render-exit-code }}' = '0'
+          jq -e '.schema_version and .collectors and .findings' "$report_path"
+
+      - id: direct_scan
+        name: "Mode C: Run DevDiag action (Direct scan mode)"
+        uses: ./
+        with:
+          path: ${{ runner.temp }}/devdiag-action-fixture
+          format: github
+          ci: 'true'
+          summary: 'true'
+          save-report: 'false'
+          fail-on-findings: 'false'
+
+      - name: Verify Mode C Outputs
+        shell: bash
+        run: |
+          test -z '${{ steps.direct_scan.outputs.report-path }}'
+          test '${{ steps.direct_scan.outputs.report-uploaded }}' = 'false'
+          test -n '${{ steps.direct_scan.outputs.scan-exit-code }}'
+          test -z '${{ steps.direct_scan.outputs.render-exit-code }}'
+
       - id: threshold
         name: Run DevDiag action with medium fail threshold
         uses: ./
@@ -100,6 +153,7 @@ jobs:
           redact: default
           mask-values: secret123
           artifact-name: devdiag-report-threshold-${{ matrix.go-version }}
+
       - name: Verify fail threshold behavior
         shell: bash
         run: |
