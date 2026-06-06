@@ -26,6 +26,15 @@ func (r *MarkdownRenderer) Render(report *schema.Report, w io.Writer) error {
 	b.WriteString(fmt.Sprintf("| Findings | %d actionable, %d hidden |\n", len(report.Findings), r.HiddenCount))
 	b.WriteString(fmt.Sprintf("| Highest severity | %s |\n\n", mdHighestSeverity(report.Findings)))
 
+	if r.HiddenCount > 0 {
+		b.WriteString(fmt.Sprintf("%d hidden finding(s) are not shown at this visibility level. Re-run with `--include-hidden` or an audit view to show them when policy allows.\n\n", r.HiddenCount))
+	}
+
+	renderMarkdownCollectorSummary(report, &b)
+	if info, ok := findTraceUnavailable(report); ok {
+		renderTraceUnavailableMarkdown(info, &b)
+	}
+
 	if len(report.Findings) > 0 {
 		b.WriteString("## Actionable findings\n\n")
 		b.WriteString("| Severity | ID | Summary | Confidence |\n")
@@ -45,19 +54,7 @@ func (r *MarkdownRenderer) Render(report *schema.Report, w io.Writer) error {
 			}
 			if len(f.Evidence) > 0 {
 				b.WriteString("**Evidence:**\n\n")
-				maxEv := 5
-				for idx, ev := range f.Evidence {
-					if idx >= maxEv {
-						b.WriteString(fmt.Sprintf("- and %d more\n", len(f.Evidence)-maxEv))
-						break
-					}
-					val := ev.Value
-					// Truncate overly long evidence lines to keep markdown neat
-					if len(val) > 200 {
-						val = val[:197] + "..."
-					}
-					b.WriteString(fmt.Sprintf("- `%s`: %s\n", ev.Source, val))
-				}
+				renderMarkdownEvidence(f.Evidence, &b)
 				b.WriteString("\n")
 			}
 			if len(f.LikelyCauses) > 0 {
@@ -84,6 +81,107 @@ func (r *MarkdownRenderer) Render(report *schema.Report, w io.Writer) error {
 
 	_, err := w.Write([]byte(b.String()))
 	return err
+}
+
+func renderMarkdownCollectorSummary(report *schema.Report, b *strings.Builder) {
+	if report == nil || len(report.Collectors) == 0 {
+		return
+	}
+	summary := summarizeCollectors(report)
+	b.WriteString("## Collector Summary\n\n")
+	b.WriteString("| Collector | Status | Evidence | Notes |\n")
+	b.WriteString("|---|---|---:|---:|\n")
+	for _, collector := range report.Collectors {
+		status := string(collector.Status)
+		if status == "" {
+			status = string(schema.CollectorOK)
+		}
+		b.WriteString(fmt.Sprintf("| %s | %s | %d | %d |\n", collector.Name, status, len(collector.Evidence), len(collector.Notes)))
+	}
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf("Totals: %d ok, %d partial, %d timeout, %d unavailable, %d permission denied, %d failed.\n\n",
+		summary.OK, summary.Partial, summary.Timeout, summary.Unavailable, summary.PermissionDenied, summary.Failed))
+	if hasUnavailableCollectors(report.Collectors) {
+		b.WriteString("**Collector notes:**\n\n")
+		for _, collector := range report.Collectors {
+			if collector.Status == schema.CollectorOK || collector.Status == "" {
+				continue
+			}
+			if len(collector.Notes) == 0 {
+				b.WriteString(fmt.Sprintf("- `%s`: %s\n", collector.Name, collector.Status))
+				continue
+			}
+			for _, note := range collector.Notes {
+				b.WriteString(fmt.Sprintf("- `%s`: %s\n", collector.Name, note))
+			}
+		}
+		b.WriteString("\n")
+	}
+}
+
+func renderTraceUnavailableMarkdown(info traceUnavailableInfo, b *strings.Builder) {
+	b.WriteString("## Trace Unavailable\n\n")
+	b.WriteString("| Field | Value |\n")
+	b.WriteString("|---|---|\n")
+	if info.Backend != "" {
+		b.WriteString(fmt.Sprintf("| Backend | %s |\n", info.Backend))
+	}
+	if info.Reason != "" {
+		b.WriteString(fmt.Sprintf("| Reason | %s |\n", info.Reason))
+	}
+	if info.Command != "" {
+		b.WriteString(fmt.Sprintf("| Command | `%s` |\n", info.Command))
+	}
+	b.WriteString("\n")
+	b.WriteString("Next:\n\n")
+	b.WriteString("- Install strace\n")
+	b.WriteString("- Or use `--backend ebpf` when available\n\n")
+}
+
+func renderMarkdownEvidence(evidence []schema.Evidence, b *strings.Builder) {
+	if keys, ok := evidenceKeys(evidence, "missing_keys", "missing_optional_keys"); ok {
+		for _, key := range keys {
+			b.WriteString(fmt.Sprintf("- %s\n", key))
+		}
+		return
+	}
+
+	maxEv := 5
+	for idx, ev := range evidence {
+		if idx >= maxEv {
+			b.WriteString(fmt.Sprintf("- and %d more\n", len(evidence)-maxEv))
+			break
+		}
+		val := ev.Value
+		if len(val) > 200 {
+			val = val[:197] + "..."
+		}
+		if strings.HasPrefix(ev.Source, "ci_run__") {
+			b.WriteString(fmt.Sprintf("- `%s`:\n\n```sh\n%s\n```\n", ev.Source, val))
+			continue
+		}
+		b.WriteString(fmt.Sprintf("- `%s`: %s\n", ev.Source, val))
+	}
+}
+
+func evidenceKeys(evidence []schema.Evidence, sources ...string) ([]string, bool) {
+	sourceSet := make(map[string]bool, len(sources))
+	for _, source := range sources {
+		sourceSet[source] = true
+	}
+	var keys []string
+	for _, ev := range evidence {
+		if !sourceSet[ev.Source] {
+			continue
+		}
+		for _, part := range strings.Split(ev.Value, ",") {
+			key := strings.TrimSpace(part)
+			if key != "" {
+				keys = append(keys, key)
+			}
+		}
+	}
+	return keys, len(keys) > 0
 }
 
 func mdHighestSeverity(findings []schema.Finding) schema.Severity {

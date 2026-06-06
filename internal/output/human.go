@@ -1,5 +1,5 @@
 package output
- 
+
 import (
 	"fmt"
 	"io"
@@ -19,6 +19,12 @@ type HumanRenderer struct {
 
 type collectorSummary struct {
 	OK, Partial, Timeout, Unavailable, Failed, PermissionDenied int
+}
+
+type traceUnavailableInfo struct {
+	Backend string
+	Reason  string
+	Command string
 }
 
 func summarizeCollectors(report *schema.Report) collectorSummary {
@@ -164,7 +170,7 @@ func suggestedNextCommand(f schema.Finding) string {
 
 func hasUnavailableCollectors(collectors []schema.CollectorResult) bool {
 	for _, c := range collectors {
-		if c.Status == schema.CollectorUnavailable || c.Status == schema.CollectorFailed || c.Status == schema.CollectorPermissionDenied {
+		if c.Status == schema.CollectorUnavailable || c.Status == schema.CollectorFailed || c.Status == schema.CollectorPermissionDenied || c.Status == schema.CollectorTimeout || c.Status == schema.CollectorPartial {
 			return true
 		}
 	}
@@ -174,7 +180,7 @@ func hasUnavailableCollectors(collectors []schema.CollectorResult) bool {
 func renderCollectorIssues(collectors []schema.CollectorResult, b *strings.Builder) {
 	b.WriteString("Collector Issues:\n")
 	for _, c := range collectors {
-		if c.Status == schema.CollectorUnavailable || c.Status == schema.CollectorFailed || c.Status == schema.CollectorPermissionDenied {
+		if c.Status == schema.CollectorUnavailable || c.Status == schema.CollectorFailed || c.Status == schema.CollectorPermissionDenied || c.Status == schema.CollectorTimeout || c.Status == schema.CollectorPartial {
 			b.WriteString(fmt.Sprintf("  - %s: %s\n", c.Name, c.Status))
 			for _, note := range c.Notes {
 				b.WriteString(fmt.Sprintf("    Note: %s\n", note))
@@ -240,6 +246,60 @@ func relatedCollectorsForFinding(f schema.Finding) []string {
 	return nil
 }
 
+func findTraceUnavailable(report *schema.Report) (traceUnavailableInfo, bool) {
+	var info traceUnavailableInfo
+	if report == nil {
+		return info, false
+	}
+	for _, collector := range report.Collectors {
+		if collector.Name != "trace" {
+			continue
+		}
+		if collector.Status != schema.CollectorUnavailable {
+			continue
+		}
+		for _, ev := range collector.Evidence {
+			switch ev.Source {
+			case "trace_backend":
+				info.Backend = ev.Value
+			case "trace_unavailable_reason":
+				info.Reason = ev.Value
+			case "trace_command":
+				info.Command = ev.Value
+			}
+		}
+		if info.Backend == "" {
+			info.Backend = "unknown"
+		}
+		if info.Reason == "" {
+			info.Reason = "unavailable"
+		}
+		return info, true
+	}
+	for _, finding := range report.Findings {
+		if finding.ID == "F-TRACE-UNAVAILABLE-001" {
+			return info, true
+		}
+	}
+	return info, false
+}
+
+func renderTraceUnavailableHuman(info traceUnavailableInfo, b *strings.Builder) {
+	b.WriteString("DevDiag trace unavailable\n\n")
+	if info.Backend != "" {
+		b.WriteString(fmt.Sprintf("Backend: %s\n", info.Backend))
+	}
+	if info.Reason != "" {
+		b.WriteString(fmt.Sprintf("Reason: %s\n", info.Reason))
+	}
+	if info.Command != "" {
+		b.WriteString(fmt.Sprintf("Command: %s\n", info.Command))
+	}
+	b.WriteString("\nNext:\n")
+	b.WriteString("  - Install strace\n")
+	b.WriteString("  - Or use --backend ebpf when available\n\n")
+}
+
 func (r *HumanRenderer) Render(report *schema.Report, w io.Writer) error {
 	useColor := ShouldColor(r.ColorMode, IsTTY(os.Stdout))
 
@@ -255,9 +315,13 @@ func (r *HumanRenderer) Render(report *schema.Report, w io.Writer) error {
 	cSummary := summarizeCollectors(report)
 	b.WriteString("Summary\n")
 	b.WriteString(fmt.Sprintf("  Findings: %d actionable, %d hidden\n", len(report.Findings), r.HiddenCount))
-	b.WriteString(fmt.Sprintf("  Collectors: %d ok, %d partial, %d failed\n",
-		cSummary.OK, cSummary.Partial+cSummary.Timeout+cSummary.Unavailable+cSummary.PermissionDenied, cSummary.Failed))
+	b.WriteString(fmt.Sprintf("  Collectors: %d ok, %d partial, %d timeout, %d unavailable, %d permission denied, %d failed\n",
+		cSummary.OK, cSummary.Partial, cSummary.Timeout, cSummary.Unavailable, cSummary.PermissionDenied, cSummary.Failed))
 	b.WriteString(fmt.Sprintf("  Highest severity: %s\n\n", highestSeverity(report.Findings)))
+
+	if info, ok := findTraceUnavailable(report); ok {
+		renderTraceUnavailableHuman(info, &b)
+	}
 
 	if len(report.Findings) > 0 {
 		heading := "Actionable findings"
