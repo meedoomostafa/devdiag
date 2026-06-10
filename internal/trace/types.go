@@ -62,19 +62,6 @@ func ParseBackend(s string) (Backend, error) {
 	}
 }
 
-func newEBPFUnavailableResult(scopes []Scope, command string, args []string, reason string) *Result {
-	return &Result{
-		Command:           command,
-		Args:              args,
-		Scopes:            scopes,
-		Backend:           string(BackendEBPF),
-		Events:            []Event{},
-		TraceUnavailable:  true,
-		UnavailableReason: reason,
-		Notes:             []string{"ebpf backend unavailable: " + reason},
-	}
-}
-
 // Event is a single parsed strace line.
 type Event struct {
 	Timestamp time.Time     `json:"timestamp,omitempty"`

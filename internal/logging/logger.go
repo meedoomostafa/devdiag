@@ -50,15 +50,6 @@ func New(minLevel Level, engine *redact.Engine) *Logger {
 	}
 }
 
-// WithWriter returns a Logger that writes to w (used in tests).
-func (l *Logger) WithWriter(w io.Writer) *Logger {
-	return &Logger{
-		out:          w,
-		minLevel:     l.minLevel,
-		redactEngine: l.redactEngine,
-	}
-}
-
 // log writes a log line if level is sufficient.
 func (l *Logger) log(level Level, event string, msg string) {
 	if levelOrder[level] < levelOrder[l.minLevel] {
@@ -99,17 +90,6 @@ func levelAbbrev(l Level) string {
 }
 
 // Public log methods
-func (l *Logger) Trace(event, msg string)  { l.log(LevelTrace, event, msg) }
-func (l *Logger) Debug(event, msg string)  { l.log(LevelDebug, event, msg) }
-func (l *Logger) Info(event, msg string)   { l.log(LevelInfo, event, msg) }
-func (l *Logger) Notice(event, msg string) { l.log(LevelNotice, event, msg) }
-func (l *Logger) Warn(event, msg string)   { l.log(LevelWarn, event, msg) }
-func (l *Logger) Error(event, msg string)  { l.log(LevelError, event, msg) }
-func (l *Logger) Fatal(event, msg string)  { l.log(LevelFatal, event, msg) }
-
-// SetMinLevel updates the minimum log level.
-func (l *Logger) SetMinLevel(level Level) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.minLevel = level
-}
+func (l *Logger) Info(event, msg string)  { l.log(LevelInfo, event, msg) }
+func (l *Logger) Warn(event, msg string)  { l.log(LevelWarn, event, msg) }
+func (l *Logger) Error(event, msg string) { l.log(LevelError, event, msg) }

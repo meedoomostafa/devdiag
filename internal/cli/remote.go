@@ -773,25 +773,6 @@ func outputRemoteResultWithFindingExit(result *render.RemoteResult, redactEngine
 	return nil
 }
 
-func outputUnsupportedK8s(cmd *cobra.Command, t *target.Target, redactEngine *redact.Engine, operation string) error {
-	result := render.NewDoctorResult(t)
-	result.DevDiagVersion = version.Version
-	result.RedactionStatus = string(redactEngine.Level)
-	result.Status = "unsupported"
-	result.Profile = flagRemoteProfile
-	result.Findings = append(result.Findings, render.Finding{
-		ID:       "F-REMOTE-K8S-001",
-		Title:    "Kubernetes remote target unsupported",
-		Severity: "medium",
-		Message:  fmt.Sprintf("remote %s for Kubernetes targets is not implemented yet; target parsing is available, but no kubectl operations are executed", operation),
-	})
-	result.Notes = append(result.Notes, "kubernetes remote support is planned but not implemented")
-	if err := outputRemoteResult(result, redactEngine, cmd); err != nil {
-		return err
-	}
-	return exitCodeError{code: exitcode.InvalidInput}
-}
-
 func cleanManifest(ctx context.Context, tr transport.Transport, manifest *session.Manifest) error {
 	if err := session.ValidateRootDir(manifest.RootDir, manifest.Target.Kind); err != nil {
 		return err

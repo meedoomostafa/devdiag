@@ -28,24 +28,19 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	evidence := []schema.Evidence{}
 	notes := []string{}
-	signals := []string{}
 
 	// Package manager signals
 	if fileExists(filepath.Join(root, "go.mod")) {
-		signals = append(signals, "go")
 		evidence = append(evidence, schema.Evidence{Source: "go.mod", Value: "Go module detected"})
 	}
 	if fileExists(filepath.Join(root, "package.json")) {
-		signals = append(signals, "nodejs")
 		evidence = append(evidence, schema.Evidence{Source: "package.json", Value: "Node.js project detected"})
 		evidence = append(evidence, packageJSONEvidence(filepath.Join(root, "package.json"))...)
 	}
 	if fileExists(filepath.Join(root, "Cargo.toml")) {
-		signals = append(signals, "rust")
 		evidence = append(evidence, schema.Evidence{Source: "Cargo.toml", Value: "Rust project detected"})
 	}
 	if fileExists(filepath.Join(root, "requirements.txt")) || fileExists(filepath.Join(root, "pyproject.toml")) {
-		signals = append(signals, "python")
 		evidence = append(evidence, schema.Evidence{Source: "python_files", Value: "Python project detected"})
 	}
 
@@ -62,11 +57,9 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// Container signals
 	if fileExists(filepath.Join(root, "Dockerfile")) || fileExists(filepath.Join(root, "dockerfile")) {
-		signals = append(signals, "docker")
 		evidence = append(evidence, schema.Evidence{Source: "Dockerfile", Value: "Docker build detected"})
 	}
 	if fileExists(filepath.Join(root, "compose.yaml")) || fileExists(filepath.Join(root, "docker-compose.yml")) || fileExists(filepath.Join(root, "docker-compose.yaml")) {
-		signals = append(signals, "compose")
 		evidence = append(evidence, schema.Evidence{Source: "compose", Value: "Compose config detected"})
 	}
 
@@ -78,14 +71,12 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	}
 	for file, runtime := range pins {
 		if fileExists(filepath.Join(root, file)) {
-			signals = append(signals, runtime+"_pin")
 			evidence = append(evidence, schema.Evidence{Source: file, Value: runtime + " version pin detected"})
 		}
 	}
 
 	// Monorepo signals
 	if fileExists(filepath.Join(root, "pnpm-workspace.yaml")) || fileExists(filepath.Join(root, "yarn-workspaces")) {
-		signals = append(signals, "workspace")
 		evidence = append(evidence, schema.Evidence{Source: "workspace", Value: "Workspace/monorepo detected"})
 	}
 

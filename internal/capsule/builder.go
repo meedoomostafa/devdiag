@@ -254,10 +254,7 @@ func isSafePath(p string) bool {
 			return false
 		}
 	}
-	if strings.HasPrefix(p, "/") {
-		return false
-	}
-	return true
+	return !strings.HasPrefix(p, "/")
 }
 
 // Manifest describes a capsule archive.

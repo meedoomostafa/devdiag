@@ -480,15 +480,6 @@ func isDeploymentOnlyHeuristics(key string) bool {
 	return false
 }
 
-func summarizeCommandForTitle(command string) string {
-	const maxTitleCommandLen = 80
-	command = strings.Join(strings.Fields(command), " ")
-	if len(command) <= maxTitleCommandLen {
-		return command
-	}
-	return strings.TrimSpace(command[:maxTitleCommandLen-3]) + "..."
-}
-
 func summarizeKeysForTitle(keys []string) string {
 	const maxKeysInTitle = 5
 	if len(keys) <= maxKeysInTitle {
@@ -530,22 +521,6 @@ func ciSetupInfo(source string) (actionName string, ok bool) {
 		return "", false
 	}
 	return actionRuntimeKey(decodeSourceSegment(parts[len(parts)-2])), true
-}
-
-func ciServicePort(source, value string) (service string, port int, ok bool) {
-	if !strings.HasPrefix(source, "ci_service__") || !strings.HasSuffix(source, "__host_port") {
-		return "", 0, false
-	}
-	rest := strings.TrimSuffix(strings.TrimPrefix(source, "ci_service__"), "__host_port")
-	idx := strings.LastIndex(rest, "__")
-	if idx == -1 {
-		return "", 0, false
-	}
-	p, err := strconv.Atoi(value)
-	if err != nil || p <= 0 {
-		return "", 0, false
-	}
-	return decodeSourceSegment(rest[idx+2:]), p, true
 }
 
 func actionRuntimeKey(action string) string {

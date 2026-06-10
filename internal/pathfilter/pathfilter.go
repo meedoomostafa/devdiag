@@ -126,18 +126,6 @@ func ShouldSkipPathWithPatterns(root, path string, patterns []string) bool {
 	return false
 }
 
-func IsDependencyPath(root, path string) bool {
-	return ClassifyPath(root, path) == PathDependency
-}
-
-func IsGeneratedPath(root, path string) bool {
-	return ClassifyPath(root, path) == PathGenerated
-}
-
-func IsProjectManifestPath(root, path string) bool {
-	return !ShouldSkipPath(root, path)
-}
-
 func IsProjectManifestPathWithPatterns(root, path string, patterns []string) bool {
 	return !ShouldSkipPathWithPatterns(root, path, patterns)
 }

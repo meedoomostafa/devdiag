@@ -61,8 +61,8 @@ var scanCmd = &cobra.Command{
 
 		var loadedBaseline *baseline.Baseline
 		if !scanNoBaseline {
-			baselinePath := scanBaselinePath
 			explicit := scanBaselinePath != ""
+			var baselinePath string
 			if explicit {
 				var err error
 				baselinePath, err = filepath.Abs(scanBaselinePath)

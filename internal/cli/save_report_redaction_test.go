@@ -74,6 +74,9 @@ rules:
 	// 2. Run with redaction OFF
 	os.RemoveAll(filepath.Join(tmpDir, ".devdiag"))
 	stdout, stderr, code = runBinaryInDir(tmpDir, "scan", ".", "--save-report", "--rule-pack", yamlFile, "--redact", "off")
+	if code != 1 {
+		t.Fatalf("redact-off scan exit code = %d, want 1; stdout=%s stderr=%s", code, stdout, stderr)
+	}
 
 	entries, _ = os.ReadDir(runsDir)
 	reportPath = filepath.Join(runsDir, entries[0].Name(), "report.json")

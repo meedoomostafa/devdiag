@@ -59,7 +59,7 @@ func TestChannelSink_EmitsEvent(t *testing.T) {
 }
 
 func TestChannelSink_NonBlockingWhenFull(t *testing.T) {
-	ch := make(chan Event, 0)
+	ch := make(chan Event)
 	sink := &ChannelSink{C: ch}
 
 	// This should not block even though channel is unbuffered and no reader

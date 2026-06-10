@@ -104,9 +104,7 @@ func deriveReasoning(f schema.Finding) []string {
 	if f.Symptom != "" {
 		out = append(out, f.Symptom)
 	}
-	for _, c := range f.LikelyCauses {
-		out = append(out, c)
-	}
+	out = append(out, f.LikelyCauses...)
 	if len(out) == 0 {
 		out = append(out, "Derived from evidence and rule evaluation.")
 	}

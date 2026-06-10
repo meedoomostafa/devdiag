@@ -258,7 +258,7 @@ func readLinuxProcessState(pid int) (string, error) {
 			return strings.TrimSpace(strings.TrimPrefix(line, "State:")), nil
 		}
 	}
-	return "", fmt.Errorf("State not found in /proc/%d/status", pid)
+	return "", fmt.Errorf("state not found in /proc/%d/status", pid)
 }
 
 type ebpfAttachResult struct {

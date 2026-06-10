@@ -62,8 +62,8 @@ func TestCollector_ExtractsEnvRefs(t *testing.T) {
 
 	// Make sure $$HOME is not present
 	for _, v := range vars {
-		if contains(v, "HOME") && !contains(v, "$${HOME}") {
-			// HOME might appear as part of another var name
+		if contains(v, "HOME") {
+			t.Errorf("did not expect escaped HOME variable in evidence, got: %q", v)
 		}
 	}
 }

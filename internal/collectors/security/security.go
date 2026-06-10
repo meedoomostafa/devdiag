@@ -191,10 +191,6 @@ func readLogTail(path string, maxBytes int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, maxBytes))
 }
 
-func classifyDenialLine(line string) (string, string, bool) {
-	return classifyDenialLineWithContext(line, line)
-}
-
 func classifyDenialLineWithContext(line, contextLine string) (string, string, bool) {
 	line = strings.TrimSpace(line)
 	if line == "" {

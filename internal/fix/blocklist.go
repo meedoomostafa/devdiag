@@ -9,10 +9,7 @@ func IsBlockedCommand(bin string, args []string) bool {
 		return true
 	}
 	joined := joinArgs(args)
-	if isBlockedArg(joined) {
-		return true
-	}
-	return false
+	return isBlockedArg(joined)
 }
 
 func joinArgs(args []string) string {
