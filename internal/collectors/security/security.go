@@ -55,7 +55,11 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 func (c *Collector) selinuxStatus() string {
 	path := c.SELinuxEnforcePath
 	if path == "" {
-		path = "/sys/fs/selinux/enforce"
+		if testPath := os.Getenv("DEVDIAG_TEST_SELINUX_ENFORCE_PATH"); testPath != "" {
+			path = testPath
+		} else {
+			path = "/sys/fs/selinux/enforce"
+		}
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -74,7 +78,11 @@ func (c *Collector) selinuxStatus() string {
 func (c *Collector) securityLogEvidence(ctx context.Context) ([]schema.Evidence, []string) {
 	paths := c.SecurityLogPaths
 	if paths == nil {
-		paths = defaultSecurityLogPaths
+		if testPaths := os.Getenv("DEVDIAG_TEST_SECURITY_LOG_PATHS"); testPaths != "" {
+			paths = strings.Split(testPaths, ",")
+		} else {
+			paths = defaultSecurityLogPaths
+		}
 	}
 	maxBytes := c.MaxLogBytes
 	if maxBytes <= 0 {
@@ -304,7 +312,11 @@ func fallbackSummary(parts []string, line string) string {
 func (c *Collector) apparmorEnabled() string {
 	path := c.AppArmorEnabledPath
 	if path == "" {
-		path = "/sys/module/apparmor/parameters/enabled"
+		if testPath := os.Getenv("DEVDIAG_TEST_APPARMOR_ENABLED_PATH"); testPath != "" {
+			path = testPath
+		} else {
+			path = "/sys/module/apparmor/parameters/enabled"
+		}
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
