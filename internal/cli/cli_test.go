@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -2456,7 +2457,13 @@ func TestTraceCommand_InvalidScope(t *testing.T) {
 
 func TestTraceCommand_EBPFBackendUnavailableDiagnostic(t *testing.T) {
 	workDir := t.TempDir()
-	_, stderr, code := runBinaryInDir(workDir, "trace", "--backend", "ebpf", "--scope", "file", "--", "true")
+	env := append([]string{}, os.Environ()...)
+	for i, item := range env {
+		if strings.HasPrefix(item, "PATH=") {
+			env[i] = "PATH=" + t.TempDir()
+		}
+	}
+	_, stderr, code := runBinaryInDirWithEnv(workDir, env, "trace", "--backend", "ebpf", "--scope", "file", "--", "true")
 	if code != int(exitcode.TraceUnavailable) {
 		t.Fatalf("trace --backend ebpf exit code = %d, want %d, stderr=%s", code, exitcode.TraceUnavailable, stderr)
 	}
@@ -2467,7 +2474,13 @@ func TestTraceCommand_EBPFBackendUnavailableDiagnostic(t *testing.T) {
 
 func TestTraceCommand_EBPFBackendUnavailableJSONIncludesEvidence(t *testing.T) {
 	workDir := t.TempDir()
-	stdout, stderr, code := runBinaryInDir(workDir, "trace", "--backend", "ebpf", "--scope", "file,network", "--format", "json", "--", "true")
+	env := append([]string{}, os.Environ()...)
+	for i, item := range env {
+		if strings.HasPrefix(item, "PATH=") {
+			env[i] = "PATH=" + t.TempDir()
+		}
+	}
+	stdout, stderr, code := runBinaryInDirWithEnv(workDir, env, "trace", "--backend", "ebpf", "--scope", "file,network", "--format", "json", "--", "true")
 	if code != int(exitcode.TraceUnavailable) {
 		t.Fatalf("trace --backend ebpf exit code = %d, want %d, stderr=%s stdout=%s", code, exitcode.TraceUnavailable, stderr, stdout)
 	}
@@ -2485,6 +2498,32 @@ func TestTraceCommand_EBPFBackendUnavailableJSONIncludesEvidence(t *testing.T) {
 	if !hasCollectorEvidenceSource(collector, "ebpf_btf") && !hasCollectorEvidenceSource(collector, "ebpf_cap_bpf") && !hasCollectorEvidenceSource(collector, "ebpf_tracepoint_program_type") {
 		t.Fatalf("trace ebpf collector missing capability evidence: %+v", collector.Evidence)
 	}
+}
+
+func TestTraceCommand_EBPFBackendCapabilitiesMissing_FallsBackToStrace(t *testing.T) {
+	if _, err := exec.LookPath("strace"); err != nil {
+		t.Skip("strace not installed on host; skipping fallback validation")
+	}
+	
+	workDir := t.TempDir()
+	stdout, stderr, code := runBinaryInDir(workDir, "trace", "--backend", "ebpf", "--scope", "file,network", "--format", "json", "--", "true")
+	
+	if code != 0 {
+		t.Fatalf("expected graceful fallback to strace to succeed with exit code 0, got %d; stderr=%s", code, stderr)
+	}
+	
+	var report schema.Report
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v", err)
+	}
+	
+	collector := findReportCollector(t, report, "trace")
+	if collector.Status != schema.CollectorOK {
+		t.Fatalf("expected collector status OK after strace fallback, got %s", collector.Status)
+	}
+	
+	assertCollectorEvidence(t, collector, "trace_backend", "strace")
+	assertCollectorEvidenceSource(t, collector, "trace_self_binary_path")
 }
 
 func TestTraceCommand_StracelessJSONReportsUnavailable(t *testing.T) {
@@ -3999,5 +4038,173 @@ func TestInspect_Help_ReturnsExitCode0(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "inspect") {
 		t.Error("inspect --help should mention inspect")
+	}
+}
+
+func TestTraceCommand_EBPFBackendCapabilitiesMissing_PromptsAndRetries(t *testing.T) {
+	// Mock isTTY
+	oldIsTTY := isTTY
+	isTTY = func() bool { return true }
+	defer func() { isTTY = oldIsTTY }()
+
+	// Mock runTraceEBPF
+	oldRunTraceEBPF := runTraceEBPF
+	callCount := 0
+	runTraceEBPF = func(ctx context.Context, scopes []trace.Scope, command string, args ...string) (*trace.Result, error) {
+		callCount++
+		if callCount == 1 {
+			return &trace.Result{
+				Command:           command,
+				Args:              args,
+				Scopes:            scopes,
+				Backend:           string(trace.BackendEBPF),
+				Events:            []trace.Event{},
+				TraceUnavailable:  true,
+				UnavailableReason: "ebpf_capabilities_missing",
+				ExitCode:          -1,
+				Notes:             []string{"ebpf capabilities missing"},
+			}, nil
+		}
+		return &trace.Result{
+			Command:           command,
+			Args:              args,
+			Scopes:            scopes,
+			Backend:           string(trace.BackendEBPF),
+			Events:            []trace.Event{{Syscall: "openat", Result: "3"}},
+			TraceUnavailable:  false,
+			ExitCode:          0,
+		}, nil
+	}
+	defer func() { runTraceEBPF = oldRunTraceEBPF }()
+
+	// Mock execCommand
+	oldExecCommand := execCommand
+	execCommand = func(name string, arg ...string) *exec.Cmd {
+		return exec.Command("true")
+	}
+	defer func() { execCommand = oldExecCommand }()
+
+	// Mock Stdin with "yes\n"
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdin pipe: %v", err)
+	}
+	if _, err := io.WriteString(stdinW, "yes\n"); err != nil {
+		t.Fatalf("write confirmation: %v", err)
+	}
+	if err := stdinW.Close(); err != nil {
+		t.Fatalf("close stdin writer: %v", err)
+	}
+	oldStdin := os.Stdin
+	os.Stdin = stdinR
+	defer func() {
+		os.Stdin = oldStdin
+		_ = stdinR.Close()
+	}()
+
+	// Save original flags to restore them
+	oldScope := flagTraceScope
+	oldTimeout := flagTraceTimeout
+	oldMaxEvents := flagTraceMaxEvents
+	oldBackend := flagTraceBackend
+	defer func() {
+		flagTraceScope = oldScope
+		flagTraceTimeout = oldTimeout
+		flagTraceMaxEvents = oldMaxEvents
+		flagTraceBackend = oldBackend
+	}()
+
+	var stdout, stderr bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetArgs([]string{"trace", "--backend", "ebpf", "--scope", "file", "--", "true"})
+
+	err = rootCmd.ExecuteContext(context.Background())
+	if err != nil {
+		t.Fatalf("traceCmd.ExecuteContext failed: %v, stderr: %s", err, stderr.String())
+	}
+
+	if callCount != 2 {
+		t.Errorf("expected callCount = 2, got %d", callCount)
+	}
+}
+
+func TestTraceCommand_EBPFBackendCapabilitiesMissing_PromptsAndDeclines(t *testing.T) {
+	// Mock isTTY
+	oldIsTTY := isTTY
+	isTTY = func() bool { return true }
+	defer func() { isTTY = oldIsTTY }()
+
+	// Mock runTraceEBPF
+	oldRunTraceEBPF := runTraceEBPF
+	callCount := 0
+	runTraceEBPF = func(ctx context.Context, scopes []trace.Scope, command string, args ...string) (*trace.Result, error) {
+		callCount++
+		return &trace.Result{
+			Command:           command,
+			Args:              args,
+			Scopes:            scopes,
+			Backend:           string(trace.BackendEBPF),
+			Events:            []trace.Event{},
+			TraceUnavailable:  true,
+			UnavailableReason: "ebpf_capabilities_missing",
+			ExitCode:          -1,
+			Notes:             []string{"ebpf capabilities missing"},
+		}, nil
+	}
+	defer func() { runTraceEBPF = oldRunTraceEBPF }()
+
+	// Mock Stdin with "no\n"
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdin pipe: %v", err)
+	}
+	if _, err := io.WriteString(stdinW, "no\n"); err != nil {
+		t.Fatalf("write confirmation: %v", err)
+	}
+	if err := stdinW.Close(); err != nil {
+		t.Fatalf("close stdin writer: %v", err)
+	}
+	oldStdin := os.Stdin
+	os.Stdin = stdinR
+	defer func() {
+		os.Stdin = oldStdin
+		_ = stdinR.Close()
+	}()
+
+	// Clear PATH to ensure strace is not found
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", "")
+	defer os.Setenv("PATH", oldPath)
+
+	// Save original flags to restore them
+	oldScope := flagTraceScope
+	oldTimeout := flagTraceTimeout
+	oldMaxEvents := flagTraceMaxEvents
+	oldBackend := flagTraceBackend
+	defer func() {
+		flagTraceScope = oldScope
+		flagTraceTimeout = oldTimeout
+		flagTraceMaxEvents = oldMaxEvents
+		flagTraceBackend = oldBackend
+	}()
+
+	var stdout, stderr bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetArgs([]string{"trace", "--backend", "ebpf", "--scope", "file", "--", "true"})
+
+	err = rootCmd.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatal("expected error since trace is unavailable and declined")
+	}
+
+	cliErr, ok := err.(exitCodeError)
+	if !ok || cliErr.code != exitcode.TraceUnavailable {
+		t.Errorf("expected exitCodeError with code %v, got %v", exitcode.TraceUnavailable, err)
+	}
+
+	if callCount != 1 {
+		t.Errorf("expected callCount = 1, got %d", callCount)
 	}
 }
