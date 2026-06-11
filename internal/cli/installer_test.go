@@ -399,7 +399,7 @@ func TestUpdate_CurrentNewerThanLatestDoesNotDowngrade(t *testing.T) {
 func TestUpdate_UpdateAvailable(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"tag_name":"v0.2.8"}`)
+		fmt.Fprintln(w, `{"tag_name":"v0.3.1"}`)
 	}))
 	defer ts.Close()
 
@@ -509,7 +509,7 @@ func TestUpdate_ApplyRunsInstallerForLatestRelease(t *testing.T) {
 		switch r.URL.Path {
 		case "/repos/meedoomostafa/devdiag/releases/latest":
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintln(w, `{"tag_name":"v0.2.8"}`)
+			fmt.Fprintln(w, `{"tag_name":"v0.3.1"}`)
 		case "/install.sh":
 			w.Header().Set("Content-Type", "text/plain")
 			fmt.Fprintln(w, `#!/usr/bin/env bash`)
@@ -541,7 +541,7 @@ func TestUpdate_ApplyRunsInstallerForLatestRelease(t *testing.T) {
 	if !strings.Contains(stdout, "action: applying_update") {
 		t.Fatalf("expected applying_update, got: %s", stdout)
 	}
-	if !strings.Contains(stdout, "installer_version=v0.2.8") {
+	if !strings.Contains(stdout, "installer_version=v0.3.1") {
 		t.Fatalf("installer did not receive latest version: %s", stdout)
 	}
 	if !strings.Contains(stdout, "installer_bin_dir="+binDir) {
