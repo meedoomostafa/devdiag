@@ -287,7 +287,7 @@ func pickFixRenderer(colorMode output.ColorMode) fix.ProposalRenderer {
 	}
 }
 
-func isTTY() bool {
+var isTTY = func() bool {
 	stat, err := os.Stdin.Stat()
 	if err != nil {
 		return false

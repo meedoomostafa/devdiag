@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -18,7 +21,10 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/version"
 )
 
-var runTraceEBPF = trace.RunEBPF
+var (
+	runTraceEBPF = trace.RunEBPF
+	execCommand  = exec.Command
+)
 
 var (
 	flagTraceScope     string
@@ -83,7 +89,54 @@ then analyzes the trace output to produce diagnostic findings.`,
 			if backend == trace.BackendEBPF {
 				tctx, cancel := context.WithTimeout(cmd.Context(), flagTraceTimeout)
 				defer cancel()
-				res, err = runTraceEBPF(tctx, scopes, command, commandArgs...)
+				ebpfRes, ebpfErr := runTraceEBPF(tctx, scopes, command, commandArgs...)
+				
+				if ebpfErr == nil && ebpfRes.TraceUnavailable && ebpfRes.UnavailableReason == "ebpf_capabilities_missing" {
+					if isTTY() {
+						fmt.Fprintf(os.Stderr, "\ndevdiag: eBPF backend lacks capabilities. Would you like to grant permanent eBPF capabilities to the devdiag binary via setcap? This will run a sudo command. [y/N]: ")
+						reader := bufio.NewReader(os.Stdin)
+						resp, readErr := reader.ReadString('\n')
+						if readErr == nil {
+							resp = strings.TrimSpace(strings.ToLower(resp))
+							if resp == "y" || resp == "yes" {
+								exePath, exeErr := os.Executable()
+								if exeErr == nil {
+									logger.Info("trace", fmt.Sprintf("running: sudo setcap cap_bpf,cap_perfmon=ep %s", exePath))
+									sudoCmd := execCommand("sudo", "setcap", "cap_bpf,cap_perfmon=ep", exePath)
+									sudoCmd.Stdin = os.Stdin
+									sudoCmd.Stdout = os.Stdout
+									sudoCmd.Stderr = os.Stderr
+									if runErr := sudoCmd.Run(); runErr == nil {
+										logger.Info("trace", "successfully granted capabilities; retrying eBPF trace")
+										tctx2, cancel2 := context.WithTimeout(cmd.Context(), flagTraceTimeout)
+										defer cancel2()
+										ebpfRes, ebpfErr = runTraceEBPF(tctx2, scopes, command, commandArgs...)
+									} else {
+										logger.Warn("trace", "failed to grant capabilities; falling back to strace check")
+									}
+								}
+							}
+						}
+					}
+					
+					if ebpfErr == nil && ebpfRes.TraceUnavailable && ebpfRes.UnavailableReason == "ebpf_capabilities_missing" {
+						logger.Warn("trace", "ebpf backend lacks capabilities; checking strace fallback")
+						if _, straceErr := exec.LookPath("strace"); straceErr == nil {
+							runner := &trace.Runner{Timeout: flagTraceTimeout, MaxEvents: flagTraceMaxEvents}
+							res, err = runner.Run(cmd.Context(), scopes, command, commandArgs...)
+							if err == nil {
+								res.CapabilityEvidence = append(res.CapabilityEvidence, ebpfRes.CapabilityEvidence...)
+								res.Notes = append(res.Notes, "ebpf unavailable, successfully fell back to strace backend")
+							}
+						} else {
+							res, err = ebpfRes, ebpfErr
+						}
+					} else {
+						res, err = ebpfRes, ebpfErr
+					}
+				} else {
+					res, err = ebpfRes, ebpfErr
+				}
 			} else {
 				runner := &trace.Runner{Timeout: flagTraceTimeout, MaxEvents: flagTraceMaxEvents}
 				res, err = runner.Run(cmd.Context(), scopes, command, commandArgs...)
@@ -101,19 +154,31 @@ then analyzes the trace output to produce diagnostic findings.`,
 		// Raw events must never be printed or persisted unredacted.
 		traceFindings := trace.Analyze(res.Events)
 		if res.TraceUnavailable {
+			var dynamicCauses []string
+			var dynamicFixHints []string
+
+			if res.Backend == string(trace.BackendEBPF) && res.UnavailableReason == "ebpf_capabilities_missing" {
+				dynamicCauses = []string{"The devdiag binary lacks the required POSIX capabilities (CAP_BPF, CAP_PERFMON) to attach to kernel tracepoints without root."}
+				dynamicFixHints = []string{"ebpf-setcap-grant", "Run with sudo, or run 'devdiag fix F-TRACE-UNAVAILABLE-001' to permanently grant capabilities to the binary."}
+			} else {
+				dynamicCauses = []string{"Trace backend is missing or lacks required permissions/capabilities on this host."}
+				dynamicFixHints = []string{"Install strace via your package manager (e.g., sudo dnf install strace)."}
+			}
+
 			traceFindings = append(traceFindings, schema.Finding{
-				ID:         "F-TRACE-UNAVAILABLE-001",
-				Title:      "Trace backend unavailable",
-				Severity:   schema.SeverityInfo,
-				Confidence: 1.0,
-				Symptom:    fmt.Sprintf("Syscall tracing is unavailable on this host. Reason: %s", res.UnavailableReason),
-				LikelyCauses: []string{
-					"Trace backend (strace or ebpf) is missing or lacks required permissions/capabilities",
-				},
-				FixHints: []string{
-					"Install strace or run with necessary capabilities for eBPF",
-				},
+				ID:           "F-TRACE-UNAVAILABLE-001",
+				Title:        "Trace backend unavailable",
+				Severity:     schema.SeverityInfo,
+				Confidence:   1.0,
+				Symptom:      fmt.Sprintf("Syscall tracing failed on this host. Reason: %s", res.UnavailableReason),
+				LikelyCauses: dynamicCauses,
+				FixHints:     dynamicFixHints,
 			})
+		}
+
+		exePath, exeErr := os.Executable()
+		if exeErr != nil {
+			exePath = "devdiag" // fallback name
 		}
 
 		// Build collector result
@@ -125,6 +190,7 @@ then analyzes the trace output to produce diagnostic findings.`,
 				{Source: "trace_command", Value: command},
 				{Source: "trace_scopes", Value: flagTraceScope},
 				{Source: "trace_event_count", Value: fmt.Sprintf("%d", len(res.Events))},
+				{Source: "trace_self_binary_path", Value: exePath},
 			},
 			Notes: res.Notes,
 		}

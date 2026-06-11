@@ -291,6 +291,17 @@ func (r *Registry) registerDefaults() {
 		Class:          schema.FixManual,
 		ConfirmMessage: "Check that the UNIX socket file exists and has correct permissions.",
 	})
+
+	r.register(Template{
+		HintID:           "ebpf-setcap-grant",
+		Title:            "Grant permanent eBPF capabilities to devdiag binary",
+		Class:            schema.FixGuarded, 
+		Bin:              "sudo",
+		Args:             []string{"setcap", "cap_bpf,cap_perfmon=ep", "{{value}}"},
+		RequiredEvidence: []string{"trace_self_binary_path"}, 
+		Platforms:        []string{"linux"},
+		ConfirmMessage:   "This will elevate devdiag's binary permissions via setcap to allow raw tracepoint access for unprivileged users.",
+	})
 }
 
 func (r *Registry) register(t Template) {
