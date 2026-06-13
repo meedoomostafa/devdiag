@@ -201,20 +201,6 @@ func validateEvidence(tmpl Template, evidence map[string]string, repoRoot string
 				return nil, nil, err
 			}
 			values["port"] = strconv.Itoa(p)
-		case "compose_status":
-			// Extract service name from evidence source like "compose_<service>_status"
-			for k, v := range evidence {
-				if strings.HasSuffix(k, "_status") && strings.HasPrefix(k, "compose_") {
-					parts := strings.Split(k, "_")
-					if len(parts) >= 3 {
-						svc, err := ValidateServiceName(parts[2])
-						if err == nil {
-							values["service"] = svc
-							values["status"] = v
-						}
-					}
-				}
-			}
 		case "missing_keys":
 			parts := strings.Split(val, ",")
 			var valid []string
