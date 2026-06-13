@@ -152,7 +152,7 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// docker compose ps --format json for service status
 	cmdCtx, cancel = context.WithTimeout(ctx, 2000*time.Millisecond)
-	psRes := cmdrunner.RunWithOptions(cmdCtx, runner, cmdrunner.RunOptions{Dir: root}, "docker", "compose", "ps", "--format", "json")
+	psRes := cmdrunner.RunWithOptions(cmdCtx, runner, cmdrunner.RunOptions{Dir: root}, "docker", "compose", "ps", "-a", "--format", "json")
 	cancel()
 	if psRes.ExitCode == 0 {
 		services := parseComposePS([]byte(psRes.Stdout))

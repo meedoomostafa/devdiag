@@ -1198,8 +1198,7 @@ func (e *M1Engine) composeStatusRules(result schema.CollectorResult, collectors 
 	// Service not running
 	for _, ev := range result.Evidence {
 		if strings.HasSuffix(ev.Source, "_status") {
-			// Source is compose_status_<service>_status
-			serviceName := strings.TrimPrefix(ev.Source, "compose_status_")
+			serviceName := strings.TrimPrefix(ev.Source, "compose_service_")
 			serviceName = strings.TrimSuffix(serviceName, "_status")
 			if serviceName != "" {
 				status := ev.Value
@@ -1225,8 +1224,7 @@ func (e *M1Engine) composeStatusRules(result schema.CollectorResult, collectors 
 	// Unhealthy services
 	for _, ev := range result.Evidence {
 		if strings.HasSuffix(ev.Source, "_health") {
-			// Source is compose_status_<service>_health
-			serviceName := strings.TrimPrefix(ev.Source, "compose_status_")
+			serviceName := strings.TrimPrefix(ev.Source, "compose_service_")
 			serviceName = strings.TrimSuffix(serviceName, "_health")
 			if serviceName != "" {
 				if ev.Value == "unhealthy" {
@@ -1251,8 +1249,7 @@ func (e *M1Engine) composeStatusRules(result schema.CollectorResult, collectors 
 	// Bind mount source missing
 	for _, ev := range result.Evidence {
 		if strings.HasSuffix(ev.Source, "_bind_mount_source") {
-			// Source is compose_status_<service>_bind_mount_source
-			serviceName := strings.TrimPrefix(ev.Source, "compose_status_")
+			serviceName := strings.TrimPrefix(ev.Source, "compose_service_")
 			serviceName = strings.TrimSuffix(serviceName, "_bind_mount_source")
 			if serviceName != "" {
 				if strings.HasSuffix(ev.Value, "=false") {
