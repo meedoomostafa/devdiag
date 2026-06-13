@@ -121,7 +121,7 @@ func (r *Runner) runOne(ctx context.Context, col Collector) schema.CollectorResu
 		select {
 		case outcome := <-done:
 			return finalizeResult(name, timeout, collectCtx.Err(), outcome)
-		case <-time.After(10 * time.Millisecond):
+		case <-time.After(100 * time.Millisecond):
 			return timeoutResult(name, timeout, collectCtx.Err(), nil)
 		}
 	}

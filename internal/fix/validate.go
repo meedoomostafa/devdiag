@@ -2,6 +2,7 @@ package fix
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -23,7 +24,28 @@ func ValidatePath(root, value string) (string, error) {
 		return "", fmt.Errorf("path is empty")
 	}
 
+	if strings.HasPrefix(root, "~") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			if root == "~" {
+				root = home
+			} else if strings.HasPrefix(root, "~/") {
+				root = filepath.Join(home, strings.TrimPrefix(root, "~/"))
+			}
+		}
+	}
+
 	cleanValue := filepath.Clean(value)
+	if strings.HasPrefix(cleanValue, "~") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			if cleanValue == "~" {
+				cleanValue = home
+			} else if strings.HasPrefix(cleanValue, "~/") {
+				cleanValue = filepath.Join(home, strings.TrimPrefix(cleanValue, "~/"))
+			}
+		}
+	}
 
 	// If absolute, allow only a few safe system paths
 	if filepath.IsAbs(cleanValue) {

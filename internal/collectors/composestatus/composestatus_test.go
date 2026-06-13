@@ -99,7 +99,7 @@ func TestCollector_UsesCommandRunnerWithRepoDirectory(t *testing.T) {
 				}
 			}`,
 		},
-		"docker compose ps --format json": {
+		"docker compose ps -a --format json": {
 			Command:  "docker",
 			ExitCode: 0,
 			Stdout:   `[{"Service":"api","State":"running","Health":"healthy"}]`,

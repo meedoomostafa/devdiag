@@ -68,8 +68,9 @@ func (r *RealRunner) RunWithOptions(ctx context.Context, opts RunOptions, name s
 		Args:    append([]string(nil), args...),
 	}
 
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.Command(name, args...)
 	cmd.Dir = opts.Dir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if opts.Stdin != nil {
 		cmd.Stdin = bytes.NewReader(opts.Stdin)
 	} else {
@@ -81,7 +82,44 @@ func (r *RealRunner) RunWithOptions(ctx context.Context, opts RunOptions, name s
 	cmd.Stdout = stdoutBuf
 	cmd.Stderr = stderrBuf
 
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		res.Duration = time.Since(start)
+		res.ExitCode = -1
+		if pathErr, ok := err.(*exec.Error); ok && pathErr.Err == exec.ErrNotFound {
+			res.NotFound = true
+		} else if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+			res.PermissionDenied = true
+		}
+		return res
+	}
+
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+
+	var err error
+	select {
+	case err = <-waitCh:
+	default:
+		select {
+		case <-ctx.Done():
+			res.TimedOut = true
+			if cmd.Process != nil {
+				pgid := -cmd.Process.Pid
+				_ = syscall.Kill(pgid, syscall.SIGTERM)
+				select {
+				case <-waitCh:
+				case <-time.After(30 * time.Millisecond):
+					_ = syscall.Kill(pgid, syscall.SIGKILL)
+					<-waitCh
+				}
+			}
+			err = ctx.Err()
+		case err = <-waitCh:
+		}
+	}
+
 	res.Duration = time.Since(start)
 	res.Stdout = stdoutBuf.String()
 	res.Stderr = stderrBuf.String()
@@ -93,30 +131,22 @@ func (r *RealRunner) RunWithOptions(ctx context.Context, opts RunOptions, name s
 		return res
 	}
 
-	// Classify the error
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled) {
-		res.TimedOut = true
-	}
-
 	if pathErr, ok := err.(*exec.Error); ok && pathErr.Err == exec.ErrNotFound {
 		res.NotFound = true
 		res.ExitCode = -1
 		return res
 	}
 
-	// Check for permission denied via syscall error
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		res.ExitCode = exitErr.ExitCode()
 		if len(exitErr.Stderr) > 0 {
 			res.Stderr = string(exitErr.Stderr)
 		}
-		// Heuristic: permission denied from stderr
 		if isPermissionDenied(res.Stderr) {
 			res.PermissionDenied = true
 		}
 	} else {
 		res.ExitCode = -1
-		// Check if the underlying error is permission denied
 		if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
 			res.PermissionDenied = true
 		}
