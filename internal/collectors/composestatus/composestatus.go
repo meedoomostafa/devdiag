@@ -71,9 +71,16 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	cancel()
 	if configRes.ExitCode != 0 {
 		notes = append(notes, fmt.Sprintf("docker compose config failed: %s", commandFailure(configRes)))
+		status := schema.CollectorPartial
+		if configRes.NotFound || configRes.TimedOut || configRes.PermissionDenied ||
+			strings.Contains(configRes.Stderr, "permission denied") ||
+			strings.Contains(configRes.Stderr, "dial unix") ||
+			strings.Contains(configRes.Stderr, "docker: 'compose' is not a docker command") {
+			status = schema.CollectorUnavailable
+		}
 		return schema.CollectorResult{
 			Name:     c.Name(),
-			Status:   schema.CollectorPartial,
+			Status:   status,
 			Evidence: evidence,
 			Notes:    notes,
 		}, nil

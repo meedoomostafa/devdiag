@@ -100,20 +100,24 @@ func (r *RealRunner) RunWithOptions(ctx context.Context, opts RunOptions, name s
 
 	var err error
 	select {
-	case <-ctx.Done():
-		res.TimedOut = true
-		if cmd.Process != nil {
-			pgid := -cmd.Process.Pid
-			_ = syscall.Kill(pgid, syscall.SIGTERM)
-			select {
-			case <-waitCh:
-			case <-time.After(30 * time.Millisecond):
-				_ = syscall.Kill(pgid, syscall.SIGKILL)
-				<-waitCh
-			}
-		}
-		err = ctx.Err()
 	case err = <-waitCh:
+	default:
+		select {
+		case <-ctx.Done():
+			res.TimedOut = true
+			if cmd.Process != nil {
+				pgid := -cmd.Process.Pid
+				_ = syscall.Kill(pgid, syscall.SIGTERM)
+				select {
+				case <-waitCh:
+				case <-time.After(30 * time.Millisecond):
+					_ = syscall.Kill(pgid, syscall.SIGKILL)
+					<-waitCh
+				}
+			}
+			err = ctx.Err()
+		case err = <-waitCh:
+		}
 	}
 
 	res.Duration = time.Since(start)
