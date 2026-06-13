@@ -77,6 +77,9 @@ func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger, colorM
 		Source:    source,
 		RunID:     runID,
 		ReportAge: reportAge,
+		DebugLog: func(format string, args ...interface{}) {
+			logger.Info("fix_planning", fmt.Sprintf(format, args...))
+		},
 	})
 	if err != nil {
 		if fixFresh && strings.Contains(err.Error(), "not found in report") {
@@ -268,6 +271,12 @@ func resolveReport() (*schema.Report, schema.FixSource, string, time.Duration, e
 	var report schema.Report
 	if err := json.Unmarshal(data, &report); err != nil {
 		return nil, "", "", 0, fmt.Errorf("parse report: %w", err)
+	}
+	if report.Repo.Root != "" && !filepath.IsAbs(report.Repo.Root) {
+		absRoot, err := expandTildeAndAbs(report.Repo.Root)
+		if err == nil {
+			report.Repo.Root = absRoot
+		}
 	}
 
 	reportAge := time.Since(info.ModTime())

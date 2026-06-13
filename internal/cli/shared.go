@@ -68,6 +68,29 @@ func resolveExistingDirectory(path string) (string, error) {
 	return absPath, nil
 }
 
+// expandTildeAndAbs expands a leading ~ to the user's home directory before
+// resolving the path to an absolute form. Go's filepath.Abs does not understand
+// shell tilde expansion and treats ~ as a literal directory name, producing
+// malformed paths like /cwd/~/foo. This must be called instead of filepath.Abs
+// whenever the input may contain a tilde (e.g. paths from redacted reports).
+func expandTildeAndAbs(targetPath string) (string, error) {
+	targetPath = strings.TrimSpace(targetPath)
+	if strings.HasPrefix(targetPath, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("unable to resolve home directory: %w", err)
+		}
+		targetPath = filepath.Join(homeDir, strings.TrimPrefix(targetPath, "~/"))
+	} else if targetPath == "~" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("unable to resolve home directory: %w", err)
+		}
+		targetPath = homeDir
+	}
+	return filepath.Abs(targetPath)
+}
+
 func severityHigher(a, b schema.Severity) bool {
 	return severityRank(a) > severityRank(b)
 }
@@ -243,6 +266,12 @@ func loadReportFile(path string) (*schema.Report, error) {
 	var r schema.Report
 	if err := json.Unmarshal(data, &r); err != nil {
 		return nil, fmt.Errorf("parse report JSON: %w", err)
+	}
+	if r.Repo.Root != "" && !filepath.IsAbs(r.Repo.Root) {
+		absRoot, err := expandTildeAndAbs(r.Repo.Root)
+		if err == nil {
+			r.Repo.Root = absRoot
+		}
 	}
 	return &r, nil
 }

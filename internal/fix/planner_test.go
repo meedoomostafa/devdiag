@@ -1,6 +1,7 @@
 package fix
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -243,3 +244,150 @@ func TestRankProposals(t *testing.T) {
 		}
 	}
 }
+
+func TestPlannerResolveRelativeRoot(t *testing.T) {
+	report := &schema.Report{
+		SchemaVersion: "0.1",
+		RunID:         "test-run",
+		Repo:          schema.RepoInfo{Root: "."},
+		Findings: []schema.Finding{
+			{
+				ID:       "F-FS-001",
+				Title:    "Script missing executable bit: script.sh",
+				FixHints: []string{"chmod-script"},
+				Evidence: []schema.Evidence{
+					{Source: "host_script_not_executable", Value: "script.sh"},
+				},
+			},
+		},
+		Collectors: []schema.CollectorResult{},
+	}
+
+	planner := NewPlanner()
+	proposals, err := planner.Resolve(report, ResolveOptions{
+		FindingID: "F-FS-001",
+		Source:    schema.FixSourceSavedReport,
+		RunID:     "test-run",
+		ReportAge: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if len(proposals) != 1 {
+		t.Fatalf("expected 1 proposal, got %d", len(proposals))
+	}
+	if proposals[0].HintID != "chmod-script" {
+		t.Fatalf("expected chmod-script, got %q", proposals[0].HintID)
+	}
+}
+
+func TestPlannerResolveEmptyRoot(t *testing.T) {
+	report := &schema.Report{
+		SchemaVersion: "0.1",
+		RunID:         "test-run",
+		Repo:          schema.RepoInfo{Root: ""},
+		Findings: []schema.Finding{
+			{
+				ID:       "F-FS-001",
+				Title:    "Script missing executable bit: script.sh",
+				FixHints: []string{"chmod-script"},
+				Evidence: []schema.Evidence{
+					{Source: "host_script_not_executable", Value: "script.sh"},
+				},
+			},
+		},
+		Collectors: []schema.CollectorResult{},
+	}
+
+	planner := NewPlanner()
+	proposals, err := planner.Resolve(report, ResolveOptions{
+		FindingID: "F-FS-001",
+		Source:    schema.FixSourceSavedReport,
+		RunID:     "test-run",
+		ReportAge: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if len(proposals) != 1 {
+		t.Fatalf("expected 1 proposal, got %d", len(proposals))
+	}
+	if proposals[0].HintID != "chmod-script" {
+		t.Fatalf("expected chmod-script, got %q", proposals[0].HintID)
+	}
+}
+
+func TestPlannerResolveWithDebugLog(t *testing.T) {
+	report := &schema.Report{
+		SchemaVersion: "0.1",
+		RunID:         "test-run",
+		Repo:          schema.RepoInfo{Root: "/tmp/repo"},
+		Findings: []schema.Finding{
+			{
+				ID:       "F-FS-001",
+				Title:    "Script missing executable bit: script.sh",
+				FixHints: []string{"invalid-hint-id"},
+			},
+		},
+		Collectors: []schema.CollectorResult{},
+	}
+
+	planner := NewPlanner()
+	var logged string
+	proposals, err := planner.Resolve(report, ResolveOptions{
+		FindingID: "F-FS-001",
+		Source:    schema.FixSourceSavedReport,
+		RunID:     "test-run",
+		ReportAge: time.Minute,
+		DebugLog: func(format string, args ...interface{}) {
+			logged = fmt.Sprintf(format, args...)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if len(proposals) != 0 {
+		t.Fatalf("expected 0 proposals, got %d", len(proposals))
+	}
+	if logged == "" {
+		t.Fatal("expected debug log callback to be invoked for skipped template")
+	}
+}
+
+func TestPlannerResolveTildeRoot(t *testing.T) {
+	report := &schema.Report{
+		SchemaVersion: "0.1",
+		RunID:         "test-run",
+		Repo:          schema.RepoInfo{Root: "~/test-repo-path"},
+		Findings: []schema.Finding{
+			{
+				ID:       "F-FS-001",
+				Title:    "Script missing executable bit: script.sh",
+				FixHints: []string{"chmod-script"},
+				Evidence: []schema.Evidence{
+					{Source: "host_script_not_executable", Value: "script.sh"},
+				},
+			},
+		},
+		Collectors: []schema.CollectorResult{},
+	}
+
+	planner := NewPlanner()
+	proposals, err := planner.Resolve(report, ResolveOptions{
+		FindingID: "F-FS-001",
+		Source:    schema.FixSourceSavedReport,
+		RunID:     "test-run",
+		ReportAge: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if len(proposals) != 1 {
+		t.Fatalf("expected 1 proposal, got %d", len(proposals))
+	}
+	if proposals[0].HintID != "chmod-script" {
+		t.Fatalf("expected chmod-script, got %q", proposals[0].HintID)
+	}
+}
+
+

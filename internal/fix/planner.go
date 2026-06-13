@@ -2,6 +2,7 @@ package fix
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ type ResolveOptions struct {
 	Source    schema.FixSource
 	RunID     string
 	ReportAge time.Duration
+	DebugLog  func(string, ...interface{})
 }
 
 // Resolve returns fix proposals for a finding in a report.
@@ -54,20 +56,32 @@ func (p *Planner) Resolve(report *schema.Report, opts ResolveOptions) ([]schema.
 	for _, hintID := range target.FixHints {
 		tmpl, ok := p.registry.Lookup(hintID)
 		if !ok {
+			if opts.DebugLog != nil {
+				opts.DebugLog("skipping template %s: not found in registry", hintID)
+			}
 			continue
 		}
 		if !tmpl.IsApplicable() {
+			if opts.DebugLog != nil {
+				opts.DebugLog("skipping template %s: not applicable on this platform", hintID)
+			}
 			continue
 		}
 
 		// Validate required evidence
 		values, missing, err := validateEvidence(tmpl, findingEvidence, report.Repo.Root)
 		if err != nil {
+			if opts.DebugLog != nil {
+				opts.DebugLog("skipping template %s: evidence validation error: %v", hintID, err)
+			}
 			continue
 		}
 		if len(missing) > 0 {
 			// Evidence incomplete; skip unless manual
 			if tmpl.Class != schema.FixManual {
+				if opts.DebugLog != nil {
+					opts.DebugLog("skipping template %s: missing required evidence: %v", hintID, missing)
+				}
 				continue
 			}
 		}
@@ -161,6 +175,23 @@ func validateEvidence(tmpl Template, evidence map[string]string, repoRoot string
 	values = make(map[string]string)
 	if repoRoot == "" {
 		repoRoot = "."
+	}
+	if strings.HasPrefix(repoRoot, "~") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			if repoRoot == "~" {
+				repoRoot = home
+			} else if strings.HasPrefix(repoRoot, "~/") {
+				repoRoot = filepath.Join(home, strings.TrimPrefix(repoRoot, "~/"))
+			}
+		}
+	}
+	if !filepath.IsAbs(repoRoot) {
+		abs, err := filepath.Abs(repoRoot)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to make repo root absolute: %w", err)
+		}
+		repoRoot = abs
 	}
 	values["repo_root"] = filepath.Clean(repoRoot)
 	for _, req := range tmpl.RequiredEvidence {
