@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
@@ -174,6 +175,10 @@ type RegoEvaluationResult struct {
 	Pack     Pack             `json:"pack,omitempty"`
 }
 
+// regoEvalTimeout bounds third-party Rego policy evaluation so a
+// pathological rule pack cannot hang a scan indefinitely.
+var regoEvalTimeout = 10 * time.Second
+
 func EvaluateRegoFile(ctx context.Context, packPath string, input any) RegoEvaluationResult {
 	data, err := os.ReadFile(packPath)
 	if err != nil {
@@ -206,7 +211,9 @@ func EvaluateRegoFile(ctx context.Context, packPath string, input any) RegoEvalu
 		}
 		options = append(options, rego.Module(name, string(content)))
 	}
-	rs, err := rego.New(options...).Eval(ctx)
+	evalCtx, cancel := context.WithTimeout(ctx, regoEvalTimeout)
+	defer cancel()
+	rs, err := rego.New(options...).Eval(evalCtx)
 	if err != nil {
 		result.Valid = false
 		result.Errors = append(result.Errors, fmt.Sprintf("evaluate rego: %v", err))
