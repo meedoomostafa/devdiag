@@ -1,6 +1,3 @@
 package schema
 
-const (
-	SchemaVersion  = "0.1"
-	DevDiagVersion = "0.2.7"
-)
+const SchemaVersion = "0.1"
