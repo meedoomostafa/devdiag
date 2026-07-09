@@ -30,6 +30,9 @@ var (
 	// surrounding delimiters. Values that are themselves quoted (KEY="a b" or
 	// KEY='a b') are consumed entirely, including embedded whitespace.
 	envValuePattern = regexp.MustCompile("(?m)(^|[\\s'\"`\\[])([A-Z_][A-Z0-9_]*=)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
+	// bearerTokenPattern matches Bearer credentials in Authorization headers
+	// or header-like log fragments, case-insensitively.
+	bearerTokenPattern = regexp.MustCompile(`(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]+`)
 	// secretKeyValuePattern matches KEY=VALUE assignments whose key name
 	// indicates secret material regardless of case (db_password=, api_key=,
 	// auth_token=, ...). The uppercase-only envValuePattern misses these, and
@@ -64,6 +67,11 @@ func redactURL(input string) string {
 // redactJWT replaces JWTs in default mode.
 func redactJWT(input string) string {
 	return jwtPattern.ReplaceAllString(input, "<jwt>")
+}
+
+// redactBearerTokens replaces Bearer credentials in Authorization headers.
+func redactBearerTokens(input string) string {
+	return bearerTokenPattern.ReplaceAllString(input, "${1}<redacted>")
 }
 
 // redactStrictTokens replaces long hex/base64 strings in strict mode.

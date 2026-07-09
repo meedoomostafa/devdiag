@@ -218,6 +218,44 @@ func TestRedactString_DefaultRedactsQuotedKeyMaterialFromToolErrors(t *testing.T
 	}
 }
 
+func TestRedactString_BearerTokens(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "authorization header",
+			input: "Authorization: Bearer abc123def456ghi789jkl012mno345pqr678",
+			want:  "Authorization: Bearer <redacted>",
+		},
+		{
+			name:  "lowercase bearer",
+			input: "authorization: bearer sk-live-0123456789abcdef",
+			want:  "authorization: bearer <redacted>",
+		},
+		{
+			name:  "bearer inside curl error log",
+			input: `curl -H "Authorization: Bearer tok_secret.value-123" failed`,
+			want:  `curl -H "Authorization: Bearer <redacted>" failed`,
+		},
+		{
+			name:  "bearer JWT still redacts",
+			input: "Bearer eyJhbGciOi.eyJzdWIi.SflKxwRJ",
+			want:  "Bearer <redacted>",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := e.RedactString(tt.input, "collector_note")
+			if got != tt.want {
+				t.Errorf("RedactString() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRedactReport_DoesNotMutateOriginal(t *testing.T) {
 	e := NewEngine(LevelDefault)
 	original := &schema.Report{

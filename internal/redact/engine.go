@@ -25,6 +25,7 @@ func (e *Engine) RedactString(input string, sourceType string) string {
 	result = redactCLISecrets(result)
 	result = redactQuotedKeyMaterial(result)
 	result = redactURL(result)
+	result = redactBearerTokens(result)
 	result = redactJWT(result)
 	result = redactHome(result)
 
