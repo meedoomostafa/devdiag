@@ -155,10 +155,36 @@ func TestRedactString_QuotedEnvValueAssignments(t *testing.T) {
 
 func TestRedactString_DoesNotRedactLowercaseDiagnostics(t *testing.T) {
 	e := NewEngine(LevelDefault)
-	input := "exit_code=1"
-	got := e.RedactString(input, "log")
-	if got != input {
-		t.Errorf("RedactString() = %q, want %q", got, input)
+	for _, input := range []string{"exit_code=1", "status=ok", "duration_ms=42", "collector=env"} {
+		got := e.RedactString(input, "log")
+		if got != input {
+			t.Errorf("RedactString(%q) = %q, want unchanged", input, got)
+		}
+	}
+}
+
+func TestRedactString_LowercaseSecretBearingKeys(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"lowercase password key", "db_password=lowercase123", "db_password=<redacted>"},
+		{"lowercase secret key", "client_secret=shh123", "client_secret=<redacted>"},
+		{"lowercase token key", "auth_token=abc.def", "auth_token=<redacted>"},
+		{"lowercase api_key", "api_key=xyz789", "api_key=<redacted>"},
+		{"mixed case key", "Db_Password=hunter2", "Db_Password=<redacted>"},
+		{"quoted lowercase value", `db_password="my secret"`, "db_password=<redacted>"},
+		{"inside log line", "connect failed: passwd=root123 refused", "connect failed: passwd=<redacted> refused"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := e.RedactString(tt.input, "log")
+			if got != tt.want {
+				t.Errorf("RedactString() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
