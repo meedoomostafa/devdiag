@@ -38,7 +38,11 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	binaryPath = tmpDir + "/devdiag"
-	build := exec.Command("go", "build", "-o", binaryPath, "./cmd/devdiag")
+	// Inject a release-like version so update-plan comparisons behave as in
+	// tagged builds (the uninjected default is "dev").
+	build := exec.Command("go", "build",
+		"-ldflags", "-X github.com/meedoomostafa/devdiag/internal/version.Version=0.2.7",
+		"-o", binaryPath, "./cmd/devdiag")
 	build.Dir = "../../"
 	if out, err := build.CombinedOutput(); err != nil {
 		panic(string(out))
@@ -497,7 +501,7 @@ func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 	for _, want := range []string{
 		"workflow_dispatch:",
 		"go-version: ['1.25', '1.26']",
-		"go build -o \"$RUNNER_TEMP/bin/devdiag\" ./cmd/devdiag",
+		"go build -ldflags \"-X github.com/meedoomostafa/devdiag/internal/version.Version=${APP_VERSION}\" -o \"$RUNNER_TEMP/bin/devdiag\" ./cmd/devdiag",
 		"uses: ./",
 		"format: github",
 		"fail-on-findings: 'false'",

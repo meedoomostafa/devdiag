@@ -105,7 +105,11 @@ runs:
           if [ -f "${{ github.action_path }}/go.mod" ]; then
             echo "Building devdiag from action source in ${{ github.action_path }}..."
             mkdir -p "$RUNNER_TEMP/devdiag-bin"
-            (cd "${{ github.action_path }}" && go build -v -o "$RUNNER_TEMP/devdiag-bin/devdiag" ./cmd/devdiag)
+            (
+              cd "${{ github.action_path }}"
+              APP_VERSION="$(git describe --tags --always 2>/dev/null || echo dev)"
+              go build -v -ldflags "-X github.com/meedoomostafa/devdiag/internal/version.Version=${APP_VERSION}" -o "$RUNNER_TEMP/devdiag-bin/devdiag" ./cmd/devdiag
+            )
             echo "$RUNNER_TEMP/devdiag-bin" >> "$GITHUB_PATH"
           else
             echo "Error: devdiag not preinstalled and action source is not available."
