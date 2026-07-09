@@ -1,6 +1,7 @@
 package pathfilter
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -27,8 +28,6 @@ var segmentClasses = map[string]PathClass{
 	"vendor":        PathDependency,
 	".venv":         PathDependency,
 	"venv":          PathDependency,
-	"env":           PathDependency,
-	"ENV":           PathDependency,
 	"site-packages": PathDependency,
 	"__pycache__":   PathCache,
 	".pytest_cache": PathCache,
@@ -61,6 +60,14 @@ func ShouldSkipDir(name string) bool {
 	return ok
 }
 
+// venvMarkerDirs are directory names that are only dependency roots when they
+// actually contain a Python virtualenv. Plain env/ config directories are
+// common project content and must not be skipped on name alone.
+var venvMarkerDirs = map[string]bool{
+	"env": true,
+	"ENV": true,
+}
+
 // ClassifyPath returns the strongest path class implied by any path segment.
 func ClassifyPath(root, path string) PathClass {
 	rel := relativePath(root, path)
@@ -68,19 +75,37 @@ func ClassifyPath(root, path string) PathClass {
 		return PathProject
 	}
 	class := PathProject
+	prefix := root
 	for _, segment := range strings.Split(filepath.ToSlash(rel), "/") {
 		if segment == "" || segment == "." {
 			continue
 		}
+		prefix = filepath.Join(prefix, segment)
 		segmentClass, ok := segmentClasses[segment]
 		if !ok {
-			continue
+			if venvMarkerDirs[segment] && isVirtualEnvDir(prefix) {
+				segmentClass = PathDependency
+			} else {
+				continue
+			}
 		}
 		if classPriority(segmentClass) > classPriority(class) {
 			class = segmentClass
 		}
 	}
 	return class
+}
+
+// isVirtualEnvDir reports whether dir looks like a Python virtualenv root,
+// identified by a pyvenv.cfg file or a bin/activate script.
+func isVirtualEnvDir(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, "pyvenv.cfg")); err == nil {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(dir, "bin", "activate")); err == nil {
+		return true
+	}
+	return false
 }
 
 func classPriority(class PathClass) int {
