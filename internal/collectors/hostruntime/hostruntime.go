@@ -8,17 +8,24 @@ import (
 	"strings"
 	"time"
 
+	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
 // Collector checks installed runtime versions on the host.
-type Collector struct{}
+type Collector struct {
+	Runner cmdrunner.CommandRunner
+}
 
 func (c *Collector) Name() string {
 	return "host_runtime"
 }
 
 func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error) {
+	runner := c.Runner
+	if runner == nil {
+		runner = cmdrunner.NewRealRunner()
+	}
 	evidence := []schema.Evidence{}
 
 	runtimes := []struct {
@@ -71,9 +78,9 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 		// Run version command with timeout (plan budget: 300–1000ms)
 		cmdCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
-		out, err := exec.CommandContext(cmdCtx, rt.binary, rt.args...).Output()
+		res := runner.Run(cmdCtx, rt.binary, rt.args...)
 		cancel()
-		if err != nil {
+		if res.ExitCode != 0 {
 			evidence = append(evidence, schema.Evidence{
 				Source: fmt.Sprintf("host_%s_version", rt.name),
 				Value:  "",
@@ -81,7 +88,7 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 			continue
 		}
 
-		version := rt.extract(strings.TrimSpace(string(out)))
+		version := rt.extract(strings.TrimSpace(res.Stdout))
 		evidence = append(evidence, schema.Evidence{
 			Source: fmt.Sprintf("host_%s_version", rt.name),
 			Value:  version,

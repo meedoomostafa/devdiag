@@ -2,18 +2,21 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
-// Collector uses native git via exec.CommandContext to read repo state.
+// Collector uses native git via cmdrunner to read repo state.
 type Collector struct {
-	Root string
+	Root   string
+	Runner cmdrunner.CommandRunner
 }
 
 func (c *Collector) Name() string {
@@ -24,6 +27,10 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	root := c.Root
 	if root == "" {
 		root = "."
+	}
+	runner := c.Runner
+	if runner == nil {
+		runner = cmdrunner.NewRealRunner()
 	}
 
 	evidence := []schema.Evidence{}
@@ -40,7 +47,7 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	}
 
 	// Check if this is a git repo
-	topLevel, err := gitExec(ctx, root, "rev-parse", "--show-toplevel")
+	topLevel, err := gitExec(ctx, runner, root, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return schema.CollectorResult{
 			Name:    c.Name(),
@@ -53,7 +60,7 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	evidence = append(evidence, schema.Evidence{Source: "git_toplevel", Value: topLevel})
 
 	// Check if .env is tracked
-	trackedOut, trackedErr := gitExec(ctx, root, "ls-files", "--", ".env", ".env.*")
+	trackedOut, trackedErr := gitExec(ctx, runner, root, "ls-files", "--", ".env", ".env.*")
 	trackedFiles := []string{}
 	if trackedErr == nil {
 		for _, line := range strings.Split(strings.TrimSpace(trackedOut), "\n") {
@@ -87,14 +94,14 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// Check if .env is ignored (using git check-ignore)
 	ignored := false
-	if _, err := gitExec(ctx, root, "check-ignore", "-q", ".env"); err == nil {
+	if _, err := gitExec(ctx, runner, root, "check-ignore", "-q", ".env"); err == nil {
 		// exit 0 means ignored
 		ignored = true
 	}
 	evidence = append(evidence, schema.Evidence{Source: "git_env_ignored", Value: boolStr(ignored)})
 
 	// Dirty state as informational evidence only
-	statusOut, statusErr := gitExec(ctx, root, "status", "--porcelain=v1")
+	statusOut, statusErr := gitExec(ctx, runner, root, "status", "--porcelain=v1")
 	if statusErr == nil {
 		lines := strings.Split(strings.TrimSpace(statusOut), "\n")
 		if len(lines) > 0 && lines[0] != "" {
@@ -112,16 +119,17 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	}, nil
 }
 
-// gitExec runs a git command with timeout via exec.CommandContext.
-// Uses direct argv, no shell, and short timeout.
-func gitExec(ctx context.Context, dir string, args ...string) (string, error) {
+// gitExec runs a git command through cmdrunner (process-group isolation,
+// capped output). Uses direct argv, no shell, and a short timeout.
+func gitExec(ctx context.Context, runner cmdrunner.CommandRunner, dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	return string(out), err
+	res := cmdrunner.RunWithOptions(ctx, runner, cmdrunner.RunOptions{Dir: dir}, "git", args...)
+	if res.ExitCode != 0 {
+		return res.Stdout, fmt.Errorf("git %s: exit code %d", strings.Join(args, " "), res.ExitCode)
+	}
+	return res.Stdout, nil
 }
 
 func boolStr(b bool) string {

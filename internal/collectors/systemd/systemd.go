@@ -6,12 +6,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
 // Collector detects systemd availability and checks relevant services.
 type Collector struct {
 	RepoExpectsDocker bool // set by caller based on repo signals
+	Runner            cmdrunner.CommandRunner
 }
 
 func (c *Collector) Name() string {
@@ -19,6 +21,10 @@ func (c *Collector) Name() string {
 }
 
 func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error) {
+	runner := c.Runner
+	if runner == nil {
+		runner = cmdrunner.NewRealRunner()
+	}
 	evidence := []schema.Evidence{}
 
 	// Check if systemctl exists
@@ -33,10 +39,10 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 
 	// Lightweight systemd availability check
 	cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	out, err := exec.CommandContext(cmdCtx, "systemctl", "is-system-running").Output()
+	res := runner.Run(cmdCtx, "systemctl", "is-system-running")
 	cancel()
-	systemdState := strings.TrimSpace(string(out))
-	if err != nil {
+	systemdState := strings.TrimSpace(res.Stdout)
+	if res.ExitCode != 0 {
 		// Distinguish degraded (still running) from offline/missing
 		if systemdState == "degraded" {
 			evidence = append(evidence, schema.Evidence{Source: "host_systemd", Value: "degraded"})
@@ -58,9 +64,9 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	if c.RepoExpectsDocker {
 		dockerActive := false
 		cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		out, err := exec.CommandContext(cmdCtx, "systemctl", "is-active", "docker").Output()
+		activeRes := runner.Run(cmdCtx, "systemctl", "is-active", "docker")
 		cancel()
-		if err == nil && strings.TrimSpace(string(out)) == "active" {
+		if activeRes.ExitCode == 0 && strings.TrimSpace(activeRes.Stdout) == "active" {
 			dockerActive = true
 			evidence = append(evidence, schema.Evidence{
 				Source: "host_docker_service",
