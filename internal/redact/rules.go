@@ -38,8 +38,9 @@ var (
 	secretKeyValuePattern = regexp.MustCompile("(?im)(^|[\\s'\"`\\[])([A-Z0-9_]*(?:password|passwd|secret|token|api_?key|credential|auth)[A-Z0-9_]*=)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
 	// cliSecretPattern matches common CLI flag patterns that carry secrets.
 	// Covers: --password=secret, --password secret, --token=abc, --api-key=xyz, etc.
+	// Quoted values ("multi word" / 'multi word') are consumed entirely.
 	// Case-insensitive via (?i:...).
-	cliSecretPattern = regexp.MustCompile(`(?i)(--(?:password|token|api[-_]key|client[-_]secret|secret|auth[-_]token)(?:=|\s+))([^\s]+)`)
+	cliSecretPattern = regexp.MustCompile(`(?i)(--(?:password|token|api[-_]key|client[-_]secret|secret|auth[-_]token)(?:=|\s+))("[^"]*"|'[^']*'|[^\s]+)`)
 )
 
 // homeDir caches the user's home directory.

@@ -309,6 +309,9 @@ func TestRedactString_CLISecrets(t *testing.T) {
 		{"--auth-token=secret", "cmd --auth-token=BearerXYZ", "cmd --auth-token=<redacted>"},
 		{"multiple secrets", "cmd --password=p --token=t", "cmd --password=<redacted> --token=<redacted>"},
 		{"no false positive on --port", "cmd --port=8080", "cmd --port=8080"},
+		{"double quoted value with spaces", `cmd --password "quoted secret"`, "cmd --password <redacted>"},
+		{"single quoted value with spaces", "cmd --token 'multi word token'", "cmd --token <redacted>"},
+		{"double quoted value after equals", `cmd --api-key="spaced key value"`, "cmd --api-key=<redacted>"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
