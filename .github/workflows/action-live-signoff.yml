@@ -24,7 +24,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
-          go build -o "$RUNNER_TEMP/bin/devdiag" ./cmd/devdiag
+          APP_VERSION="$(git describe --tags --always 2>/dev/null || echo dev)"
+          go build -ldflags "-X github.com/meedoomostafa/devdiag/internal/version.Version=${APP_VERSION}" -o "$RUNNER_TEMP/bin/devdiag" ./cmd/devdiag
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Create signoff fixture
         shell: bash
