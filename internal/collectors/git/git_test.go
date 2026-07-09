@@ -7,8 +7,49 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
+
+func TestCollector_UsesInjectedRunner(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	fake := cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+		"git rev-parse --show-toplevel": {Stdout: "/repo\n", ExitCode: 0},
+		"git ls-files -- .env .env.*":   {Stdout: ".env\n", ExitCode: 0},
+		"git check-ignore -q .env":      {ExitCode: 1},
+		"git status --porcelain=v1":     {Stdout: "", ExitCode: 0},
+	})
+	c := &Collector{Root: "/tmp", Runner: fake}
+	res, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+	if res.Status != schema.CollectorOK {
+		t.Fatalf("status = %q, want ok", res.Status)
+	}
+	var tracked, ignored string
+	for _, ev := range res.Evidence {
+		switch ev.Source {
+		case "git_tracked_env":
+			tracked = ev.Value
+		case "git_env_ignored":
+			ignored = ev.Value
+		}
+	}
+	if tracked != ".env" {
+		t.Errorf("git_tracked_env = %q, want .env", tracked)
+	}
+	if ignored != "false" {
+		t.Errorf("git_env_ignored = %q, want false", ignored)
+	}
+	for _, call := range fake.Calls {
+		if call.Dir != "/tmp" {
+			t.Errorf("call %v ran in dir %q, want /tmp", call.Args, call.Dir)
+		}
+	}
+}
 
 func TestCollector_NonGitRepo(t *testing.T) {
 	dir := t.TempDir()
