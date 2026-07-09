@@ -38,7 +38,7 @@ var (
 	// auth_token=, ...). The uppercase-only envValuePattern misses these, and
 	// lowercase diagnostics (exit_code=1) must stay untouched, so this pattern
 	// is scoped to secret-bearing key names only.
-	secretKeyValuePattern = regexp.MustCompile("(?im)(^|[\\s'\"`\\[])([A-Z0-9_]*(?:password|passwd|secret|token|api_?key|credential|auth)[A-Z0-9_]*=)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
+	secretKeyValuePattern = regexp.MustCompile("(?im)(^|[\\s'\"`\\[])([A-Z0-9_]*(?:password|passwd|secret|token|api_?key|credential|auth_)[A-Z0-9_]*=)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
 	// cliSecretPattern matches common CLI flag patterns that carry secrets.
 	// Covers: --password=secret, --password secret, --token=abc, --api-key=xyz, etc.
 	// Quoted values ("multi word" / 'multi word') are consumed entirely.

@@ -177,12 +177,33 @@ func TestRedactString_LowercaseSecretBearingKeys(t *testing.T) {
 		{"mixed case key", "Db_Password=hunter2", "Db_Password=<redacted>"},
 		{"quoted lowercase value", `db_password="my secret"`, "db_password=<redacted>"},
 		{"inside log line", "connect failed: passwd=root123 refused", "connect failed: passwd=<redacted> refused"},
+		{"auth_code key", "auth_code=xyz42", "auth_code=<redacted>"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := e.RedactString(tt.input, "log")
 			if got != tt.want {
 				t.Errorf("RedactString() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRedactString_DoesNotRedactAuthLikeWords(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"author key", "author=Jane"},
+		{"authority key", "authority=government"},
+		{"authentication key", "authentication=enabled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := e.RedactString(tt.input, "log")
+			if got != tt.input {
+				t.Errorf("RedactString(%q) = %q, want unchanged", tt.input, got)
 			}
 		})
 	}
