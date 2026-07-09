@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -138,10 +139,9 @@ func (r *RealRunner) RunWithOptions(ctx context.Context, opts RunOptions, name s
 	}
 
 	if exitErr, ok := err.(*exec.ExitError); ok {
+		// exitErr.Stderr is always nil here: it is only populated by
+		// cmd.Output(), and this runner wires cmd.Stderr to a CappedBuffer.
 		res.ExitCode = exitErr.ExitCode()
-		if len(exitErr.Stderr) > 0 {
-			res.Stderr = string(exitErr.Stderr)
-		}
 		if isPermissionDenied(res.Stderr) {
 			res.PermissionDenied = true
 		}
@@ -170,33 +170,10 @@ func RunWithOptions(ctx context.Context, r CommandRunner, opts RunOptions, name 
 
 func isPermissionDenied(stderr string) bool {
 	// Simple heuristic; callers may augment with more specific checks.
-	return len(stderr) > 0 && (containsIgnoreCase(stderr, "permission denied") ||
-		containsIgnoreCase(stderr, "access denied"))
-}
-
-func containsIgnoreCase(s, substr string) bool {
-	if len(substr) > len(s) {
+	if stderr == "" {
 		return false
 	}
-	// quick lowercase match
-	for i := 0; i <= len(s)-len(substr); i++ {
-		match := true
-		for j := 0; j < len(substr); j++ {
-			if lower(s[i+j]) != lower(substr[j]) {
-				match = false
-				break
-			}
-		}
-		if match {
-			return true
-		}
-	}
-	return false
-}
-
-func lower(b byte) byte {
-	if b >= 'A' && b <= 'Z' {
-		return b + ('a' - 'A')
-	}
-	return b
+	lowered := strings.ToLower(stderr)
+	return strings.Contains(lowered, "permission denied") ||
+		strings.Contains(lowered, "access denied")
 }
