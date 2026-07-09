@@ -172,6 +172,14 @@ func (r *Registry) registerDefaults() {
 	})
 
 	r.register(Template{
+		HintID:    "check-nvidia-driver",
+		Title:     "Check NVIDIA driver and GPU visibility",
+		Class:     schema.FixManual,
+		Args:      []string{"# Verify driver state: nvidia-smi; check kernel module: lsmod | grep nvidia; review dmesg for NVRM errors"},
+		Platforms: []string{"linux"},
+	})
+
+	r.register(Template{
 		HintID:    "install-cuda-toolkit",
 		Title:     "Install CUDA toolkit",
 		Class:     schema.FixManual,

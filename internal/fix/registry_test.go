@@ -27,6 +27,7 @@ func TestRegistryLookup(t *testing.T) {
 		{"verify-service-listening", true},
 		{"verify-unix-socket", true},
 		{"compose-up", true},
+		{"check-nvidia-driver", true},
 		{"unknown", false},
 	}
 	for _, tt := range tests {
