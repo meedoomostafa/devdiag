@@ -115,12 +115,97 @@ func TestRedactString_QuotedEnvValues(t *testing.T) {
 	}
 }
 
+func TestRedactString_QuotedEnvValueAssignments(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "double quoted value with spaces",
+			input: `DB_PASSWORD="my secret pass"`,
+			want:  "DB_PASSWORD=<redacted>",
+		},
+		{
+			name:  "single quoted value with spaces",
+			input: "DB_PASSWORD='hunter2 extra'",
+			want:  "DB_PASSWORD=<redacted>",
+		},
+		{
+			name:  "export with double quoted value",
+			input: `export TOKEN="abc def"`,
+			want:  "export TOKEN=<redacted>",
+		},
+		{
+			name:  "quoted value inside log line",
+			input: `compose error: SECRET_KEY="s3cr3t value" is invalid`,
+			want:  "compose error: SECRET_KEY=<redacted> is invalid",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := e.RedactString(tt.input, "collector_note")
+			if got != tt.want {
+				t.Errorf("RedactString() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRedactString_DoesNotRedactLowercaseDiagnostics(t *testing.T) {
 	e := NewEngine(LevelDefault)
-	input := "exit_code=1"
-	got := e.RedactString(input, "log")
-	if got != input {
-		t.Errorf("RedactString() = %q, want %q", got, input)
+	for _, input := range []string{"exit_code=1", "status=ok", "duration_ms=42", "collector=env"} {
+		got := e.RedactString(input, "log")
+		if got != input {
+			t.Errorf("RedactString(%q) = %q, want unchanged", input, got)
+		}
+	}
+}
+
+func TestRedactString_LowercaseSecretBearingKeys(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"lowercase password key", "db_password=lowercase123", "db_password=<redacted>"},
+		{"lowercase secret key", "client_secret=shh123", "client_secret=<redacted>"},
+		{"lowercase token key", "auth_token=abc.def", "auth_token=<redacted>"},
+		{"lowercase api_key", "api_key=xyz789", "api_key=<redacted>"},
+		{"mixed case key", "Db_Password=hunter2", "Db_Password=<redacted>"},
+		{"quoted lowercase value", `db_password="my secret"`, "db_password=<redacted>"},
+		{"inside log line", "connect failed: passwd=root123 refused", "connect failed: passwd=<redacted> refused"},
+		{"auth_code key", "auth_code=xyz42", "auth_code=<redacted>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := e.RedactString(tt.input, "log")
+			if got != tt.want {
+				t.Errorf("RedactString() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRedactString_DoesNotRedactAuthLikeWords(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"author key", "author=Jane"},
+		{"authority key", "authority=government"},
+		{"authentication key", "authentication=enabled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := e.RedactString(tt.input, "log")
+			if got != tt.input {
+				t.Errorf("RedactString(%q) = %q, want unchanged", tt.input, got)
+			}
+		})
 	}
 }
 
@@ -151,6 +236,44 @@ func TestRedactString_DefaultRedactsQuotedKeyMaterialFromToolErrors(t *testing.T
 	}
 	if got != `docker compose config failed: failed to read .env: line 65: unexpected character "/" in variable name "<token>"` {
 		t.Fatalf("RedactString() = %q", got)
+	}
+}
+
+func TestRedactString_BearerTokens(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "authorization header",
+			input: "Authorization: Bearer abc123def456ghi789jkl012mno345pqr678",
+			want:  "Authorization: Bearer <redacted>",
+		},
+		{
+			name:  "lowercase bearer",
+			input: "authorization: bearer sk-live-0123456789abcdef",
+			want:  "authorization: bearer <redacted>",
+		},
+		{
+			name:  "bearer inside curl error log",
+			input: `curl -H "Authorization: Bearer tok_secret.value-123" failed`,
+			want:  `curl -H "Authorization: Bearer <redacted>" failed`,
+		},
+		{
+			name:  "bearer JWT still redacts",
+			input: "Bearer eyJhbGciOi.eyJzdWIi.SflKxwRJ",
+			want:  "Bearer <redacted>",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := e.RedactString(tt.input, "collector_note")
+			if got != tt.want {
+				t.Errorf("RedactString() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -245,6 +368,9 @@ func TestRedactString_CLISecrets(t *testing.T) {
 		{"--auth-token=secret", "cmd --auth-token=BearerXYZ", "cmd --auth-token=<redacted>"},
 		{"multiple secrets", "cmd --password=p --token=t", "cmd --password=<redacted> --token=<redacted>"},
 		{"no false positive on --port", "cmd --port=8080", "cmd --port=8080"},
+		{"double quoted value with spaces", `cmd --password "quoted secret"`, "cmd --password <redacted>"},
+		{"single quoted value with spaces", "cmd --token 'multi word token'", "cmd --token <redacted>"},
+		{"double quoted value after equals", `cmd --api-key="spaced key value"`, "cmd --api-key=<redacted>"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

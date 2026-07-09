@@ -27,12 +27,23 @@ var (
 	quotedKeyMaterialPattern = regexp.MustCompile(`"([A-Za-z0-9+/]{32,}=*)"`)
 	// envValuePattern matches KEY=VALUE assignments in logs, shell args, JSON-
 	// quoted command arrays, and Go slice-formatted args while preserving
-	// surrounding delimiters.
-	envValuePattern = regexp.MustCompile("(?m)(^|[\\s'\"`\\[])([A-Z_][A-Z0-9_]*=)([^\\s'\"`\\]]*)")
+	// surrounding delimiters. Values that are themselves quoted (KEY="a b" or
+	// KEY='a b') are consumed entirely, including embedded whitespace.
+	envValuePattern = regexp.MustCompile("(?m)(^|[\\s'\"`\\[])([A-Z_][A-Z0-9_]*=)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
+	// bearerTokenPattern matches Bearer credentials in Authorization headers
+	// or header-like log fragments, case-insensitively.
+	bearerTokenPattern = regexp.MustCompile(`(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]+`)
+	// secretKeyValuePattern matches KEY=VALUE assignments whose key name
+	// indicates secret material regardless of case (db_password=, api_key=,
+	// auth_token=, ...). The uppercase-only envValuePattern misses these, and
+	// lowercase diagnostics (exit_code=1) must stay untouched, so this pattern
+	// is scoped to secret-bearing key names only.
+	secretKeyValuePattern = regexp.MustCompile("(?im)(^|[\\s'\"`\\[])([A-Z0-9_]*(?:password|passwd|secret|token|api_?key|credential|auth_)[A-Z0-9_]*=)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
 	// cliSecretPattern matches common CLI flag patterns that carry secrets.
 	// Covers: --password=secret, --password secret, --token=abc, --api-key=xyz, etc.
+	// Quoted values ("multi word" / 'multi word') are consumed entirely.
 	// Case-insensitive via (?i:...).
-	cliSecretPattern = regexp.MustCompile(`(?i)(--(?:password|token|api[-_]key|client[-_]secret|secret|auth[-_]token)(?:=|\s+))([^\s]+)`)
+	cliSecretPattern = regexp.MustCompile(`(?i)(--(?:password|token|api[-_]key|client[-_]secret|secret|auth[-_]token)(?:=|\s+))("[^"]*"|'[^']*'|[^\s]+)`)
 )
 
 // homeDir caches the user's home directory.
@@ -58,6 +69,11 @@ func redactJWT(input string) string {
 	return jwtPattern.ReplaceAllString(input, "<jwt>")
 }
 
+// redactBearerTokens replaces Bearer credentials in Authorization headers.
+func redactBearerTokens(input string) string {
+	return bearerTokenPattern.ReplaceAllString(input, "${1}<redacted>")
+}
+
 // redactStrictTokens replaces long hex/base64 strings in strict mode.
 func redactStrictTokens(input string) string {
 	return strictTokenPattern.ReplaceAllString(input, "<token>")
@@ -79,7 +95,8 @@ func redactHome(input string) string {
 
 // redactEnvValues replaces values in KEY=VALUE patterns.
 func redactEnvValues(input string) string {
-	return envValuePattern.ReplaceAllString(input, "${1}${2}<redacted>")
+	result := envValuePattern.ReplaceAllString(input, "${1}${2}<redacted>")
+	return secretKeyValuePattern.ReplaceAllString(result, "${1}${2}<redacted>")
 }
 
 // redactCLISecrets replaces values after common secret-bearing CLI flags.
