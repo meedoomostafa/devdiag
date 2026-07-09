@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/meedoomostafa/devdiag/internal/graph"
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -208,6 +209,47 @@ findings := [http.send({"method": "get", "url": "https://example.com"})]
 	}
 	if !hasError(result.Errors, "unsupported token") {
 		t.Fatalf("errors = %+v, want unsupported token", result.Errors)
+	}
+}
+
+func TestEvaluateRegoFileTimesOutOnPathologicalPolicy(t *testing.T) {
+	dir := t.TempDir()
+	packPath := filepath.Join(dir, "pack.yaml")
+	if err := os.WriteFile(packPath, []byte(`id: team-rego
+version: "0.1"
+engine: rego
+entrypoint: data.devdiag.findings
+policy_files: [policy.rego]
+rules:
+  - id: F-TEAM-001
+    severity: high
+`), 0o644); err != nil {
+		t.Fatalf("write pack: %v", err)
+	}
+	// Cross-product comprehension over large ranges: effectively unbounded work.
+	if err := os.WriteFile(filepath.Join(dir, "policy.rego"), []byte(`package devdiag
+findings := [x |
+  some a in numbers.range(1, 100000)
+  some b in numbers.range(1, 100000)
+  x := {"id": sprintf("F-%d-%d", [a, b]), "title": "t", "severity": "high"}
+]
+`), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+
+	prev := regoEvalTimeout
+	regoEvalTimeout = 100 * time.Millisecond
+	defer func() { regoEvalTimeout = prev }()
+
+	start := time.Now()
+	result := EvaluateRegoFile(context.Background(), packPath, graph.NormalizedSnapshot{})
+	elapsed := time.Since(start)
+
+	if result.Valid {
+		t.Fatalf("EvaluateRegoFile valid, want invalid due to timeout")
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("evaluation ran %v, expected timeout near 100ms", elapsed)
 	}
 }
 
