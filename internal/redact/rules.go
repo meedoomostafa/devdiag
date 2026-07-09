@@ -27,8 +27,9 @@ var (
 	quotedKeyMaterialPattern = regexp.MustCompile(`"([A-Za-z0-9+/]{32,}=*)"`)
 	// envValuePattern matches KEY=VALUE assignments in logs, shell args, JSON-
 	// quoted command arrays, and Go slice-formatted args while preserving
-	// surrounding delimiters.
-	envValuePattern = regexp.MustCompile("(?m)(^|[\\s'\"`\\[])([A-Z_][A-Z0-9_]*=)([^\\s'\"`\\]]*)")
+	// surrounding delimiters. Values that are themselves quoted (KEY="a b" or
+	// KEY='a b') are consumed entirely, including embedded whitespace.
+	envValuePattern = regexp.MustCompile("(?m)(^|[\\s'\"`\\[])([A-Z_][A-Z0-9_]*=)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
 	// cliSecretPattern matches common CLI flag patterns that carry secrets.
 	// Covers: --password=secret, --password secret, --token=abc, --api-key=xyz, etc.
 	// Case-insensitive via (?i:...).

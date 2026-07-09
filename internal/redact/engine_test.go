@@ -115,6 +115,44 @@ func TestRedactString_QuotedEnvValues(t *testing.T) {
 	}
 }
 
+func TestRedactString_QuotedEnvValueAssignments(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "double quoted value with spaces",
+			input: `DB_PASSWORD="my secret pass"`,
+			want:  "DB_PASSWORD=<redacted>",
+		},
+		{
+			name:  "single quoted value with spaces",
+			input: "DB_PASSWORD='hunter2 extra'",
+			want:  "DB_PASSWORD=<redacted>",
+		},
+		{
+			name:  "export with double quoted value",
+			input: `export TOKEN="abc def"`,
+			want:  "export TOKEN=<redacted>",
+		},
+		{
+			name:  "quoted value inside log line",
+			input: `compose error: SECRET_KEY="s3cr3t value" is invalid`,
+			want:  "compose error: SECRET_KEY=<redacted> is invalid",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := e.RedactString(tt.input, "collector_note")
+			if got != tt.want {
+				t.Errorf("RedactString() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRedactString_DoesNotRedactLowercaseDiagnostics(t *testing.T) {
 	e := NewEngine(LevelDefault)
 	input := "exit_code=1"
