@@ -284,10 +284,59 @@ func TestExecutorSafeFailure(t *testing.T) {
 	}
 }
 
-func TestConfirmTTY(t *testing.T) {
-	// We can't easily test interactive confirmation without a PTY,
-	// but we can test that the function signature exists.
-	_ = confirmTTY
+func TestExecutorGuardedConfirmViaInjectedIO(t *testing.T) {
+	fake := cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+		"systemctl daemon-reload": {ExitCode: 0},
+	})
+	tests := []struct {
+		name    string
+		input   string
+		wantRun bool
+	}{
+		{"accepts y", "y\n", true},
+		{"accepts yes", "yes\n", true},
+		{"declines n", "n\n", false},
+		{"declines empty", "\n", false},
+		{"declines eof", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake.Calls = nil
+			executor := NewExecutor(nil)
+			executor.Runner = fake
+
+			var prompt strings.Builder
+			proposal := schema.FixProposal{
+				FindingID:      "F-SVC-001",
+				HintID:         "systemctl-daemon-reload",
+				Class:          schema.FixGuarded,
+				Source:         schema.FixSourceFreshScan,
+				Bin:            "systemctl",
+				Args:           []string{"daemon-reload"},
+				ConfirmMessage: "risky",
+			}
+			_, err := executor.Execute(context.Background(), proposal, ExecutorOptions{
+				Apply:       true,
+				Fresh:       true,
+				Interactive: true,
+				ConfirmIn:   strings.NewReader(tt.input),
+				ConfirmOut:  &prompt,
+			})
+			ran := len(fake.Calls) > 0
+			if ran != tt.wantRun {
+				t.Errorf("command ran = %v, want %v (err=%v)", ran, tt.wantRun, err)
+			}
+			if tt.wantRun && err != nil {
+				t.Errorf("unexpected error on confirm: %v", err)
+			}
+			if !tt.wantRun && err == nil {
+				t.Error("expected decline error")
+			}
+			if !strings.Contains(prompt.String(), "Apply? [y/N]") {
+				t.Errorf("prompt missing confirmation question: %q", prompt.String())
+			}
+		})
+	}
 }
 
 func TestAuditLog_RedactsRefuseReason(t *testing.T) {
