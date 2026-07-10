@@ -381,3 +381,34 @@ func TestRedactString_CLISecrets(t *testing.T) {
 		})
 	}
 }
+
+func TestRuleNames(t *testing.T) {
+	def := RuleNames(LevelDefault)
+	wantDefault := []string{
+		"env_values",
+		"secret_key_values",
+		"cli_secret_flags",
+		"quoted_key_material",
+		"url_credentials",
+		"bearer_tokens",
+		"jwt_tokens",
+		"home_directory",
+	}
+	if len(def) != len(wantDefault) {
+		t.Fatalf("RuleNames(default) = %v, want %v", def, wantDefault)
+	}
+	for i, w := range wantDefault {
+		if def[i] != w {
+			t.Errorf("RuleNames(default)[%d] = %q, want %q", i, def[i], w)
+		}
+	}
+
+	strict := RuleNames(LevelStrict)
+	if len(strict) != len(wantDefault)+1 || strict[len(strict)-1] != "strict_long_tokens" {
+		t.Errorf("RuleNames(strict) = %v, want default rules + strict_long_tokens", strict)
+	}
+
+	if off := RuleNames(LevelOff); off != nil {
+		t.Errorf("RuleNames(off) = %v, want nil", off)
+	}
+}

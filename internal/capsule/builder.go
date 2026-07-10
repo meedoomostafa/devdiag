@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/meedoomostafa/devdiag/internal/output"
+	"github.com/meedoomostafa/devdiag/internal/redact"
 	"github.com/meedoomostafa/devdiag/internal/repro"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
@@ -179,22 +180,13 @@ func (b *Builder) markdownReport(report *schema.Report) ([]byte, error) {
 }
 
 func (b *Builder) redactionRulesApplied() RedactionRulesApplied {
+	level := redact.Level(b.RedactionStatus)
 	applied := RedactionRulesApplied{
 		RedactionStatus:  b.RedactionStatus,
 		ReplacementToken: "<redacted>",
-		Rules: []string{
-			"env_values",
-			"cli_secret_flags",
-			"url_credentials",
-			"jwt_tokens",
-			"home_directory",
-		},
+		Rules:            redact.RuleNames(level),
 	}
-	switch b.RedactionStatus {
-	case "strict":
-		applied.Rules = append(applied.Rules, "strict_long_tokens")
-	case "off":
-		applied.Rules = nil
+	if level == redact.LevelOff {
 		applied.ReplacementToken = ""
 		applied.Notes = append(applied.Notes, "redaction disabled by explicit operator request")
 	}

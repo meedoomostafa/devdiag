@@ -15,6 +15,37 @@ const (
 	LevelOff     Level = "off"
 )
 
+// defaultRuleNames lists the redaction rules applied at LevelDefault, in the
+// order RedactString applies them (redactEnvValues covers env_values and
+// secret_key_values). Consumers (e.g. capsule manifests) must derive rule
+// listings from RuleNames so they cannot drift from the engine; when adding a
+// rule to RedactString, add its name here in the same position.
+var defaultRuleNames = []string{
+	"env_values",
+	"secret_key_values",
+	"cli_secret_flags",
+	"quoted_key_material",
+	"url_credentials",
+	"bearer_tokens",
+	"jwt_tokens",
+	"home_directory",
+}
+
+// RuleNames returns the names of the redaction rules active at the given
+// level. It returns nil for LevelOff.
+func RuleNames(level Level) []string {
+	switch level {
+	case LevelOff:
+		return nil
+	case LevelStrict:
+		names := make([]string, 0, len(defaultRuleNames)+1)
+		names = append(names, defaultRuleNames...)
+		return append(names, "strict_long_tokens")
+	default:
+		return append([]string(nil), defaultRuleNames...)
+	}
+}
+
 var (
 	// userInfoPattern matches URLs with embedded credentials.
 	userInfoPattern = regexp.MustCompile(`(\w+://)([^@]+)@`)
