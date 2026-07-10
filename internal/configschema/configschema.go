@@ -2,12 +2,11 @@ package configschema
 
 import (
 	"fmt"
-	"strings"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
-	cueerrors "cuelang.org/go/cue/errors"
 	cueyaml "cuelang.org/go/encoding/yaml"
+	"github.com/meedoomostafa/devdiag/internal/cueerr"
 	"gopkg.in/yaml.v3"
 )
 
@@ -18,7 +17,7 @@ type Config struct {
 		Optional      []string `json:"optional,omitempty" yaml:"optional"`
 		Required      []string `json:"required,omitempty" yaml:"required"`
 	} `json:"env,omitempty" yaml:"env"`
-	CI            struct {
+	CI struct {
 		Env struct {
 			IgnoreMissingLocal []string `json:"ignore_missing_local,omitempty" yaml:"ignore_missing_local"`
 			IgnoreMissingCI    []string `json:"ignore_missing_ci,omitempty" yaml:"ignore_missing_ci"`
@@ -93,7 +92,7 @@ func ValidateYAML(data []byte) Result {
 	configValue := schema.LookupPath(cue.ParsePath("#Config")).Unify(value)
 	if err := configValue.Validate(cue.Concrete(true), cue.Final()); err != nil {
 		result.Valid = false
-		result.Errors = append(result.Errors, splitCUEError(err)...)
+		result.Errors = append(result.Errors, cueerr.Split(err)...)
 	}
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
@@ -102,25 +101,4 @@ func ValidateYAML(data []byte) Result {
 	}
 	result.Config = cfg
 	return result
-}
-
-func splitCUEError(err error) []string {
-	if err == nil {
-		return nil
-	}
-	var out []string
-	details := cueerrors.Details(err, nil)
-	if strings.TrimSpace(details) == "" {
-		details = err.Error()
-	}
-	for _, line := range strings.Split(details, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			out = append(out, line)
-		}
-	}
-	if len(out) == 0 {
-		out = append(out, err.Error())
-	}
-	return out
 }
