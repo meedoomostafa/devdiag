@@ -63,5 +63,10 @@ func (a *AuditLog) Write(entry schema.FixAuditEntry) error {
 	if _, err := f.WriteString("\n"); err != nil {
 		return fmt.Errorf("write newline: %w", err)
 	}
+	// Fsync so an applied mutation cannot survive a crash that its audit
+	// entry does not.
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync audit log: %w", err)
+	}
 	return nil
 }

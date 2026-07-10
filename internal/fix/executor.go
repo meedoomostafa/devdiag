@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -19,6 +20,10 @@ type ExecutorOptions struct {
 	Interactive     bool // true if stdin is a TTY
 	Redact          func(string) string
 	CaptureCapBytes int
+	// ConfirmIn and ConfirmOut carry the guarded-fix confirmation dialog.
+	// They default to os.Stdin and os.Stderr; injectable for tests.
+	ConfirmIn  io.Reader
+	ConfirmOut io.Writer
 }
 
 // Executor applies fix proposals safely.
@@ -116,7 +121,7 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 			return nil, fmt.Errorf("guarded fix requires --fresh")
 		}
 		if opts.Interactive {
-			if !confirmTTY(proposal) {
+			if !confirmTTY(proposal, opts.ConfirmIn, opts.ConfirmOut) {
 				if e.audit != nil {
 					_ = e.audit.Write(schema.FixAuditEntry{
 						Timestamp:    time.Now(),
@@ -252,17 +257,23 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 	return execution, nil
 }
 
-func confirmTTY(proposal schema.FixProposal) bool {
-	fmt.Fprintf(os.Stderr, "\nGuarded fix: %s\n", proposal.Title)
+func confirmTTY(proposal schema.FixProposal, in io.Reader, out io.Writer) bool {
+	if in == nil {
+		in = os.Stdin
+	}
+	if out == nil {
+		out = os.Stderr
+	}
+	fmt.Fprintf(out, "\nGuarded fix: %s\n", proposal.Title)
 	if proposal.ConfirmMessage != "" {
-		fmt.Fprintf(os.Stderr, "Risk: %s\n", proposal.ConfirmMessage)
+		fmt.Fprintf(out, "Risk: %s\n", proposal.ConfirmMessage)
 	}
-	fmt.Fprintf(os.Stderr, "Command: %s %s\n", proposal.Bin, strings.Join(proposal.Args, " "))
+	fmt.Fprintf(out, "Command: %s %s\n", proposal.Bin, strings.Join(proposal.Args, " "))
 	if len(proposal.Rollback) > 0 {
-		fmt.Fprintf(os.Stderr, "Rollback: %s\n", strings.Join(proposal.Rollback, " "))
+		fmt.Fprintf(out, "Rollback: %s\n", strings.Join(proposal.Rollback, " "))
 	}
-	fmt.Fprintf(os.Stderr, "Apply? [y/N]: ")
-	reader := bufio.NewReader(os.Stdin)
+	fmt.Fprintf(out, "Apply? [y/N]: ")
+	reader := bufio.NewReader(in)
 	resp, err := reader.ReadString('\n')
 	if err != nil {
 		return false
