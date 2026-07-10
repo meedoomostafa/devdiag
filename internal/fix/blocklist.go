@@ -1,5 +1,7 @@
 package fix
 
+import "strings"
+
 // Blocklist provides secondary dangerous-command detection.
 // The primary safety gate is the allowlisted registry; this is defense in depth.
 
@@ -8,14 +10,10 @@ func IsBlockedCommand(bin string, args []string) bool {
 	if isBlockedBin(bin) {
 		return true
 	}
-	joined := joinArgs(args)
-	return isBlockedArg(joined)
-}
-
-func joinArgs(args []string) string {
-	out := ""
 	for _, a := range args {
-		out += a + " "
+		if isBlockedArg(a) {
+			return true
+		}
 	}
-	return out
+	return isBlockedArg(strings.Join(args, " "))
 }
