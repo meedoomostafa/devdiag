@@ -8,6 +8,7 @@ import (
 
 	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/remote/target"
+	"github.com/meedoomostafa/devdiag/internal/remote/transport"
 )
 
 // prefixRunner matches commands by prefix for the sh -lc probe.
@@ -291,4 +292,44 @@ func containsArg(args []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestTransportRun_PassesStdinToRunner(t *testing.T) {
+	fake := cmdrunner.NewFakeRunner(nil)
+	tr := NewTransport(&target.Target{Kind: target.KindSSH, User: "u", Host: "h"}, fake)
+
+	payload := []byte(`{"manifest":"data"}`)
+	_, err := tr.Run(context.Background(), transport.RemoteCommand{
+		Args:  []string{"sh", "-lc", "cat > /tmp/manifest.json"},
+		Stdin: payload,
+	})
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(fake.Calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(fake.Calls))
+	}
+	if string(fake.Calls[0].Stdin) != string(payload) {
+		t.Errorf("stdin = %q, want %q — SSH transport must forward RemoteCommand.Stdin", fake.Calls[0].Stdin, payload)
+	}
+}
+
+func TestTransportRun_QuotesSingleArgWithSpaces(t *testing.T) {
+	fake := cmdrunner.NewFakeRunner(nil)
+	tr := NewTransport(&target.Target{Kind: target.KindSSH, User: "u", Host: "h"}, fake)
+
+	_, err := tr.Run(context.Background(), transport.RemoteCommand{
+		Args: []string{"echo hello world"},
+	})
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(fake.Calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(fake.Calls))
+	}
+	args := fake.Calls[0].Args
+	last := args[len(args)-1]
+	if last != "'echo hello world'" {
+		t.Errorf("remote command word = %q, want single-quoted %q", last, "'echo hello world'")
+	}
 }

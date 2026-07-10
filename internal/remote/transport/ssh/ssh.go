@@ -128,17 +128,17 @@ test -w "$HOME" && echo home_writable || echo home_not_writable
 	return res, nil
 }
 
-// Run executes a remote command via SSH.
+// Run executes a remote command via SSH. Stdin is forwarded to the remote
+// command, and every argument is shell-quoted so the remote shell cannot
+// word-split argument content.
 func (t *Transport) Run(ctx context.Context, cmd transport.RemoteCommand) (*transport.RemoteCommandResult, error) {
 	args := t.sshArgs(false)
 	args = append(args, "--")
-	if len(cmd.Args) > 1 {
+	if len(cmd.Args) > 0 {
 		args = append(args, shellCommand(cmd.Args))
-	} else {
-		args = append(args, cmd.Args...)
 	}
 
-	res := t.Runner.Run(ctx, "ssh", args...)
+	res := cmdrunner.RunWithOptions(ctx, t.Runner, cmdrunner.RunOptions{Stdin: cmd.Stdin}, "ssh", args...)
 	return &transport.RemoteCommandResult{
 		Stdout:   res.Stdout,
 		Stderr:   res.Stderr,
