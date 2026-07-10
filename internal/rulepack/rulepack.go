@@ -286,7 +286,7 @@ func decodeFindingCandidates(rs rego.ResultSet) ([]schema.Finding, error) {
 			return nil, fmt.Errorf("rego finding candidates require id, title, and valid severity")
 		}
 		if !validFindingID(id) {
-			return nil, fmt.Errorf("rego finding id %q is invalid: must match F-[A-Z0-9-]+", id)
+			return nil, fmt.Errorf("rego finding id %q is invalid: must match ^F-[A-Z0-9][A-Z0-9-]*$", id)
 		}
 		finding := schema.Finding{
 			ID:              id,

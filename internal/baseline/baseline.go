@@ -241,11 +241,20 @@ func Save(path string, b *Baseline) error {
 		tmp.Close()
 		return fmt.Errorf("write baseline: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync baseline temp file: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close baseline temp file: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("finalize baseline: %w", err)
+	}
+	// Fsync the directory so the rename itself is durable across power loss.
+	if dirFile, err := os.Open(dir); err == nil {
+		_ = dirFile.Sync()
+		dirFile.Close()
 	}
 	return nil
 }
