@@ -184,8 +184,12 @@ func runWithGroupKill(ctx context.Context, cmd *exec.Cmd) error {
 	}
 }
 
+// buildStraceArgs builds the strace invocation. --kill-on-exit is not passed
+// explicitly: strace >= 6.6 auto-activates it with --seccomp-bpf, and older
+// versions reject the flag outright; orphan cleanup is guaranteed by the
+// process-group kill in runWithGroupKill regardless of strace version.
 func buildStraceArgs(scopes []Scope, tracePath, command string, args []string) []string {
-	straceArgs := []string{"-f", "-tt", "-T", "-yy", "-o", tracePath, "--seccomp-bpf", "--kill-on-exit"}
+	straceArgs := []string{"-f", "-tt", "-T", "-yy", "-o", tracePath, "--seccomp-bpf"}
 	straceArgs = append(straceArgs, buildStraceFilters(scopes)...)
 	straceArgs = append(straceArgs, "--", command)
 	straceArgs = append(straceArgs, args...)

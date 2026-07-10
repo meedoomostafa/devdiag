@@ -63,12 +63,14 @@ func UploadTarStream(ctx context.Context, t *target.Target, localDir, remoteDir 
 	go func() {
 		tarErr := tarCmd.Wait()
 		sshErr := sshCmd.Wait()
-		if tarErr != nil {
-			done <- fmt.Errorf("tar run: %w", tarErr)
-			return
-		}
+		// Report the ssh error first: when ssh dies (auth/connect failure),
+		// tar exits with SIGPIPE, which would mask the root cause.
 		if sshErr != nil {
 			done <- fmt.Errorf("ssh wait: %w", sshErr)
+			return
+		}
+		if tarErr != nil {
+			done <- fmt.Errorf("tar run: %w", tarErr)
 			return
 		}
 		done <- nil
