@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -284,11 +285,14 @@ func decodeFindingCandidates(rs rego.ResultSet) ([]schema.Finding, error) {
 		if strings.TrimSpace(id) == "" || strings.TrimSpace(title) == "" || !validSeverity(severity) {
 			return nil, fmt.Errorf("rego finding candidates require id, title, and valid severity")
 		}
+		if !validFindingID(id) {
+			return nil, fmt.Errorf("rego finding id %q is invalid: must match F-[A-Z0-9-]+", id)
+		}
 		finding := schema.Finding{
 			ID:              id,
 			Title:           title,
 			Severity:        schema.Severity(severity),
-			Confidence:      numberValue(m["confidence"], 0.7),
+			Confidence:      clampConfidence(numberValue(m["confidence"], 0.7)),
 			Symptom:         stringValue(m["symptom"]),
 			RedactionStatus: "safe",
 		}
@@ -308,6 +312,26 @@ func flattenFindingValues(values []any) []any {
 		}
 	}
 	return out
+}
+
+// findingIDPattern constrains rule pack finding IDs to the same shape as
+// built-in findings so external packs cannot inject arbitrary strings into
+// domain classification or reports.
+var findingIDPattern = regexp.MustCompile(`^F-[A-Z0-9][A-Z0-9-]*$`)
+
+func validFindingID(id string) bool {
+	return findingIDPattern.MatchString(id)
+}
+
+// clampConfidence bounds rule pack confidence values to [0, 1].
+func clampConfidence(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
 
 func numberValue(value any, fallback float64) float64 {
