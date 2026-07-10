@@ -156,12 +156,4 @@ func ReadCacheBySessionID(sessionID string) (*Manifest, error) {
 	return nil, fmt.Errorf("session %s not found", sessionID)
 }
 
-// hashTarget creates a simple stable hash for a target string.
-func hashTarget(s string) string {
-	var h uint32 = 2166136261
-	for i := 0; i < len(s); i++ {
-		h ^= uint32(s[i])
-		h *= 16777619
-	}
-	return fmt.Sprintf("%08x", h)
-}
+
