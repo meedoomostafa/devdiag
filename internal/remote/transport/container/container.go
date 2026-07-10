@@ -230,6 +230,10 @@ func parseFactOutput(res *transport.RemoteProbeResult, stdout string) {
 		case "home":
 			res.Home = line
 		case "tmp_writable":
+			// Containers stage into /tmp/devdiag-remote, so /tmp writability
+			// is the relevant "can we write our session dir" signal; it is
+			// carried in HomeWritable because the probe schema has a single
+			// writability field.
 			res.HomeWritable = line == "tmp_writable"
 		default:
 			res.Tools[field] = line != "" && !strings.Contains(line, "not found")
