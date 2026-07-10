@@ -44,6 +44,31 @@ func TestExecutorRoutesThroughInjectedRunner(t *testing.T) {
 	}
 }
 
+func TestExecutorPermissionDeniedReportedAsFailure(t *testing.T) {
+	fake := cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+		"privcmd": {ExitCode: -1, PermissionDenied: true},
+	})
+	executor := NewExecutor(nil)
+	executor.Runner = fake
+
+	proposal := schema.FixProposal{
+		FindingID: "F-TEST-003",
+		HintID:    "priv",
+		Class:     schema.FixSafe,
+		Bin:       "privcmd",
+	}
+	exec, err := executor.Execute(context.Background(), proposal, ExecutorOptions{Apply: true})
+	if err == nil {
+		t.Fatal("expected error for permission-denied fix")
+	}
+	if exec == nil || exec.Success {
+		t.Fatalf("expected failed execution, got %#v", exec)
+	}
+	if !strings.Contains(exec.Error, "permission denied") {
+		t.Errorf("error = %q, want permission-denied mention", exec.Error)
+	}
+}
+
 func TestExecutorTimeoutReportedAsFailure(t *testing.T) {
 	fake := cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
 		"slowcmd": {ExitCode: -1, TimedOut: true},

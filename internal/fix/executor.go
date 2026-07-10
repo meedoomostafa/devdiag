@@ -215,6 +215,9 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 	case res.NotFound:
 		execution.Success = false
 		execution.Error = fmt.Sprintf("command not found: %s", bin)
+	case res.PermissionDenied:
+		execution.Success = false
+		execution.Error = fmt.Sprintf("permission denied running %s", bin)
 	case res.ExitCode != 0:
 		execution.Success = false
 		execution.Error = redact(fmt.Sprintf("command exited with code %d", res.ExitCode))
