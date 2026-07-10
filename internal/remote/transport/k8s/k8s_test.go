@@ -112,3 +112,26 @@ func TestUploadTarsLocalDirIntoKubectlExec(t *testing.T) {
 		t.Fatalf("kubectl stdin = %q, want tar-bytes", got)
 	}
 }
+
+func TestUploadFailsWhenTarStreamTruncated(t *testing.T) {
+	runner := cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+		"tar -cf - .": {
+			Command:         "tar",
+			ExitCode:        0,
+			Stdout:          "partial-tar-bytes" + cmdrunner.TruncationMarker,
+			StdoutTruncated: true,
+		},
+	})
+	tr := NewTransportWithRunner(&target.Target{Kind: target.KindK8s, Namespace: "default", Pod: "api-pod"}, "", runner)
+
+	err := tr.Upload(context.Background(), "/tmp/stage", "/tmp/devdiag-remote/s1")
+	if err == nil {
+		t.Fatal("expected error for truncated tar stream; corrupted archive must not be uploaded")
+	}
+	if !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("error = %q, want truncation mention", err)
+	}
+	if len(runner.Calls) != 1 {
+		t.Fatalf("calls = %d, want 1 (kubectl upload must not run on truncated tar)", len(runner.Calls))
+	}
+}
