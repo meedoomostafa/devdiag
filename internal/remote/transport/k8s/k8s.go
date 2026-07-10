@@ -132,11 +132,23 @@ func (t *Transport) Run(ctx context.Context, cmd transport.RemoteCommand) (*tran
 	}, nil
 }
 
+// uploadTarCapBytes bounds the in-memory tar staging buffer. Session staging
+// directories are small (profile scripts + manifest); this is a generous cap.
+const uploadTarCapBytes = 256 * 1024 * 1024
+
 // Upload streams localDir into remoteDir using tar over kubectl exec.
 func (t *Transport) Upload(ctx context.Context, localDir, remoteDir string) error {
-	tar := cmdrunner.RunWithOptions(ctx, t.runner(), cmdrunner.RunOptions{Dir: localDir}, "tar", "-cf", "-", ".")
+	tar := cmdrunner.RunWithOptions(ctx, t.runner(), cmdrunner.RunOptions{
+		Dir:            localDir,
+		StdoutCapBytes: uploadTarCapBytes,
+	}, "tar", "-cf", "-", ".")
 	if tar.ExitCode != 0 {
 		return fmt.Errorf("tar stage failed: %s", combinedOutput(tar))
+	}
+	if tar.StdoutTruncated {
+		// A truncated capture is a corrupted archive (the capture buffer also
+		// appends a text marker); uploading it would silently lose files.
+		return fmt.Errorf("tar stream truncated at %d bytes; staging dir too large to upload", uploadTarCapBytes)
 	}
 
 	quotedDir := session.ShellQuote(remoteDir)
