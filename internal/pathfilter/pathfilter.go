@@ -172,8 +172,16 @@ func globRegexp(pattern string) *regexp.Regexp {
 		ch := pattern[i]
 		if ch == '*' {
 			if i+1 < len(pattern) && pattern[i+1] == '*' {
-				b.WriteString(".*")
-				i++
+				// Globstar: ** matches zero or more path segments.
+				// "a/**/b" must match "a/b"; consume a following "/" into
+				// the optional group so zero segments works.
+				if i+2 < len(pattern) && pattern[i+2] == '/' {
+					b.WriteString(`(?:.*/)?`)
+					i += 2
+				} else {
+					b.WriteString(".*")
+					i++
+				}
 				continue
 			}
 			b.WriteString(`[^/]*`)
