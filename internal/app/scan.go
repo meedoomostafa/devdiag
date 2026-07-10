@@ -328,14 +328,17 @@ func (s *Scanner) Scan(ctx context.Context, opts ScanOptions, sink EventSink) (*
 	return report, nil
 }
 
-// DefaultScannerDeps returns production dependencies.
+// DefaultScannerDeps returns production dependencies. The default RunID
+// derives its timestamp from the same Now dependency so overriding the clock
+// affects all time-derived values consistently.
 func DefaultScannerDeps() ScannerDeps {
+	now := time.Now
 	return ScannerDeps{
 		CollectorFactory: defaultCollectorFactory{},
 		Runner:           collectors.NewRunner(),
 		Engines:          defaultEngineFactory{},
-		RunID:            func() string { return newRunID(time.Now()) },
-		Now:              time.Now,
+		RunID:            func() string { return newRunID(now()) },
+		Now:              now,
 	}
 }
 
