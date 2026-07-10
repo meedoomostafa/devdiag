@@ -4,9 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"io"
 	"testing"
 
+	"github.com/meedoomostafa/devdiag/internal/redact"
 	"github.com/meedoomostafa/devdiag/internal/repro"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
@@ -105,6 +107,42 @@ func TestBuilder_IncludesMarkdownReportAndRedactionRules(t *testing.T) {
 	}
 	if !bytes.Contains(rulesContent, []byte(`"env_values"`)) || !bytes.Contains(rulesContent, []byte(`"url_credentials"`)) {
 		t.Fatalf("redaction rules missing expected rule names: %s", rulesContent)
+	}
+	// The manifest must list exactly the rules the redact engine applies,
+	// derived from redact.RuleNames so it cannot drift.
+	var applied RedactionRulesApplied
+	if err := json.Unmarshal(rulesContent, &applied); err != nil {
+		t.Fatalf("parse rules-applied: %v", err)
+	}
+	want := redact.RuleNames(redact.LevelDefault)
+	if len(applied.Rules) != len(want) {
+		t.Fatalf("rules-applied = %v, want engine rules %v", applied.Rules, want)
+	}
+	for i, w := range want {
+		if applied.Rules[i] != w {
+			t.Errorf("rules-applied[%d] = %q, want %q", i, applied.Rules[i], w)
+		}
+	}
+}
+
+func TestBuilder_StrictRedactionRulesIncludeStrictTokens(t *testing.T) {
+	b := NewBuilder("strict", "0.1.0")
+	report := &schema.Report{RunID: "r", RedactionStatus: "strict"}
+	var buf bytes.Buffer
+	if err := b.Build(&buf, report, nil); err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	_, rulesContent, err := readTarFileOccurrences(buf.Bytes(), "redaction/rules-applied.json")
+	if err != nil {
+		t.Fatalf("read redaction rules: %v", err)
+	}
+	var applied RedactionRulesApplied
+	if err := json.Unmarshal(rulesContent, &applied); err != nil {
+		t.Fatalf("parse rules-applied: %v", err)
+	}
+	want := redact.RuleNames(redact.LevelStrict)
+	if len(applied.Rules) != len(want) || applied.Rules[len(applied.Rules)-1] != "strict_long_tokens" {
+		t.Fatalf("strict rules-applied = %v, want %v", applied.Rules, want)
 	}
 }
 
