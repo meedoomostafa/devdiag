@@ -8,8 +8,91 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
+
+func TestExecutorRoutesThroughInjectedRunner(t *testing.T) {
+	fake := cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+		"chmod +x /tmp/script.sh": {ExitCode: 0, Stdout: "ok"},
+	})
+	executor := NewExecutor(nil)
+	executor.Runner = fake
+
+	proposal := schema.FixProposal{
+		FindingID: "F-TEST-001",
+		HintID:    "chmod-script",
+		Class:     schema.FixSafe,
+		Bin:       "chmod",
+		Args:      []string{"+x", "/tmp/script.sh"},
+	}
+	exec, err := executor.Execute(context.Background(), proposal, ExecutorOptions{Apply: true})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if exec == nil || !exec.Success {
+		t.Fatalf("expected success, got %#v", exec)
+	}
+	if exec.Stdout != "ok" {
+		t.Errorf("stdout = %q, want %q from fake runner", exec.Stdout, "ok")
+	}
+	if len(fake.Calls) != 1 {
+		t.Fatalf("fake runner calls = %d, want 1", len(fake.Calls))
+	}
+	if fake.Calls[0].Command != "chmod" {
+		t.Errorf("command = %q, want chmod", fake.Calls[0].Command)
+	}
+}
+
+func TestExecutorPermissionDeniedReportedAsFailure(t *testing.T) {
+	fake := cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+		"privcmd": {ExitCode: -1, PermissionDenied: true},
+	})
+	executor := NewExecutor(nil)
+	executor.Runner = fake
+
+	proposal := schema.FixProposal{
+		FindingID: "F-TEST-003",
+		HintID:    "priv",
+		Class:     schema.FixSafe,
+		Bin:       "privcmd",
+	}
+	exec, err := executor.Execute(context.Background(), proposal, ExecutorOptions{Apply: true})
+	if err == nil {
+		t.Fatal("expected error for permission-denied fix")
+	}
+	if exec == nil || exec.Success {
+		t.Fatalf("expected failed execution, got %#v", exec)
+	}
+	if !strings.Contains(exec.Error, "permission denied") {
+		t.Errorf("error = %q, want permission-denied mention", exec.Error)
+	}
+}
+
+func TestExecutorTimeoutReportedAsFailure(t *testing.T) {
+	fake := cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+		"slowcmd": {ExitCode: -1, TimedOut: true},
+	})
+	executor := NewExecutor(nil)
+	executor.Runner = fake
+
+	proposal := schema.FixProposal{
+		FindingID: "F-TEST-002",
+		HintID:    "slow",
+		Class:     schema.FixSafe,
+		Bin:       "slowcmd",
+	}
+	exec, err := executor.Execute(context.Background(), proposal, ExecutorOptions{Apply: true})
+	if err == nil {
+		t.Fatal("expected error for timed-out fix")
+	}
+	if exec == nil || exec.Success {
+		t.Fatalf("expected failed execution, got %#v", exec)
+	}
+	if !strings.Contains(exec.Error, "timed out") {
+		t.Errorf("error = %q, want timeout mention", exec.Error)
+	}
+}
 
 func TestExecutorBlocked(t *testing.T) {
 	executor := NewExecutor(nil)

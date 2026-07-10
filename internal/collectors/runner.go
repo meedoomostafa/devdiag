@@ -116,8 +116,7 @@ func (r *Runner) runOne(ctx context.Context, col Collector) schema.CollectorResu
 	select {
 	case outcome := <-done:
 		return finalizeResult(name, timeout, collectCtx.Err(), outcome)
-	case err := <-collectCtx.Done():
-		_ = err
+	case <-collectCtx.Done():
 		select {
 		case outcome := <-done:
 			return finalizeResult(name, timeout, collectCtx.Err(), outcome)

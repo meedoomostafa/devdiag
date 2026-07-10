@@ -6,8 +6,53 @@ import (
 	"testing"
 	"time"
 
+	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/redact"
 )
+
+func TestRunner_RoutesThroughInjectedRunner(t *testing.T) {
+	fake := cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+		"mycmd --flag": {ExitCode: 0, Stdout: "fake-out", Stderr: "fake-err"},
+	})
+	r := NewRunner()
+	r.CmdRunner = fake
+
+	res, err := r.Run(context.Background(), "mycmd", []string{"--flag"})
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Errorf("exit code = %d, want 0", res.ExitCode)
+	}
+	if !strings.Contains(res.StdoutPreview, "fake-out") {
+		t.Errorf("stdout preview = %q, want fake runner output", res.StdoutPreview)
+	}
+	if !strings.Contains(res.StderrPreview, "fake-err") {
+		t.Errorf("stderr preview = %q, want fake runner stderr", res.StderrPreview)
+	}
+	if len(fake.Calls) != 1 || fake.Calls[0].Command != "mycmd" {
+		t.Fatalf("fake calls = %#v, want single mycmd call", fake.Calls)
+	}
+}
+
+func TestRunner_TruncationReportedFromRunner(t *testing.T) {
+	fake := cmdrunner.NewFakeRunner(map[string]cmdrunner.Result{
+		"bigcmd": {ExitCode: 0, Stdout: "partial", StdoutTruncated: true, StdoutSeenBytes: 999, StderrSeenBytes: 0},
+	})
+	r := NewRunner()
+	r.CmdRunner = fake
+
+	res, err := r.Run(context.Background(), "bigcmd", nil)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if !res.Truncated {
+		t.Error("expected truncated=true")
+	}
+	if res.OriginalBytes != 999 {
+		t.Errorf("original bytes = %d, want 999", res.OriginalBytes)
+	}
+}
 
 func TestRunner_ExitCodeZero(t *testing.T) {
 	r := NewRunner()
@@ -96,17 +141,18 @@ func TestRunner_EnvKeysCaptured(t *testing.T) {
 	}
 }
 
-func TestRunner_BoundedBuffer(t *testing.T) {
-	buf := newBoundedBuffer(10)
-	n, _ := buf.Write([]byte("hello world"))
-	if n != 11 {
-		t.Errorf("expected write of 11 bytes, got %d", n)
+func TestRunner_BoundedCapture(t *testing.T) {
+	r := NewRunner()
+	r.StdoutCap = 10
+	res, err := r.Run(context.Background(), "echo", []string{"hello world, this is long"})
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
 	}
-	if buf.String() != "hello worl" {
-		t.Errorf("expected 'hello worl', got %q", buf.String())
+	if !res.Truncated {
+		t.Error("expected truncated=true for output over cap")
 	}
-	if !buf.truncated {
-		t.Error("expected truncated=true")
+	if res.OriginalBytes <= res.StoredBytes-int64(len(cmdrunner.TruncationMarker)) {
+		t.Errorf("original bytes %d should exceed stored payload", res.OriginalBytes)
 	}
 }
 

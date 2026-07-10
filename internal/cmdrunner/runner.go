@@ -23,6 +23,10 @@ type Result struct {
 	PermissionDenied bool
 	StdoutTruncated  bool
 	StderrTruncated  bool
+	// StdoutSeenBytes and StderrSeenBytes count all bytes the command
+	// produced, including bytes dropped after the capture cap was reached.
+	StdoutSeenBytes int
+	StderrSeenBytes int
 }
 
 // CommandRunner abstracts external command execution for testability.
@@ -86,7 +90,7 @@ func (r *RealRunner) RunWithOptions(ctx context.Context, opts RunOptions, name s
 	if err := cmd.Start(); err != nil {
 		res.Duration = time.Since(start)
 		res.ExitCode = -1
-		if pathErr, ok := err.(*exec.Error); ok && pathErr.Err == exec.ErrNotFound {
+		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, syscall.ENOENT) {
 			res.NotFound = true
 		} else if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
 			res.PermissionDenied = true
@@ -126,6 +130,8 @@ func (r *RealRunner) RunWithOptions(ctx context.Context, opts RunOptions, name s
 	res.Stderr = stderrBuf.String()
 	res.StdoutTruncated = stdoutBuf.Truncated()
 	res.StderrTruncated = stderrBuf.Truncated()
+	res.StdoutSeenBytes = stdoutBuf.Seen()
+	res.StderrSeenBytes = stderrBuf.Seen()
 
 	if err == nil {
 		res.ExitCode = 0
