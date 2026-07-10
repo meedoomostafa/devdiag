@@ -234,11 +234,8 @@ func (m Model) WithViewMode(viewMode relevance.ViewMode) Model {
 	return m
 }
 
-// NewModel creates a TUI model for the given scan options and redaction engine.
 // This is kept as a compatibility alias.
-func NewModel(opts app.ScanOptions, engine *redact.Engine, includeHidden ...bool) Model {
-	return NewScanModel(opts, engine, includeHidden...)
-}
+
 
 // Report returns the final report from the TUI session.
 func (m Model) Report() *schema.Report {

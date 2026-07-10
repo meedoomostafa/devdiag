@@ -89,22 +89,4 @@ func TestApplyFilters(t *testing.T) {
 	}
 }
 
-func TestSeverityFromString(t *testing.T) {
-	tests := []struct {
-		input string
-		want  schema.Severity
-	}{
-		{"critical", schema.SeverityCritical},
-		{"high", schema.SeverityHigh},
-		{"medium", schema.SeverityMedium},
-		{"low", schema.SeverityLow},
-		{"info", schema.SeverityInfo},
-		{"unknown", ""},
-	}
-	for _, tt := range tests {
-		got := severityFromString(tt.input)
-		if got != tt.want {
-			t.Errorf("severityFromString(%q) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
+
