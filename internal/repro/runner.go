@@ -1,17 +1,15 @@
 package repro
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
 
+	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/redact"
 )
 
@@ -23,6 +21,10 @@ type Runner struct {
 	StderrCap int64
 	Timeout   time.Duration // 0 = default 60s
 	Redactor  *redact.Engine
+	// CmdRunner executes the command. Defaults to cmdrunner.NewRealRunner,
+	// which starts commands in their own process group so timeouts kill
+	// spawned children too. Injectable for tests.
+	CmdRunner cmdrunner.CommandRunner
 }
 
 // NewRunner creates a Runner with sensible defaults.
@@ -75,63 +77,49 @@ func (r *Runner) Run(ctx context.Context, command string, args []string) (*Repro
 		Detail:    fmt.Sprintf("%s %s", command, strings.Join(args, " ")),
 	})
 
-	// Bounded capture
-	stdoutBuf := newBoundedBuffer(r.StdoutCap)
-	stderrBuf := newBoundedBuffer(r.StderrCap)
-
-	cmdCtx, cancel := context.WithTimeout(ctx, r.Timeout)
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, cmdPath, args...)
-	cmd.Stdout = stdoutBuf
-	cmd.Stderr = stderrBuf
-
-	// On Linux, start in a new process group for group-kill on timeout
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
+	runner := r.CmdRunner
+	if runner == nil {
+		runner = cmdrunner.NewRealRunner()
 	}
+	res := cmdrunner.RunWithOptions(cmdCtx, runner, cmdrunner.RunOptions{
+		StdoutCapBytes: int(r.StdoutCap),
+		StderrCapBytes: int(r.StderrCap),
+	}, cmdPath, args...)
 
-	runErr := cmd.Run()
 	end := time.Now()
 	result.EndTime = end
 	result.DurationMs = end.Sub(start).Milliseconds()
 
-	result.OriginalBytes = stdoutBuf.seen + stderrBuf.seen
-	result.StoredBytes = int64(stdoutBuf.Len() + stderrBuf.Len())
-	result.Truncated = stdoutBuf.truncated || stderrBuf.truncated
+	result.OriginalBytes = int64(res.StdoutSeenBytes + res.StderrSeenBytes)
+	result.StoredBytes = int64(len(res.Stdout) + len(res.Stderr))
+	result.Truncated = res.StdoutTruncated || res.StderrTruncated
 
 	// Redact before storing previews via shared engine
-	result.StdoutPreview = r.Redactor.RedactString(stdoutBuf.String(), "repro_stdout")
-	result.StderrPreview = r.Redactor.RedactString(stderrBuf.String(), "repro_stderr")
+	result.StdoutPreview = r.Redactor.RedactString(res.Stdout, "repro_stdout")
+	result.StderrPreview = r.Redactor.RedactString(res.Stderr, "repro_stderr")
 
-	if runErr != nil {
-		if cmdCtx.Err() == context.DeadlineExceeded {
-			result.TimedOut = true
-			result.ExitCode = -1
-			// Kill process group on timeout
-			if cmd.Process != nil {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-				time.Sleep(100 * time.Millisecond)
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			}
-			result.Timeline = append(result.Timeline, ReproEvent{
-				Timestamp: time.Now(),
-				Type:      "timeout",
-				Detail:    fmt.Sprintf("timeout after %v", r.Timeout),
-			})
-			return result, nil // timeout is structured, not an error
-		}
-
-		if exitErr, ok := runErr.(*exec.ExitError); ok {
-			result.ExitCode = exitErr.ExitCode()
-		} else {
-			// Command failed to start (e.g., ENOENT)
-			result.ExitCode = -1
-			return result, fmt.Errorf("command failed to start: %w", runErr)
-		}
-	} else {
-		result.ExitCode = 0
+	if res.TimedOut {
+		result.TimedOut = true
+		result.ExitCode = -1
+		result.Timeline = append(result.Timeline, ReproEvent{
+			Timestamp: time.Now(),
+			Type:      "timeout",
+			Detail:    fmt.Sprintf("timeout after %v", timeout),
+		})
+		return result, nil // timeout is structured, not an error
 	}
+	if res.NotFound {
+		result.ExitCode = -1
+		return result, fmt.Errorf("command failed to start: %s not found", cmdPath)
+	}
+	result.ExitCode = res.ExitCode
 
 	result.Timeline = append(result.Timeline, ReproEvent{
 		Timestamp: end,
@@ -140,58 +128,6 @@ func (r *Runner) Run(ctx context.Context, command string, args []string) (*Repro
 	})
 
 	return result, nil
-}
-
-// boundedBuffer wraps a bytes.Buffer with a byte cap enforced during writes.
-type boundedBuffer struct {
-	buf       bytes.Buffer
-	capBytes  int64
-	seen      int64
-	truncated bool
-	mu        sync.Mutex
-}
-
-func newBoundedBuffer(capBytes int64) *boundedBuffer {
-	if capBytes <= 0 {
-		capBytes = 10 << 20
-	}
-	return &boundedBuffer{capBytes: capBytes}
-}
-
-func (b *boundedBuffer) Write(p []byte) (n int, err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	origLen := len(p)
-	b.seen += int64(origLen)
-	if b.truncated {
-		return origLen, nil // silently drop excess
-	}
-
-	remaining := b.capBytes - int64(b.buf.Len())
-	if remaining <= 0 {
-		b.truncated = true
-		return origLen, nil
-	}
-
-	if int64(len(p)) > remaining {
-		p = p[:remaining]
-		b.truncated = true
-	}
-	_, _ = b.buf.Write(p)
-	return origLen, nil
-}
-
-func (b *boundedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-func (b *boundedBuffer) Len() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Len()
 }
 
 func isSensitiveEnvKey(key string) bool {
