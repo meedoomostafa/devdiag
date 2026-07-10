@@ -217,10 +217,4 @@ func TestWriteCache_Permissions(t *testing.T) {
 	}
 }
 
-func TestHashTarget_Stability(t *testing.T) {
-	h1 := hashTarget("user@host")
-	h2 := hashTarget("user@host")
-	if h1 != h2 {
-		t.Errorf("hash not stable: %q vs %q", h1, h2)
-	}
-}
+

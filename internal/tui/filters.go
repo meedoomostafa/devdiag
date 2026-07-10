@@ -76,19 +76,4 @@ func ApplyFilters(findings []InspectFinding, af ActiveFilters) []InspectFinding 
 	return out
 }
 
-// severityFromString parses a severity string, returning empty string if invalid.
-func severityFromString(s string) schema.Severity {
-	switch strings.ToLower(s) {
-	case "critical":
-		return schema.SeverityCritical
-	case "high":
-		return schema.SeverityHigh
-	case "medium":
-		return schema.SeverityMedium
-	case "low":
-		return schema.SeverityLow
-	case "info":
-		return schema.SeverityInfo
-	}
-	return ""
-}
+

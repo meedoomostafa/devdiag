@@ -281,7 +281,8 @@ func parseFactOutput(res *transport.RemoteProbeResult, stdout string) {
 
 	res.HasTar = res.Tools["tar"]
 
-	// Detect restricted shell: if bash/zsh/fish are present but shell is /bin/sh or /bin/rsh
+	// Flag likely-restricted shells by login shell path alone. This does not
+	// check tool presence; /bin/sh may simply be the user's chosen shell.
 	if res.Shell == "/bin/sh" || res.Shell == "/bin/rsh" || res.Shell == "/usr/bin/rsh" {
 		res.RestrictedShell = true
 	}

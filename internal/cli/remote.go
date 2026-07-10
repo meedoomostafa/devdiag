@@ -792,7 +792,10 @@ func cleanManifest(ctx context.Context, tr transport.Transport, manifest *sessio
 			lastErr = fmt.Errorf("rm %s failed: %s", f.Path, res.Stderr)
 		}
 	}
-	// Remove empty directories bottom-up
+	// Remove empty directories bottom-up. The unquoted $(find ...) word
+	// splitting is safe only because every path under the session root was
+	// validated by session.isSafeRemotePath, which forbids whitespace and
+	// glob characters; do not relax that charset without quoting here.
 	rootDir := session.ShellPath(manifest.RootDir)
 	res, err := tr.Run(ctx, transport.RemoteCommand{
 		Args: []string{"sh", "-lc", "cd " + session.ShellQuote(rootDir) + " 2>/dev/null && rmdir $(find . -type d -empty | sort -r) 2>/dev/null || true"},

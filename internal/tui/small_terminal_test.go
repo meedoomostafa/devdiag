@@ -8,7 +8,7 @@ import (
 )
 
 func TestModel_View_SmallTerminalGuard(t *testing.T) {
-	m := NewModel(app.ScanOptions{}, nil)
+	m := NewScanModel(app.ScanOptions{}, nil)
 	m.scanning = false
 
 	tests := []struct {
