@@ -134,7 +134,7 @@ func TestBlockedTemplate(t *testing.T) {
 }
 
 func TestBlockedTemplateShellInterpreters(t *testing.T) {
-	for _, shell := range []string{"sh", "bash", "zsh", "dash", "ksh", "/bin/sh", "/usr/bin/bash"} {
+	for _, shell := range []string{"sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "/bin/sh", "/usr/bin/bash"} {
 		r := &Registry{templates: make(map[string]Template)}
 		r.register(Template{
 			HintID: "shell-wrap",
