@@ -132,3 +132,62 @@ func TestBlockedTemplate(t *testing.T) {
 		t.Fatalf("expected blocked class, got %q", tmpl.Class)
 	}
 }
+
+func TestBlockedTemplateShellInterpreters(t *testing.T) {
+	for _, shell := range []string{"sh", "bash", "zsh", "dash", "ksh", "/bin/sh", "/usr/bin/bash"} {
+		r := &Registry{templates: make(map[string]Template)}
+		r.register(Template{
+			HintID: "shell-wrap",
+			Title:  "Shell wrapper",
+			Bin:    shell,
+			Args:   []string{"-c", "echo hi"},
+		})
+		tmpl, _ := r.Lookup("shell-wrap")
+		if tmpl.Class != schema.FixBlocked {
+			t.Errorf("bin %q: expected blocked class, got %q", shell, tmpl.Class)
+		}
+	}
+}
+
+func TestBlockedTemplateSplitArgComposition(t *testing.T) {
+	// Dangerous pattern split across separate args must still be caught:
+	// no single arg contains "rm -rf", but the joined command does.
+	r := &Registry{templates: make(map[string]Template)}
+	r.register(Template{
+		HintID: "split-danger",
+		Title:  "Split danger",
+		Bin:    "find",
+		Args:   []string{"/data", "-exec", "rm", "-rf", "{}", ";"},
+	})
+	tmpl, _ := r.Lookup("split-danger")
+	if tmpl.Class != schema.FixBlocked {
+		t.Errorf("expected blocked class for split rm -rf composition, got %q", tmpl.Class)
+	}
+
+	r2 := &Registry{templates: make(map[string]Template)}
+	r2.register(Template{
+		HintID:   "split-rollback-danger",
+		Title:    "Split rollback danger",
+		Bin:      "true",
+		Rollback: []string{"rm", "-rf", "/tmp/x"},
+	})
+	tmpl2, _ := r2.Lookup("split-rollback-danger")
+	if tmpl2.Class != schema.FixBlocked {
+		t.Errorf("expected blocked class for split rollback composition, got %q", tmpl2.Class)
+	}
+}
+
+func TestIsBlockedCommandSplitArgs(t *testing.T) {
+	if !IsBlockedCommand("find", []string{"/data", "-exec", "rm", "-rf", "{}", ";"}) {
+		t.Error("expected split rm -rf args to be blocked at runtime")
+	}
+	if !IsBlockedCommand("bash", []string{"-c", "echo hi"}) {
+		t.Error("expected shell interpreter to be blocked at runtime")
+	}
+	if IsBlockedCommand("chmod", []string{"+x", "script.sh"}) {
+		t.Error("chmod +x must not be blocked")
+	}
+	if IsBlockedCommand("docker", []string{"compose", "up", "-d"}) {
+		t.Error("docker compose up must not be blocked")
+	}
+}

@@ -303,10 +303,10 @@ func (r *Registry) registerDefaults() {
 	r.register(Template{
 		HintID:           "ebpf-setcap-grant",
 		Title:            "Grant permanent eBPF capabilities to devdiag binary",
-		Class:            schema.FixGuarded, 
+		Class:            schema.FixGuarded,
 		Bin:              "sudo",
 		Args:             []string{"setcap", "cap_bpf,cap_perfmon=ep", "{{value}}"},
-		RequiredEvidence: []string{"trace_self_binary_path"}, 
+		RequiredEvidence: []string{"trace_self_binary_path"},
 		Platforms:        []string{"linux"},
 		ConfirmMessage:   "This will elevate devdiag's binary permissions via setcap to allow raw tracepoint access for unprivileged users.",
 	})
@@ -332,16 +332,26 @@ func isBlockedTemplate(t Template) bool {
 	if isBlockedBin(t.Bin) {
 		return true
 	}
-	// Check each arg for dangerous patterns
+	// Check each arg for dangerous patterns, and the joined command line so
+	// dangerous compositions split across args (e.g. "rm", "-rf") are caught.
 	for _, a := range t.Args {
 		if isBlockedArg(a) {
 			return true
 		}
 	}
+	if isBlockedArg(strings.Join(t.Args, " ")) {
+		return true
+	}
 	for _, a := range t.Rollback {
 		if isBlockedArg(a) {
 			return true
 		}
+	}
+	if len(t.Rollback) > 0 && isBlockedBin(t.Rollback[0]) {
+		return true
+	}
+	if isBlockedArg(strings.Join(t.Rollback, " ")) {
+		return true
 	}
 	return false
 }
@@ -350,6 +360,10 @@ func isBlockedBin(bin string) bool {
 	b := filepath.Base(bin)
 	switch b {
 	case "rm", "rmdir", "chown", "setenforce", "sestatus", "mkfs", "fdisk", "dd":
+		return true
+	// Shell interpreters would let a single arg smuggle arbitrary command
+	// lines past the per-arg blocklist; fixes must be exec-form only.
+	case "sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh":
 		return true
 	}
 	return false
