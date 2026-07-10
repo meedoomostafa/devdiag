@@ -64,6 +64,43 @@ func TestRunnerTimeout(t *testing.T) {
 	}
 }
 
+func TestRunnerTimeoutKillsTraceeChildren(t *testing.T) {
+	if _, err := exec.LookPath("strace"); err != nil {
+		t.Skip("strace not installed")
+	}
+	if runtime.GOOS != "linux" {
+		t.Skip("process-group semantics are linux-specific here")
+	}
+
+	// A distinctive sleep duration lets us find surviving tracees by their
+	// command line. Sleeps sit inside nanosleep, so killing only strace
+	// leaves them running for their full duration.
+	tag := "37.917"
+	script := "sleep " + tag + " & sleep " + tag
+	r := &Runner{Timeout: 300 * time.Millisecond}
+	res, err := r.Run(context.Background(), []Scope{ScopeProcess}, "sh", "-c", script)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.TraceUnavailable {
+		t.Skip("ptrace unavailable in this environment")
+	}
+	if !res.TimedOut {
+		t.Fatal("expected timed out")
+	}
+
+	// Give kernel a moment to reap, then look for orphaned tracees.
+	time.Sleep(200 * time.Millisecond)
+	out, _ := exec.Command("pgrep", "-f", "sleep "+tag).Output()
+	survivors := strings.Fields(strings.TrimSpace(string(out)))
+	if len(survivors) > 0 {
+		for _, pid := range survivors {
+			_ = exec.Command("kill", "-9", pid).Run()
+		}
+		t.Fatalf("%d tracee processes survived trace timeout: %v", len(survivors), survivors)
+	}
+}
+
 func TestBuildStraceFilters(t *testing.T) {
 	filters := buildStraceFilters([]Scope{ScopeFile, ScopeNetwork})
 	want := []string{"-e", "trace=%file,%network"}

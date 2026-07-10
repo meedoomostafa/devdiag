@@ -60,11 +60,14 @@ func (r *Runner) Run(ctx context.Context, scopes []Scope, command string, args .
 	cmdCtx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, "strace", straceArgs...)
+	cmd := exec.Command("strace", straceArgs...)
+	// Run strace and all tracees in their own process group so a timeout
+	// kills the whole tree; killing only strace leaves tracees running.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var stderrBuf strings.Builder
 	cmd.Stderr = &stderrBuf
 
-	err = cmd.Run()
+	err = runWithGroupKill(cmdCtx, cmd)
 	res.Duration = time.Since(start)
 	stderr := stderrBuf.String()
 
@@ -153,6 +156,38 @@ func markSeccompBPFDegraded(res *Result) {
 	res.Notes = append(res.Notes, "seccomp-bpf degraded: tracing fell back to full ptrace syscall stops; heavy commands such as npm install, cargo build, or large test suites can become dramatically slower")
 }
 
+// runWithGroupKill starts cmd and waits for it. When ctx expires it kills
+// cmd's entire process group (SIGTERM, then SIGKILL) so tracees spawned by
+// strace -f die with it.
+func runWithGroupKill(ctx context.Context, cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+	select {
+	case err := <-waitCh:
+		return err
+	case <-ctx.Done():
+		if cmd.Process != nil {
+			pgid := -cmd.Process.Pid
+			_ = syscall.Kill(pgid, syscall.SIGTERM)
+			select {
+			case err := <-waitCh:
+				return err
+			case <-time.After(100 * time.Millisecond):
+				_ = syscall.Kill(pgid, syscall.SIGKILL)
+				return <-waitCh
+			}
+		}
+		return <-waitCh
+	}
+}
+
+// buildStraceArgs builds the strace invocation. --kill-on-exit is not passed
+// explicitly: strace >= 6.6 auto-activates it with --seccomp-bpf, and older
+// versions reject the flag outright; orphan cleanup is guaranteed by the
+// process-group kill in runWithGroupKill regardless of strace version.
 func buildStraceArgs(scopes []Scope, tracePath, command string, args []string) []string {
 	straceArgs := []string{"-f", "-tt", "-T", "-yy", "-o", tracePath, "--seccomp-bpf"}
 	straceArgs = append(straceArgs, buildStraceFilters(scopes)...)
