@@ -170,6 +170,14 @@ func (s *Scanner) Scan(ctx context.Context, opts ScanOptions, sink EventSink) (*
 
 	var allFindings []schema.Finding
 
+	// Engine error contract (pinned by TestScan_M1EngineError and
+	// TestScan_M6ErrorTolerated/TestScan_M8ErrorTolerated):
+	//   - M1 is the core engine; if it fails the scan is meaningless, so the
+	//     scan fails with EventScanFailed.
+	//   - M6 (ai-ml profile) and M8 (CI) are conditional add-ons; their
+	//     failures are reported via EventRuleEvaluated with Error set and the
+	//     scan continues with the findings it has.
+
 	// Evaluate M1 policies
 	m1Engine := s.Engines.NewM1()
 	m1Findings, err := m1Engine.Evaluate(snapshot)
@@ -320,20 +328,24 @@ func (s *Scanner) Scan(ctx context.Context, opts ScanOptions, sink EventSink) (*
 	return report, nil
 }
 
-// DefaultScannerDeps returns production dependencies.
+// DefaultScannerDeps returns production dependencies. The default RunID
+// derives its timestamp from the same Now dependency so overriding the clock
+// affects all time-derived values consistently.
 func DefaultScannerDeps() ScannerDeps {
+	now := time.Now
 	return ScannerDeps{
 		CollectorFactory: defaultCollectorFactory{},
 		Runner:           collectors.NewRunner(),
 		Engines:          defaultEngineFactory{},
-		RunID:            generateRunID,
-		Now:              time.Now,
+		RunID:            func() string { return newRunID(now()) },
+		Now:              now,
 	}
 }
 
-// generateRunID creates a simple run identifier.
-func generateRunID() string {
-	ts := time.Now().UTC()
+// newRunID creates a run identifier from the given timestamp so callers with
+// an injected clock get deterministic prefixes.
+func newRunID(now time.Time) string {
+	ts := now.UTC()
 	suffix := make([]byte, 4)
 	if _, err := rand.Read(suffix); err != nil {
 		return fmt.Sprintf("%s_%04x", ts.Format("2006-01-02T15:04:05Z"), ts.UnixNano()%0xFFFF)
@@ -442,15 +454,13 @@ func (f defaultCollectorFactory) Build(opts ScanOptions) ([]collectors.Collector
 	}
 
 	if opts.Profile == "ai-ml" {
+		// The ai-ml profile always collects Python ML state; the repo's
+		// python signal is not required (pinned by
+		// TestDefaultCollectorFactory_AIMLProfileWithoutPython).
 		allCollectors = append(allCollectors,
 			&gpu.Collector{},
 			&cuda.Collector{},
-		)
-		repoHasPython := repo.HasPythonSignal(absPath)
-		if repoHasPython || opts.Profile == "ai-ml" {
-			allCollectors = append(allCollectors, &pythonml.Collector{})
-		}
-		allCollectors = append(allCollectors,
+			&pythonml.Collector{},
 			&gpudocker.Collector{},
 			&cache.Collector{RepoRoot: absPath},
 		)

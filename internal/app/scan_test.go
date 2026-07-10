@@ -171,6 +171,30 @@ func hasEvent(events []Event, t EventType) bool {
 	return countEvents(events, t) > 0
 }
 
+func TestNewRunID_UsesProvidedClock(t *testing.T) {
+	fixed := time.Date(2024, 3, 15, 10, 30, 0, 0, time.UTC)
+	id := newRunID(fixed)
+	wantPrefix := "2024-03-15T10:30:00Z_"
+	if !strings.HasPrefix(id, wantPrefix) {
+		t.Errorf("newRunID = %q, want prefix %q", id, wantPrefix)
+	}
+	if len(id) <= len(wantPrefix) {
+		t.Errorf("newRunID = %q, want random suffix after prefix", id)
+	}
+}
+
+func TestDefaultCollectorFactory_AIMLProfileWithoutPython(t *testing.T) {
+	dir := t.TempDir()
+	collectorList, _ := defaultCollectorFactory{}.Build(ScanOptions{Path: dir, Profile: "ai-ml"})
+	names := collectorNames(collectorList)
+	if !hasCollectorName(names, "gpu") {
+		t.Fatalf("gpu collector missing for ai-ml profile: %v", names)
+	}
+	if !hasCollectorName(names, "pythonml") {
+		t.Fatalf("pythonml collector expected for ai-ml profile even without python signal: %v", names)
+	}
+}
+
 func TestScan_ReturnsReport(t *testing.T) {
 	sink := &RecordingSink{}
 	factory := &fakeCollectorFactory{
@@ -931,8 +955,9 @@ func TestDefaultScannerDeps_ReturnsNonNil(t *testing.T) {
 }
 
 func TestGenerateRunID_Unique(t *testing.T) {
-	id1 := generateRunID()
-	id2 := generateRunID()
+	now := time.Now()
+	id1 := newRunID(now)
+	id2 := newRunID(now)
 	if id1 == id2 {
 		t.Error("expected two different run IDs")
 	}

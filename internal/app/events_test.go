@@ -77,6 +77,25 @@ func TestChannelSink_NonBlockingWhenFull(t *testing.T) {
 	}
 }
 
+func TestChannelSink_CountsDroppedEvents(t *testing.T) {
+	ch := make(chan Event, 1)
+	sink := &ChannelSink{C: ch}
+
+	sink.Emit(Event{Type: EventScanStarted})   // fills buffer
+	sink.Emit(Event{Type: EventFindingAdded})  // dropped
+	sink.Emit(Event{Type: EventScanCompleted}) // dropped
+
+	if got := sink.Dropped(); got != 2 {
+		t.Errorf("Dropped() = %d, want 2", got)
+	}
+
+	<-ch
+	sink.Emit(Event{Type: EventScanFailed}) // delivered
+	if got := sink.Dropped(); got != 2 {
+		t.Errorf("Dropped() after successful emit = %d, want 2", got)
+	}
+}
+
 func TestRecordingSink_RecordsEvents(t *testing.T) {
 	sink := &RecordingSink{}
 

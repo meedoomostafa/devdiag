@@ -2,6 +2,7 @@ package app
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/meedoomostafa/devdiag/internal/redact"
@@ -60,9 +61,12 @@ type NoopSink struct{}
 // Emit implements EventSink.
 func (NoopSink) Emit(Event) {}
 
-// ChannelSink sends events on a channel.
+// ChannelSink sends events on a channel. Emit never blocks: when the channel
+// buffer is full the event is dropped and counted; consumers can call
+// Dropped to detect loss.
 type ChannelSink struct {
-	C chan Event
+	C       chan Event
+	dropped atomic.Int64
 }
 
 // Emit implements EventSink.
@@ -70,7 +74,13 @@ func (s *ChannelSink) Emit(e Event) {
 	select {
 	case s.C <- e:
 	default:
+		s.dropped.Add(1)
 	}
+}
+
+// Dropped returns the number of events discarded because the channel was full.
+func (s *ChannelSink) Dropped() int64 {
+	return s.dropped.Load()
 }
 
 // RecordingSink records all events for later inspection.
