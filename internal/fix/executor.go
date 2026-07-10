@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -25,6 +24,10 @@ type ExecutorOptions struct {
 // Executor applies fix proposals safely.
 type Executor struct {
 	audit *AuditLog
+	// Runner executes fix commands. Defaults to cmdrunner.NewRealRunner,
+	// which starts commands in their own process group so timeouts kill
+	// spawned children too. Injectable for tests.
+	Runner cmdrunner.CommandRunner
 }
 
 // NewExecutor creates an executor with the given audit log.
@@ -194,25 +197,29 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 		return execution, fmt.Errorf("command matches runtime blocklist")
 	}
 
-	cmd := exec.CommandContext(cmdCtx, bin, args...)
-	stdoutBuf := cmdrunner.NewCappedBuffer(opts.CaptureCapBytes)
-	stderrBuf := cmdrunner.NewCappedBuffer(opts.CaptureCapBytes)
-	cmd.Stdout = stdoutBuf
-	cmd.Stderr = stderrBuf
-	err := cmd.Run()
-	execution.Stdout = redact(stdoutBuf.String())
-	execution.Stderr = redact(stderrBuf.String())
-	if err != nil {
+	runner := e.Runner
+	if runner == nil {
+		runner = cmdrunner.NewRealRunner()
+	}
+	res := cmdrunner.RunWithOptions(cmdCtx, runner, cmdrunner.RunOptions{
+		StdoutCapBytes: opts.CaptureCapBytes,
+		StderrCapBytes: opts.CaptureCapBytes,
+	}, bin, args...)
+	execution.Stdout = redact(res.Stdout)
+	execution.Stderr = redact(res.Stderr)
+	execution.ExitCode = res.ExitCode
+	switch {
+	case res.TimedOut:
 		execution.Success = false
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			execution.ExitCode = exitErr.ExitCode()
-		} else {
-			execution.ExitCode = -1
-		}
-		execution.Error = redact(err.Error())
-	} else {
+		execution.Error = "fix command timed out"
+	case res.NotFound:
+		execution.Success = false
+		execution.Error = fmt.Sprintf("command not found: %s", bin)
+	case res.ExitCode != 0:
+		execution.Success = false
+		execution.Error = redact(fmt.Sprintf("command exited with code %d", res.ExitCode))
+	default:
 		execution.Success = true
-		execution.ExitCode = 0
 	}
 
 	if e.audit != nil {
