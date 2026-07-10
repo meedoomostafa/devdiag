@@ -89,6 +89,9 @@ func (p *Planner) Resolve(report *schema.Report, opts ResolveOptions) ([]schema.
 		// Bind template
 		boundArgs, boundRollback, err := BindTemplate(tmpl, values)
 		if err != nil {
+			if opts.DebugLog != nil {
+				opts.DebugLog("skipping template %s: bind error: %v", hintID, err)
+			}
 			continue
 		}
 
