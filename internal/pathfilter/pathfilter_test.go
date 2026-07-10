@@ -104,3 +104,25 @@ func TestShouldSkipPathWithPatterns_ProjectIgnorePattern(t *testing.T) {
 		t.Fatalf("expected custom pattern to skip %s", path)
 	}
 }
+
+func TestMatchGlob_GlobstarMatchesZeroSegments(t *testing.T) {
+	// Standard globstar semantics: a/**/b matches a/b as well as a/x/b.
+	cases := []struct {
+		pattern string
+		rel     string
+		want    bool
+	}{
+		{"a/**/b", "a/b", true},
+		{"a/**/b", "a/x/b", true},
+		{"a/**/b", "a/x/y/b", true},
+		{"a/**/b", "ab", false},
+		{"fixtures/**/package.json", "fixtures/package.json", true},
+		{"fixtures/**/package.json", "fixtures/deep/nested/package.json", true},
+		{"**/site-packages/**", "lib/site-packages/pkg/mod.py", true},
+	}
+	for _, tc := range cases {
+		if got := matchGlob(tc.pattern, tc.rel); got != tc.want {
+			t.Errorf("matchGlob(%q, %q) = %v, want %v", tc.pattern, tc.rel, got, tc.want)
+		}
+	}
+}

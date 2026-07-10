@@ -33,6 +33,16 @@ var levelOrder = map[Level]int{
 	LevelFatal:  6,
 }
 
+// levelRank maps unknown levels to the highest severity instead of the
+// zero-value trace rank, so a typo'd level can never bypass min-level
+// filtering or silently drop error-class logs.
+func levelRank(l Level) int {
+	if rank, ok := levelOrder[l]; ok {
+		return rank
+	}
+	return levelOrder[LevelFatal]
+}
+
 // Logger writes structured logs to stderr.
 type Logger struct {
 	mu           sync.Mutex
@@ -52,7 +62,7 @@ func New(minLevel Level, engine *redact.Engine) *Logger {
 
 // log writes a log line if level is sufficient.
 func (l *Logger) log(level Level, event string, msg string) {
-	if levelOrder[level] < levelOrder[l.minLevel] {
+	if levelRank(level) < levelRank(l.minLevel) {
 		return
 	}
 	l.mu.Lock()
@@ -65,7 +75,7 @@ func (l *Logger) log(level Level, event string, msg string) {
 
 	ts := time.Now().UTC().Format(time.RFC3339)
 	line := fmt.Sprintf("%s %s event=%s %s\n", ts, levelAbbrev(level), event, msg)
-	l.out.Write([]byte(line))
+	_, _ = l.out.Write([]byte(line)) // best-effort: stderr write failures are unreportable
 }
 
 func levelAbbrev(l Level) string {

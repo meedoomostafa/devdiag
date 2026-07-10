@@ -225,10 +225,38 @@ func Save(path string, b *Baseline) error {
 	if err := os.Chmod(dir, 0700); err != nil {
 		return fmt.Errorf("set baseline directory permissions: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	// Write to a temp file in the same directory and rename into place so a
+	// crash mid-write can never leave a truncated baseline behind.
+	tmp, err := os.CreateTemp(dir, ".baseline-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create baseline temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("set baseline permissions: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
 		return fmt.Errorf("write baseline: %w", err)
 	}
-	return os.Chmod(path, 0600)
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync baseline temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close baseline temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("finalize baseline: %w", err)
+	}
+	// Fsync the directory so the rename itself is durable across power loss.
+	if dirFile, err := os.Open(dir); err == nil {
+		_ = dirFile.Sync()
+		dirFile.Close()
+	}
+	return nil
 }
 
 // ActiveEntries returns entries that are not expired as of the given time.

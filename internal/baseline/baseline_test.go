@@ -192,6 +192,46 @@ func TestSaveCreatesParentWithPrivatePermissions(t *testing.T) {
 	}
 }
 
+func TestSaveIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".devdiag", "baseline.yaml")
+
+	now := time.Now().UTC()
+	b := &Baseline{
+		SchemaVersion: SchemaVersion,
+		Entries:       []Entry{{ID: "F-ENV-001", Reason: "test", CreatedAt: now}},
+	}
+	if err := Save(path, b); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Save writes via a temp file + rename so a crash mid-write can never
+	// leave a truncated baseline. Verify no temp artifacts remain.
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "baseline.yaml" {
+			t.Fatalf("unexpected leftover file %q after save", entry.Name())
+		}
+	}
+
+	// Overwrite must also go through rename, preserving previous content on
+	// reload even after repeated saves.
+	b.Entries = append(b.Entries, Entry{ID: "F-CI-001", Reason: "second", CreatedAt: now})
+	if err := Save(path, b); err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(loaded.Entries))
+	}
+}
+
 func TestSaveEntriesSortedByID(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "baseline.yaml")

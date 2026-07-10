@@ -212,6 +212,76 @@ findings := [http.send({"method": "get", "url": "https://example.com"})]
 	}
 }
 
+func TestEvaluateRegoFileRejectsMalformedFindingIDs(t *testing.T) {
+	dir := t.TempDir()
+	packPath := filepath.Join(dir, "pack.yaml")
+	if err := os.WriteFile(packPath, []byte(`id: team-rego
+version: "0.1"
+engine: rego
+entrypoint: data.devdiag.findings
+policy_files: [policy.rego]
+rules:
+  - id: F-TEAM-001
+    severity: high
+`), 0o644); err != nil {
+		t.Fatalf("write pack: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "policy.rego"), []byte(`package devdiag
+findings := [{
+  "id": "not a finding id; rm -rf",
+  "title": "spoofed",
+  "severity": "high"
+}]
+`), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+
+	result := EvaluateRegoFile(context.Background(), packPath, graph.NormalizedSnapshot{})
+	if result.Valid {
+		t.Fatalf("EvaluateRegoFile valid, want invalid for malformed finding id")
+	}
+	if !hasError(result.Errors, "finding id") {
+		t.Fatalf("errors = %+v, want finding id validation error", result.Errors)
+	}
+}
+
+func TestEvaluateRegoFileClampsConfidence(t *testing.T) {
+	dir := t.TempDir()
+	packPath := filepath.Join(dir, "pack.yaml")
+	if err := os.WriteFile(packPath, []byte(`id: team-rego
+version: "0.1"
+engine: rego
+entrypoint: data.devdiag.findings
+policy_files: [policy.rego]
+rules:
+  - id: F-TEAM-001
+    severity: high
+`), 0o644); err != nil {
+		t.Fatalf("write pack: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "policy.rego"), []byte(`package devdiag
+findings := [{
+  "id": "F-TEAM-001",
+  "title": "confidence out of range",
+  "severity": "high",
+  "confidence": 42.5
+}]
+`), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+
+	result := EvaluateRegoFile(context.Background(), packPath, graph.NormalizedSnapshot{})
+	if !result.Valid {
+		t.Fatalf("EvaluateRegoFile invalid: %+v", result.Errors)
+	}
+	if len(result.Findings) != 1 {
+		t.Fatalf("findings = %d, want 1", len(result.Findings))
+	}
+	if c := result.Findings[0].Confidence; c < 0 || c > 1 {
+		t.Fatalf("confidence = %v, want clamped to [0,1]", c)
+	}
+}
+
 func TestEvaluateRegoFileTimesOutOnPathologicalPolicy(t *testing.T) {
 	dir := t.TempDir()
 	packPath := filepath.Join(dir, "pack.yaml")
