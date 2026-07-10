@@ -16,12 +16,15 @@ const (
 )
 
 // defaultRuleNames lists the redaction rules applied at LevelDefault, in the
-// order RedactString applies them. Consumers (e.g. capsule manifests) must
-// derive rule listings from RuleNames so they cannot drift from the engine.
+// order RedactString applies them (redactEnvValues covers env_values and
+// secret_key_values). Consumers (e.g. capsule manifests) must derive rule
+// listings from RuleNames so they cannot drift from the engine; when adding a
+// rule to RedactString, add its name here in the same position.
 var defaultRuleNames = []string{
 	"env_values",
-	"cli_secret_flags",
 	"secret_key_values",
+	"cli_secret_flags",
+	"quoted_key_material",
 	"url_credentials",
 	"bearer_tokens",
 	"jwt_tokens",

@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/meedoomostafa/devdiag/internal/redact"
@@ -143,6 +144,32 @@ func TestBuilder_StrictRedactionRulesIncludeStrictTokens(t *testing.T) {
 	want := redact.RuleNames(redact.LevelStrict)
 	if len(applied.Rules) != len(want) || applied.Rules[len(applied.Rules)-1] != "strict_long_tokens" {
 		t.Fatalf("strict rules-applied = %v, want %v", applied.Rules, want)
+	}
+}
+
+func TestBuilder_OffRedactionRulesEmptyWithNote(t *testing.T) {
+	b := NewBuilder("off", "0.1.0")
+	report := &schema.Report{RunID: "r", RedactionStatus: "off"}
+	var buf bytes.Buffer
+	if err := b.Build(&buf, report, nil); err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	_, rulesContent, err := readTarFileOccurrences(buf.Bytes(), "redaction/rules-applied.json")
+	if err != nil {
+		t.Fatalf("read redaction rules: %v", err)
+	}
+	var applied RedactionRulesApplied
+	if err := json.Unmarshal(rulesContent, &applied); err != nil {
+		t.Fatalf("parse rules-applied: %v", err)
+	}
+	if len(applied.Rules) != 0 {
+		t.Errorf("off rules = %v, want empty", applied.Rules)
+	}
+	if applied.ReplacementToken != "" {
+		t.Errorf("off replacement token = %q, want empty", applied.ReplacementToken)
+	}
+	if len(applied.Notes) == 0 || !strings.Contains(applied.Notes[0], "disabled") {
+		t.Errorf("off notes = %v, want redaction-disabled note", applied.Notes)
 	}
 }
 

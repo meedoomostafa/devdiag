@@ -386,8 +386,9 @@ func TestRuleNames(t *testing.T) {
 	def := RuleNames(LevelDefault)
 	wantDefault := []string{
 		"env_values",
-		"cli_secret_flags",
 		"secret_key_values",
+		"cli_secret_flags",
+		"quoted_key_material",
 		"url_credentials",
 		"bearer_tokens",
 		"jwt_tokens",
