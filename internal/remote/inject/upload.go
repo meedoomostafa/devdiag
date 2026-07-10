@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"syscall"
+	"time"
 
 	"github.com/meedoomostafa/devdiag/internal/remote/session"
 	"github.com/meedoomostafa/devdiag/internal/remote/target"
@@ -25,7 +27,10 @@ func UploadTarStream(ctx context.Context, t *target.Target, localDir, remoteDir 
 	}
 
 	// tar -C localDir -cf - . | ssh host -- 'mkdir -p remoteDir && tar -C remoteDir -xf -'
-	tarCmd := exec.CommandContext(ctx, "tar", "-C", localDir, "-cf", "-", ".")
+	// Both processes run in their own process group so context cancellation
+	// kills the whole pipeline, not just the direct children.
+	tarCmd := exec.Command("tar", "-C", localDir, "-cf", "-", ".")
+	tarCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	sshArgs := []string{"-o", "ConnectTimeout=10"}
 	sshArgs = append(sshArgs, sshOptions.Args()...)
 	if t.Port != 0 && t.Port != 22 {
@@ -36,7 +41,8 @@ func UploadTarStream(ctx context.Context, t *target.Target, localDir, remoteDir 
 	quotedDir := session.ShellQuote(remoteShellDir)
 	remoteCommand := fmt.Sprintf("mkdir -p %s && tar -C %s -xf -", quotedDir, quotedDir)
 	sshArgs = append(sshArgs, "sh -lc "+session.ShellQuote(remoteCommand))
-	sshCmd := exec.CommandContext(ctx, "ssh", sshArgs...)
+	sshCmd := exec.Command("ssh", sshArgs...)
+	sshCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	pipe, err := tarCmd.StdoutPipe()
 	if err != nil {
@@ -47,11 +53,45 @@ func UploadTarStream(ctx context.Context, t *target.Target, localDir, remoteDir 
 	if err := sshCmd.Start(); err != nil {
 		return fmt.Errorf("ssh start: %w", err)
 	}
-	if err := tarCmd.Run(); err != nil {
-		return fmt.Errorf("tar run: %w", err)
+	if err := tarCmd.Start(); err != nil {
+		killGroup(sshCmd)
+		_ = sshCmd.Wait()
+		return fmt.Errorf("tar start: %w", err)
 	}
-	if err := sshCmd.Wait(); err != nil {
-		return fmt.Errorf("ssh wait: %w", err)
+
+	done := make(chan error, 1)
+	go func() {
+		tarErr := tarCmd.Wait()
+		sshErr := sshCmd.Wait()
+		if tarErr != nil {
+			done <- fmt.Errorf("tar run: %w", tarErr)
+			return
+		}
+		if sshErr != nil {
+			done <- fmt.Errorf("ssh wait: %w", sshErr)
+			return
+		}
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		killGroup(tarCmd)
+		killGroup(sshCmd)
+		<-done
+		return fmt.Errorf("upload canceled: %w", ctx.Err())
 	}
-	return nil
+}
+
+// killGroup terminates a command's process group (SIGTERM, then SIGKILL).
+func killGroup(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	pgid := -cmd.Process.Pid
+	_ = syscall.Kill(pgid, syscall.SIGTERM)
+	time.Sleep(100 * time.Millisecond)
+	_ = syscall.Kill(pgid, syscall.SIGKILL)
 }
