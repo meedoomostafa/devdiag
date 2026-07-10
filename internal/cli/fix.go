@@ -15,7 +15,6 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/fix"
 	"github.com/meedoomostafa/devdiag/internal/logging"
-	"github.com/meedoomostafa/devdiag/internal/output"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 	"golang.org/x/term"
 )
@@ -38,7 +37,6 @@ var fixCmd = &cobra.Command{
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
-		colorMode := buildColorMode()
 
 		if fixDryRun && fixApply {
 			logger.Error("fix", "cannot use --dry-run with --apply")
@@ -46,21 +44,21 @@ var fixCmd = &cobra.Command{
 		}
 
 		if fixList {
-			return runFixList(cmd, logger, colorMode)
+			return runFixList(cmd, logger)
 		}
 		if fixTemplates {
-			return runFixTemplates(cmd, logger, colorMode)
+			return runFixTemplates(cmd, logger)
 		}
 
 		if len(args) == 0 {
 			return exitCodeError{code: exitcode.InvalidInput}
 		}
 		findingID := args[0]
-		return runFix(cmd, findingID, logger, colorMode)
+		return runFix(cmd, findingID, logger)
 	},
 }
 
-func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger, colorMode output.ColorMode) error {
+func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger) error {
 	redactEngine := buildRedactEngine()
 	planner := fix.NewPlanner()
 	executor := fix.NewExecutor(fix.DefaultAuditLog())
@@ -110,7 +108,7 @@ func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger, colorM
 	}
 
 	// Render proposals
-	renderer := pickFixRenderer(colorMode)
+	renderer := pickFixRenderer()
 	if err := renderer.Render(proposals, cmd.OutOrStdout()); err != nil {
 		return err
 	}
@@ -160,7 +158,7 @@ func filterProposalsByHint(proposals []schema.FixProposal, hint string) []schema
 	return filtered
 }
 
-func runFixList(cmd *cobra.Command, logger *logging.Logger, colorMode output.ColorMode) error {
+func runFixList(cmd *cobra.Command, logger *logging.Logger) error {
 	planner := fix.NewPlanner()
 
 	report, source, runID, reportAge, err := resolveReportWithFresh(cmd, logger)
@@ -175,7 +173,7 @@ func runFixList(cmd *cobra.Command, logger *logging.Logger, colorMode output.Col
 		return exitCodeError{code: exitcode.InternalError}
 	}
 
-	renderer := pickFixRenderer(colorMode)
+	renderer := pickFixRenderer()
 	if err := renderer.Render(proposals, cmd.OutOrStdout()); err != nil {
 		return err
 	}
@@ -186,7 +184,7 @@ func runFixList(cmd *cobra.Command, logger *logging.Logger, colorMode output.Col
 	return nil
 }
 
-func runFixTemplates(cmd *cobra.Command, logger *logging.Logger, colorMode output.ColorMode) error {
+func runFixTemplates(cmd *cobra.Command, logger *logging.Logger) error {
 	registry := fix.NewRegistry()
 	templates := registry.List()
 
@@ -206,7 +204,7 @@ func runFixTemplates(cmd *cobra.Command, logger *logging.Logger, colorMode outpu
 		})
 	}
 
-	renderer := pickFixRenderer(colorMode)
+	renderer := pickFixRenderer()
 	if err := renderer.Render(proposals, cmd.OutOrStdout()); err != nil {
 		return err
 	}
@@ -283,7 +281,7 @@ func resolveReport() (*schema.Report, schema.FixSource, string, time.Duration, e
 	return &report, schema.FixSourceSavedReport, runID, reportAge, nil
 }
 
-func pickFixRenderer(colorMode output.ColorMode) fix.ProposalRenderer {
+func pickFixRenderer() fix.ProposalRenderer {
 	switch flagFormat {
 	case "json":
 		return &fix.JSONRenderer{}

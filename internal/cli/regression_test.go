@@ -73,7 +73,7 @@ func TestFixFresh_Strengthened(t *testing.T) {
 	}
 
 	logger := buildLogger()
-	if err := runFixList(fixCmd, logger, buildColorMode()); err != nil {
+	if err := runFixList(fixCmd, logger); err != nil {
 		t.Fatalf("runFixList failed: %v", err)
 	}
 
@@ -207,7 +207,7 @@ func TestFixFresh_DisappearingFindingDoesNotApply(t *testing.T) {
 	stdout := &strings.Builder{}
 	fixCmd.SetOut(stdout)
 
-	if err := runFix(fixCmd, "F-AUTO-SAFE", logger, buildColorMode()); err != nil {
+	if err := runFix(fixCmd, "F-AUTO-SAFE", logger); err != nil {
 		t.Fatalf("runFix failed: %v", err)
 	}
 
