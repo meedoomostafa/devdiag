@@ -2,18 +2,14 @@ package transport
 
 import (
 	"context"
-	"time"
 )
 
 // RemoteCommand describes a command to run on a remote target.
+// Args is the full command line (argv[0] included); Stdin is forwarded to
+// the remote process. Timeouts are carried by the context passed to Run.
 type RemoteCommand struct {
-	Name       string
-	Args       []string
-	Stdin      []byte
-	Timeout    time.Duration
-	Env        map[string]string
-	WorkingDir string
-	Sensitive  bool
+	Args  []string
+	Stdin []byte
 }
 
 // RemoteCommandResult captures the outcome of a remote command.
