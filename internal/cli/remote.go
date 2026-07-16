@@ -453,7 +453,7 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 		}
 		data, _ := json.MarshalIndent(manifest, "", "  ")
 		res, err := tr.Run(ctx, transport.RemoteCommand{
-			Args:  []string{"sh", "-lc", "cat > '" + filepath.Join(remoteDir, "manifest.json") + "'"},
+			Args:  []string{"sh", "-lc", "cat > " + session.ShellQuote(filepath.Join(remoteDir, "manifest.json"))},
 			Stdin: data,
 		})
 		if werr := manifestWriteError(res, err); werr != nil {
