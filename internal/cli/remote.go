@@ -857,11 +857,11 @@ func writeRemoteManifest(ctx context.Context, t *target.Target, manifest *sessio
 	return nil
 }
 
-func contextWithTimeout(parent context.Context, seconds time.Duration) (context.Context, context.CancelFunc) {
+func contextWithTimeout(parent context.Context, seconds int) (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
 	}
-	return context.WithTimeout(parent, seconds*time.Second)
+	return context.WithTimeout(parent, time.Duration(seconds)*time.Second)
 }
 
 func buildSSHProbeFindings(result *render.RemoteResult, probe *transport.RemoteProbeResult) *render.Finding {
