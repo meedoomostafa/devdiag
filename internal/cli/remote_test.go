@@ -369,6 +369,29 @@ func TestRemoteDoctor_NO_COLOR(t *testing.T) {
 	_ = stdout
 }
 
+func TestShouldCleanupAfterEnter(t *testing.T) {
+	cases := []struct {
+		name          string
+		cleanupMode   string
+		shellExitCode int
+		want          bool
+	}{
+		{"always cleans on zero exit", "always", 0, true},
+		{"always cleans on non-zero exit", "always", 1, true},
+		{"always cleans on shell error exit", "always", 130, true},
+		{"never skips on zero exit", "never", 0, false},
+		{"never skips on non-zero exit", "never", 1, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := shouldCleanupAfterEnter(c.cleanupMode, c.shellExitCode)
+			if got != c.want {
+				t.Errorf("shouldCleanupAfterEnter(%q, %d) = %v, want %v", c.cleanupMode, c.shellExitCode, got, c.want)
+			}
+		})
+	}
+}
+
 func TestValidateRootDir_Hardening(t *testing.T) {
 	cases := []struct {
 		path string

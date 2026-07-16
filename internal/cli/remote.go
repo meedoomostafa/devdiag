@@ -500,8 +500,8 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 	}
 
 	// Cleanup after exit
-	needsCleanup := cleanupMode == "always"
-	if needsCleanup && shellExitCode == 0 {
+	needsCleanup := shouldCleanupAfterEnter(cleanupMode, shellExitCode)
+	if needsCleanup {
 		ctx, cancel := contextWithTimeout(context.Background(), 15)
 		defer cancel()
 		var tr transport.Transport
@@ -771,6 +771,14 @@ func outputRemoteResultWithFindingExit(result *render.RemoteResult, redactEngine
 		}
 	}
 	return nil
+}
+
+// shouldCleanupAfterEnter decides whether remote enter cleans up the injected
+// profile after the interactive shell exits. Cleanup mode "always" means
+// always: the shell's exit code (its last command's status) must not leave
+// DevDiag files behind. Use --keep or --cleanup never to preserve state.
+func shouldCleanupAfterEnter(cleanupMode string, _ int) bool {
+	return cleanupMode == "always"
 }
 
 func cleanManifest(ctx context.Context, tr transport.Transport, manifest *session.Manifest) error {
