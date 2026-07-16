@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	agentTimeout time.Duration
-	agentPatch   string
-	agentKeep    bool
+	agentRunTimeout     time.Duration
+	agentSandboxTimeout time.Duration
+	agentPatch          string
+	agentKeep           bool
 )
 
 var agentCmd = &cobra.Command{
@@ -60,7 +61,7 @@ var agentRunCmd = &cobra.Command{
 			Command:     args[0],
 			Args:        args[1:],
 			Dir:         root,
-			Timeout:     agentTimeout,
+			Timeout:     agentRunTimeout,
 			Redact:      func(s string) string { return redactor.RedactString(s, "agent_run") },
 			RedactLevel: string(redactor.Level),
 		})
@@ -100,7 +101,7 @@ var agentSandboxCmd = &cobra.Command{
 			Run: agent.RunRequest{
 				Command: args[0],
 				Args:    args[1:],
-				Timeout: agentTimeout,
+				Timeout: agentSandboxTimeout,
 			},
 		})
 		if err != nil {
@@ -117,8 +118,8 @@ var agentSandboxCmd = &cobra.Command{
 }
 
 func init() {
-	agentRunCmd.Flags().DurationVar(&agentTimeout, "timeout", 30*time.Second, "Command timeout")
-	agentSandboxCmd.Flags().DurationVar(&agentTimeout, "timeout", 30*time.Second, "Sandbox command timeout")
+	agentRunCmd.Flags().DurationVar(&agentRunTimeout, "timeout", 30*time.Second, "Command timeout")
+	agentSandboxCmd.Flags().DurationVar(&agentSandboxTimeout, "timeout", 30*time.Second, "Sandbox command timeout")
 	agentSandboxCmd.Flags().StringVar(&agentPatch, "patch", "", "Patch file to apply inside the sandbox")
 	agentSandboxCmd.Flags().BoolVar(&agentKeep, "keep", false, "Keep the sandbox directory after execution")
 	agentCmd.AddCommand(agentExplainCmd)
