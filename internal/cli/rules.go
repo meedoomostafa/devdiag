@@ -30,37 +30,21 @@ var rulesListCmd = &cobra.Command{
 			logger.Warn("redact", "redaction is disabled; secrets may be visible")
 		}
 
-		switch flagFormat {
-		case "json", "ndjson", "markdown":
-			report := &schema.Report{
-				SchemaVersion:   schema.SchemaVersion,
-				DevDiagVersion:  version.Version,
-				RunID:           generateRunID(),
-				RedactionStatus: string(redactEngine.Level),
-				Repo:            schema.RepoInfo{},
-				Host:            schema.HostInfo{},
-				Collectors:      []schema.CollectorResult{},
-				Findings:        availableRuleFindings(),
-			}
-			renderer := pickRenderer(colorMode)
-			redacted := redactEngine.RedactReport(report)
-			return renderer.Render(redacted, cmd.OutOrStdout())
-		default:
-			// human mode — route through renderer for consistency
-			report := &schema.Report{
-				SchemaVersion:   schema.SchemaVersion,
-				DevDiagVersion:  version.Version,
-				RunID:           generateRunID(),
-				RedactionStatus: string(redactEngine.Level),
-				Repo:            schema.RepoInfo{},
-				Host:            schema.HostInfo{},
-				Collectors:      []schema.CollectorResult{},
-				Findings:        availableRuleFindings(),
-			}
-			renderer := pickRenderer(colorMode)
-			redacted := redactEngine.RedactReport(report)
-			return renderer.Render(redacted, cmd.OutOrStdout())
+		// pickRenderer already selects the right renderer per format;
+		// all formats share the same report construction.
+		report := &schema.Report{
+			SchemaVersion:   schema.SchemaVersion,
+			DevDiagVersion:  version.Version,
+			RunID:           generateRunID(),
+			RedactionStatus: string(redactEngine.Level),
+			Repo:            schema.RepoInfo{},
+			Host:            schema.HostInfo{},
+			Collectors:      []schema.CollectorResult{},
+			Findings:        availableRuleFindings(),
 		}
+		renderer := pickRenderer(colorMode)
+		redacted := redactEngine.RedactReport(report)
+		return renderer.Render(redacted, cmd.OutOrStdout())
 	},
 }
 

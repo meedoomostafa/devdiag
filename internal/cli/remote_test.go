@@ -369,6 +369,73 @@ func TestRemoteDoctor_NO_COLOR(t *testing.T) {
 	_ = stdout
 }
 
+func TestRemoteDoctor_JSON_ReportsDevDiagVersion(t *testing.T) {
+	stdout, _, code := runBinary("remote", "doctor", "user@host", "--dry-run", "--format", "json")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v", err)
+	}
+	v, _ := result["devdiag_version"].(string)
+	if v == "" {
+		t.Error("devdiag_version missing or empty in remote doctor JSON output")
+	}
+}
+
+func TestManifestWriteError(t *testing.T) {
+	cases := []struct {
+		name    string
+		res     *transport.RemoteCommandResult
+		err     error
+		want    string
+		wantNil bool
+	}{
+		{
+			name:    "success",
+			res:     &transport.RemoteCommandResult{ExitCode: 0},
+			wantNil: true,
+		},
+		{
+			name: "transport error",
+			res:  nil,
+			err:  context.DeadlineExceeded,
+			want: "context deadline exceeded",
+		},
+		{
+			name: "timed out reports timeout not nil error",
+			res:  &transport.RemoteCommandResult{ExitCode: -1, TimedOut: true},
+			want: "timed out",
+		},
+		{
+			name: "non-zero exit reports stderr not nil error",
+			res:  &transport.RemoteCommandResult{ExitCode: 1, Stderr: "read-only file system"},
+			want: "read-only file system",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := manifestWriteError(c.res, c.err)
+			if c.wantNil {
+				if got != nil {
+					t.Fatalf("manifestWriteError() = %v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("manifestWriteError() = nil, want error containing %q", c.want)
+			}
+			if !strings.Contains(got.Error(), c.want) {
+				t.Errorf("manifestWriteError() = %q, want it to contain %q", got.Error(), c.want)
+			}
+			if strings.Contains(got.Error(), "<nil>") {
+				t.Errorf("manifestWriteError() = %q, must not contain <nil>", got.Error())
+			}
+		})
+	}
+}
+
 func TestShouldCleanupAfterEnter(t *testing.T) {
 	cases := []struct {
 		name          string

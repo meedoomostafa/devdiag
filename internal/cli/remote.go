@@ -151,7 +151,6 @@ func runRemoteDoctor(cmd *cobra.Command, args []string) error {
 	}
 
 	result := render.NewDoctorResult(t)
-	result.DevDiagVersion = version.Version
 	result.RedactionStatus = string(redactEngine.Level)
 
 	if flagRemoteDryRun {
@@ -254,7 +253,6 @@ func runRemoteSync(cmd *cobra.Command, args []string) error {
 	}
 
 	result := render.NewSyncResult(t, flagRemoteProfile, sessionID, remoteDir, files)
-	result.DevDiagVersion = version.Version
 	result.RedactionStatus = string(redactEngine.Level)
 
 	if flagRemoteDryRun {
@@ -334,9 +332,9 @@ func runRemoteSync(cmd *cobra.Command, args []string) error {
 			Args:  []string{"sh", "-lc", "cat > " + session.ShellQuote(filepath.Join(remoteDir, "manifest.json"))},
 			Stdin: data,
 		})
-		if err != nil || res.ExitCode != 0 {
-			logger.Warn("remote.sync", fmt.Sprintf("manifest write failed: %v", err))
-			result.Notes = append(result.Notes, fmt.Sprintf("manifest write failed: %v", err))
+		if werr := manifestWriteError(res, err); werr != nil {
+			logger.Warn("remote.sync", fmt.Sprintf("manifest write failed: %v", werr))
+			result.Notes = append(result.Notes, fmt.Sprintf("manifest write failed: %v", werr))
 		}
 	} else {
 		result.Notes = append(result.Notes, fmt.Sprintf("upload for %s not yet implemented", t.Kind))
@@ -391,7 +389,6 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 	if flagRemoteDryRun {
 		if flagFormat == "json" || flagFormat == "ndjson" || flagFormat == "markdown" || flagFormat == "github" {
 			result := render.NewDoctorResult(t)
-			result.DevDiagVersion = version.Version
 			result.RedactionStatus = string(redactEngine.Level)
 			result.Status = "planned"
 			result.Profile = flagRemoteProfile
@@ -453,11 +450,11 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 		}
 		data, _ := json.MarshalIndent(manifest, "", "  ")
 		res, err := tr.Run(ctx, transport.RemoteCommand{
-			Args:  []string{"sh", "-lc", "cat > '" + filepath.Join(remoteDir, "manifest.json") + "'"},
+			Args:  []string{"sh", "-lc", "cat > " + session.ShellQuote(filepath.Join(remoteDir, "manifest.json"))},
 			Stdin: data,
 		})
-		if err != nil || res.ExitCode != 0 {
-			logger.Warn("remote.enter", fmt.Sprintf("manifest write failed: %v", err))
+		if werr := manifestWriteError(res, err); werr != nil {
+			logger.Warn("remote.enter", fmt.Sprintf("manifest write failed: %v", werr))
 		}
 	} else {
 		logger.Info("remote.enter", fmt.Sprintf("upload for %s not yet implemented in enter", t.Kind))
@@ -586,7 +583,6 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			logger.Info("remote.clean", "no cached session found; nothing to clean")
 			result := render.NewDoctorResult(t)
-			result.DevDiagVersion = version.Version
 			result.RedactionStatus = string(redactEngine.Level)
 			result.Status = "cleaned"
 			result.Notes = append(result.Notes, "no cached session found; nothing to clean")
@@ -598,7 +594,6 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 			// No info log here, just return early as "nothing to clean" if we found something that didn't match.
 			// This matches ReadCache failure behavior for the user.
 			result := render.NewDoctorResult(t)
-			result.DevDiagVersion = version.Version
 			result.RedactionStatus = string(redactEngine.Level)
 			result.Status = "cleaned"
 			result.Notes = append(result.Notes, "no cached session found; nothing to clean")
@@ -609,7 +604,6 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 	if len(manifests) == 0 {
 		logger.Info("remote.clean", "no matching sessions found")
 		result := render.NewDoctorResult(t)
-		result.DevDiagVersion = version.Version
 		result.RedactionStatus = string(redactEngine.Level)
 		result.Status = "cleaned"
 		result.Notes = append(result.Notes, "no matching sessions found")
@@ -622,7 +616,6 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 			totalFiles += len(m.Files)
 		}
 		result := render.NewDoctorResult(t)
-		result.DevDiagVersion = version.Version
 		result.RedactionStatus = string(redactEngine.Level)
 		result.Status = "cleaned"
 		result.Notes = append(result.Notes, fmt.Sprintf("dry-run: would clean %d sessions (total %d files)", len(manifests), totalFiles))
@@ -666,7 +659,6 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 	}
 
 	result := render.NewDoctorResult(t)
-	result.DevDiagVersion = version.Version
 	result.RedactionStatus = string(redactEngine.Level)
 	result.Status = "cleaned"
 	if failCount > 0 {
@@ -716,7 +708,6 @@ func runRemoteStatus(cmd *cobra.Command, args []string) error {
 	logger.Info("remote.status", fmt.Sprintf("target=%s", t.String()))
 
 	result := render.NewDoctorResult(t)
-	result.DevDiagVersion = version.Version
 	result.RedactionStatus = string(redactEngine.Level)
 	result.Status = "status"
 
@@ -769,6 +760,29 @@ func outputRemoteResultWithFindingExit(result *render.RemoteResult, redactEngine
 		if finding.Severity == "high" || finding.Severity == "critical" {
 			return exitCodeError{code: exitcode.FindingsExist}
 		}
+	}
+	return nil
+}
+
+// manifestWriteError classifies the outcome of a remote manifest write.
+// It returns nil on success and otherwise an error naming the actual cause
+// (transport error, timeout, or remote stderr) so failure notes never print
+// a "<nil>" error while the write actually failed.
+func manifestWriteError(res *transport.RemoteCommandResult, err error) error {
+	if err != nil {
+		return err
+	}
+	if res == nil {
+		return fmt.Errorf("no result returned")
+	}
+	if res.TimedOut {
+		return fmt.Errorf("timed out")
+	}
+	if res.ExitCode != 0 {
+		if strings.TrimSpace(res.Stderr) != "" {
+			return fmt.Errorf("exit code %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+		}
+		return fmt.Errorf("exit code %d", res.ExitCode)
 	}
 	return nil
 }
@@ -828,20 +842,17 @@ func writeRemoteManifest(ctx context.Context, t *target.Target, manifest *sessio
 		Args:  []string{"sh", "-lc", "cat > " + session.ShellQuote(remotePath)},
 		Stdin: data,
 	})
-	if err != nil {
-		return err
-	}
-	if res.ExitCode != 0 {
-		return fmt.Errorf("remote manifest write failed: %s", res.Stderr)
+	if werr := manifestWriteError(res, err); werr != nil {
+		return fmt.Errorf("remote manifest write failed: %w", werr)
 	}
 	return nil
 }
 
-func contextWithTimeout(parent context.Context, seconds time.Duration) (context.Context, context.CancelFunc) {
+func contextWithTimeout(parent context.Context, seconds int) (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
 	}
-	return context.WithTimeout(parent, seconds*time.Second)
+	return context.WithTimeout(parent, time.Duration(seconds)*time.Second)
 }
 
 func buildSSHProbeFindings(result *render.RemoteResult, probe *transport.RemoteProbeResult) *render.Finding {
