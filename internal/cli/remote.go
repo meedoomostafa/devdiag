@@ -151,7 +151,6 @@ func runRemoteDoctor(cmd *cobra.Command, args []string) error {
 	}
 
 	result := render.NewDoctorResult(t)
-	result.DevDiagVersion = version.Version
 	result.RedactionStatus = string(redactEngine.Level)
 
 	if flagRemoteDryRun {
@@ -254,7 +253,6 @@ func runRemoteSync(cmd *cobra.Command, args []string) error {
 	}
 
 	result := render.NewSyncResult(t, flagRemoteProfile, sessionID, remoteDir, files)
-	result.DevDiagVersion = version.Version
 	result.RedactionStatus = string(redactEngine.Level)
 
 	if flagRemoteDryRun {
@@ -391,7 +389,6 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 	if flagRemoteDryRun {
 		if flagFormat == "json" || flagFormat == "ndjson" || flagFormat == "markdown" || flagFormat == "github" {
 			result := render.NewDoctorResult(t)
-			result.DevDiagVersion = version.Version
 			result.RedactionStatus = string(redactEngine.Level)
 			result.Status = "planned"
 			result.Profile = flagRemoteProfile
@@ -586,7 +583,6 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			logger.Info("remote.clean", "no cached session found; nothing to clean")
 			result := render.NewDoctorResult(t)
-			result.DevDiagVersion = version.Version
 			result.RedactionStatus = string(redactEngine.Level)
 			result.Status = "cleaned"
 			result.Notes = append(result.Notes, "no cached session found; nothing to clean")
@@ -598,7 +594,6 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 			// No info log here, just return early as "nothing to clean" if we found something that didn't match.
 			// This matches ReadCache failure behavior for the user.
 			result := render.NewDoctorResult(t)
-			result.DevDiagVersion = version.Version
 			result.RedactionStatus = string(redactEngine.Level)
 			result.Status = "cleaned"
 			result.Notes = append(result.Notes, "no cached session found; nothing to clean")
@@ -609,7 +604,6 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 	if len(manifests) == 0 {
 		logger.Info("remote.clean", "no matching sessions found")
 		result := render.NewDoctorResult(t)
-		result.DevDiagVersion = version.Version
 		result.RedactionStatus = string(redactEngine.Level)
 		result.Status = "cleaned"
 		result.Notes = append(result.Notes, "no matching sessions found")
@@ -622,7 +616,6 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 			totalFiles += len(m.Files)
 		}
 		result := render.NewDoctorResult(t)
-		result.DevDiagVersion = version.Version
 		result.RedactionStatus = string(redactEngine.Level)
 		result.Status = "cleaned"
 		result.Notes = append(result.Notes, fmt.Sprintf("dry-run: would clean %d sessions (total %d files)", len(manifests), totalFiles))
@@ -666,7 +659,6 @@ func runRemoteClean(cmd *cobra.Command, args []string) error {
 	}
 
 	result := render.NewDoctorResult(t)
-	result.DevDiagVersion = version.Version
 	result.RedactionStatus = string(redactEngine.Level)
 	result.Status = "cleaned"
 	if failCount > 0 {
@@ -716,7 +708,6 @@ func runRemoteStatus(cmd *cobra.Command, args []string) error {
 	logger.Info("remote.status", fmt.Sprintf("target=%s", t.String()))
 
 	result := render.NewDoctorResult(t)
-	result.DevDiagVersion = version.Version
 	result.RedactionStatus = string(redactEngine.Level)
 	result.Status = "status"
 

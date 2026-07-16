@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/meedoomostafa/devdiag/internal/remote/target"
+	"github.com/meedoomostafa/devdiag/internal/version"
 )
 
 // RemoteResult is the top-level output for remote commands.
@@ -116,7 +117,7 @@ func renderHuman(r *RemoteResult, w io.Writer) error {
 func NewSyncResult(t *target.Target, profile, sessionID, remoteDir string, files []string) *RemoteResult {
 	return &RemoteResult{
 		SchemaVersion:      "0.1",
-		DevDiagVersion:     "0.1.0",
+		DevDiagVersion:     version.Version,
 		Target:             *t,
 		Status:             "synced",
 		Profile:            profile,
@@ -133,6 +134,7 @@ func NewSyncResult(t *target.Target, profile, sessionID, remoteDir string, files
 func NewDoctorResult(t *target.Target) *RemoteResult {
 	return &RemoteResult{
 		SchemaVersion:   "0.1",
+		DevDiagVersion:  version.Version,
 		Target:          *t,
 		Status:          "doctor",
 		RedactionStatus: "default",

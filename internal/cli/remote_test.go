@@ -369,6 +369,21 @@ func TestRemoteDoctor_NO_COLOR(t *testing.T) {
 	_ = stdout
 }
 
+func TestRemoteDoctor_JSON_ReportsDevDiagVersion(t *testing.T) {
+	stdout, _, code := runBinary("remote", "doctor", "user@host", "--dry-run", "--format", "json")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v", err)
+	}
+	v, _ := result["devdiag_version"].(string)
+	if v == "" {
+		t.Error("devdiag_version missing or empty in remote doctor JSON output")
+	}
+}
+
 func TestManifestWriteError(t *testing.T) {
 	cases := []struct {
 		name    string
