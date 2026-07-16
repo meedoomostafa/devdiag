@@ -334,9 +334,9 @@ func runRemoteSync(cmd *cobra.Command, args []string) error {
 			Args:  []string{"sh", "-lc", "cat > " + session.ShellQuote(filepath.Join(remoteDir, "manifest.json"))},
 			Stdin: data,
 		})
-		if err != nil || res.ExitCode != 0 {
-			logger.Warn("remote.sync", fmt.Sprintf("manifest write failed: %v", err))
-			result.Notes = append(result.Notes, fmt.Sprintf("manifest write failed: %v", err))
+		if werr := manifestWriteError(res, err); werr != nil {
+			logger.Warn("remote.sync", fmt.Sprintf("manifest write failed: %v", werr))
+			result.Notes = append(result.Notes, fmt.Sprintf("manifest write failed: %v", werr))
 		}
 	} else {
 		result.Notes = append(result.Notes, fmt.Sprintf("upload for %s not yet implemented", t.Kind))
@@ -456,8 +456,8 @@ func runRemoteEnter(cmd *cobra.Command, args []string) error {
 			Args:  []string{"sh", "-lc", "cat > '" + filepath.Join(remoteDir, "manifest.json") + "'"},
 			Stdin: data,
 		})
-		if err != nil || res.ExitCode != 0 {
-			logger.Warn("remote.enter", fmt.Sprintf("manifest write failed: %v", err))
+		if werr := manifestWriteError(res, err); werr != nil {
+			logger.Warn("remote.enter", fmt.Sprintf("manifest write failed: %v", werr))
 		}
 	} else {
 		logger.Info("remote.enter", fmt.Sprintf("upload for %s not yet implemented in enter", t.Kind))
@@ -773,6 +773,29 @@ func outputRemoteResultWithFindingExit(result *render.RemoteResult, redactEngine
 	return nil
 }
 
+// manifestWriteError classifies the outcome of a remote manifest write.
+// It returns nil on success and otherwise an error naming the actual cause
+// (transport error, timeout, or remote stderr) so failure notes never print
+// a "<nil>" error while the write actually failed.
+func manifestWriteError(res *transport.RemoteCommandResult, err error) error {
+	if err != nil {
+		return err
+	}
+	if res == nil {
+		return fmt.Errorf("no result returned")
+	}
+	if res.TimedOut {
+		return fmt.Errorf("timed out")
+	}
+	if res.ExitCode != 0 {
+		if strings.TrimSpace(res.Stderr) != "" {
+			return fmt.Errorf("exit code %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+		}
+		return fmt.Errorf("exit code %d", res.ExitCode)
+	}
+	return nil
+}
+
 // shouldCleanupAfterEnter decides whether remote enter cleans up the injected
 // profile after the interactive shell exits. Cleanup mode "always" means
 // always: the shell's exit code (its last command's status) must not leave
@@ -828,11 +851,8 @@ func writeRemoteManifest(ctx context.Context, t *target.Target, manifest *sessio
 		Args:  []string{"sh", "-lc", "cat > " + session.ShellQuote(remotePath)},
 		Stdin: data,
 	})
-	if err != nil {
-		return err
-	}
-	if res.ExitCode != 0 {
-		return fmt.Errorf("remote manifest write failed: %s", res.Stderr)
+	if werr := manifestWriteError(res, err); werr != nil {
+		return fmt.Errorf("remote manifest write failed: %w", werr)
 	}
 	return nil
 }
