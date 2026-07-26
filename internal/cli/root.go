@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -79,9 +80,36 @@ func Execute() int {
 			return ec.Code()
 		}
 		fmt.Fprintf(os.Stderr, "devdiag: %v\n", err)
+		if isUsageError(err) {
+			return exitcode.InvalidInput.Int()
+		}
 		return exitcode.InternalError.Int()
 	}
 	return exitcode.Success.Int()
+}
+
+// isUsageError classifies cobra argument/flag parse failures. These are user
+// invocation mistakes (unknown flag, unknown subcommand, bad arg count) and
+// must map to InvalidInput, not InternalError, per the exit-code contract.
+func isUsageError(err error) bool {
+	msg := err.Error()
+	for _, marker := range []string{
+		"unknown flag:",
+		"unknown shorthand flag:",
+		"unknown command",
+		"invalid argument",
+		"flag needs an argument:",
+		"accepts at most",
+		"accepts at least",
+		"requires at least",
+		"requires at most",
+		"accepts between",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateFormat(v string) error {
