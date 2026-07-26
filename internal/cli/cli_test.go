@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -498,6 +499,12 @@ func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 		t.Fatalf("read action live signoff workflow: %v", err)
 	}
 	workflow := string(data)
+	// SHA-pinning is the invariant, not one specific SHA: Dependabot bumps
+	// pins and must not break this contract test.
+	shaPinnedDownload := regexp.MustCompile(`uses: actions/download-artifact@[0-9a-f]{40}`)
+	if !shaPinnedDownload.MatchString(workflow) {
+		t.Fatalf("live signoff workflow must SHA-pin actions/download-artifact:\n%s", workflow)
+	}
 	for _, want := range []string{
 		"workflow_dispatch:",
 		"go-version: ['1.25', '1.26']",
@@ -508,7 +515,6 @@ func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 		"fail-severity: critical",
 		"mask-values: secret123",
 		"artifact-name: devdiag-report-${{ matrix.go-version }}",
-		"actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
 		"steps.allow.outputs.summary-written",
 		"jq -e '.schema_version and .collectors and .findings'",
 		"jq -e '.. | strings | select(contains(\"<redacted>\"))'",
@@ -537,13 +543,18 @@ func TestActionSmokeWorkflowContract(t *testing.T) {
 		t.Fatalf("read action smoke workflow: %v", err)
 	}
 	workflow := string(data)
+	// The invariant is SHA-pinning, not one specific SHA: Dependabot bumps
+	// the pin and must not break this contract test.
+	shaPinnedCheckout := regexp.MustCompile(`uses: actions/checkout@[0-9a-f]{40}`)
+	if !shaPinnedCheckout.MatchString(workflow) {
+		t.Fatalf("action smoke workflow must SHA-pin actions/checkout:\n%s", workflow)
+	}
 	for _, want := range []string{
 		"name: Action Smoke",
 		"pull_request:",
 		"workflow_dispatch:",
 		"permissions:",
 		"contents: read",
-		"uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6",
 		"uses: ./",
 		"format: github",
 		"format: markdown",
