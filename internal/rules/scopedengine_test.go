@@ -85,7 +85,7 @@ func TestContainerEngineWithoutGPUFiltersGPUFindings(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ScopedEngine type")
 	}
-	
+
 	testEngine := NewScopedEngine(mock1, se.prefixes...)
 	res, err := testEngine.Evaluate(graph.NormalizedSnapshot{})
 	if err != nil {
@@ -107,7 +107,7 @@ func TestContainerEngineWithGPUAllowsGPUFindings(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ScopedEngine type")
 	}
-	
+
 	hasGPU := false
 	for _, p := range se.prefixes {
 		if p == "F-GPU-" {
@@ -144,7 +144,7 @@ func TestContainerEngineWithGPUAllowsDockerGPUFindings(t *testing.T) {
 	for _, f := range res {
 		allowed = append(allowed, f.ID)
 	}
-	
+
 	for _, f := range mock.findings {
 		found := false
 		for _, a := range allowed {

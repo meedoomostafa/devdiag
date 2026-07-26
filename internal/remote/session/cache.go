@@ -155,5 +155,3 @@ func ReadCacheBySessionID(sessionID string) (*Manifest, error) {
 	}
 	return nil, fmt.Errorf("session %s not found", sessionID)
 }
-
-

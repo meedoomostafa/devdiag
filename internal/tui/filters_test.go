@@ -88,5 +88,3 @@ func TestApplyFilters(t *testing.T) {
 		t.Fatalf("expected 2 findings, got %d", len(filtered))
 	}
 }
-
-

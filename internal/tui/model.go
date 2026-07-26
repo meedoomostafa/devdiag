@@ -236,7 +236,6 @@ func (m Model) WithViewMode(viewMode relevance.ViewMode) Model {
 
 // This is kept as a compatibility alias.
 
-
 // Report returns the final report from the TUI session.
 func (m Model) Report() *schema.Report {
 	return m.report

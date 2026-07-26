@@ -389,5 +389,3 @@ func TestPlannerResolveTildeRoot(t *testing.T) {
 		t.Fatalf("expected chmod-script, got %q", proposals[0].HintID)
 	}
 }
-
-

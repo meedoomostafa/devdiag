@@ -75,5 +75,3 @@ func ApplyFilters(findings []InspectFinding, af ActiveFilters) []InspectFinding 
 	}
 	return out
 }
-
-

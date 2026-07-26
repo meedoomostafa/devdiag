@@ -274,7 +274,7 @@ func TestRemoteClean_SessionTargetMismatch(t *testing.T) {
 
 func TestCheckPorts_DoesNotEmitGeneralEnvFindings(t *testing.T) {
 	dir := t.TempDir()
-	
+
 	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte("DB_HOST=\n"), 0644); err != nil {
 		t.Fatal(err)
 	}

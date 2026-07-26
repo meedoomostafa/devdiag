@@ -90,7 +90,7 @@ then analyzes the trace output to produce diagnostic findings.`,
 				tctx, cancel := context.WithTimeout(cmd.Context(), flagTraceTimeout)
 				defer cancel()
 				ebpfRes, ebpfErr := runTraceEBPF(tctx, scopes, command, commandArgs...)
-				
+
 				if ebpfErr == nil && ebpfRes.TraceUnavailable && ebpfRes.UnavailableReason == "ebpf_capabilities_missing" {
 					if isTTY() {
 						fmt.Fprintf(os.Stderr, "\ndevdiag: eBPF backend lacks capabilities. Would you like to grant permanent eBPF capabilities to the devdiag binary via setcap? This will run a sudo command. [y/N]: ")
@@ -118,7 +118,7 @@ then analyzes the trace output to produce diagnostic findings.`,
 							}
 						}
 					}
-					
+
 					if ebpfErr == nil && ebpfRes.TraceUnavailable && ebpfRes.UnavailableReason == "ebpf_capabilities_missing" {
 						logger.Warn("trace", "ebpf backend lacks capabilities; checking strace fallback")
 						if _, straceErr := exec.LookPath("strace"); straceErr == nil {
