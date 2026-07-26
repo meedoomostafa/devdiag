@@ -388,11 +388,13 @@ func TestRuleNames(t *testing.T) {
 		"env_values",
 		"secret_key_values",
 		"cli_secret_flags",
+		"interpolation_defaults",
 		"quoted_key_material",
 		"url_credentials",
 		"bearer_tokens",
 		"jwt_tokens",
 		"home_directory",
+		"evidence_secret_sources",
 	}
 	if len(def) != len(wantDefault) {
 		t.Fatalf("RuleNames(default) = %v, want %v", def, wantDefault)
@@ -410,5 +412,224 @@ func TestRuleNames(t *testing.T) {
 
 	if off := RuleNames(LevelOff); off != nil {
 		t.Errorf("RuleNames(off) = %v, want nil", off)
+	}
+}
+
+func TestRedactEvidence_SecretSourceKeyMasksBareValue(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	cases := []struct {
+		name   string
+		source string
+		value  string
+		want   string
+	}{
+		{
+			name:   "github job env secret key",
+			source: "ci_env__job__scan__AWS_SECRET_ACCESS_KEY",
+			value:  "CANARYAWSKEYabcdef1234567890ABCDEF12",
+			want:   "<redacted>",
+		},
+		{
+			name:   "gitlab workflow variable token key",
+			source: "ci_env__workflow__API_TOKEN",
+			value:  "glpat-canary-value",
+			want:   "<redacted>",
+		},
+		{
+			name:   "password key",
+			source: "ci_env__step__build__2__DB_PASSWORD",
+			value:  "hunter2",
+			want:   "<redacted>",
+		},
+		{
+			name:   "non-secret key keeps value",
+			source: "ci_env__job__scan__NODE_VERSION",
+			value:  "20",
+			want:   "20",
+		},
+		{
+			name:   "non-secret source with embedded url creds still redacted",
+			source: "ci_env__job__scan__SERVICE_URL",
+			value:  "https://user:pass@example.com/x",
+			want:   "https://user:<redacted>@example.com/x",
+		},
+		{
+			name:   "compact token key without separators",
+			source: "ci_env__job__scan__NPMTOKEN",
+			value:  "npm-canary",
+			want:   "<redacted>",
+		},
+		{
+			name:   "compact github token key",
+			source: "ci_env__workflow__GITHUBTOKEN",
+			value:  "ghp-canary",
+			want:   "<redacted>",
+		},
+		{
+			name:   "private key name via key segment",
+			source: "ci_env__job__deploy__PRIVATE_KEY",
+			value:  "-----BEGIN CANARY-----",
+			want:   "<redacted>",
+		},
+		{
+			name:   "jwt-named key",
+			source: "ci_env__job__scan__CI_JOB_JWT_V2",
+			value:  "eyJ-canary",
+			want:   "<redacted>",
+		},
+		{
+			name:   "escaped double underscore in key still classified",
+			source: "ci_env__job__scan__AUTH%5F%5FTOKEN",
+			value:  "canary",
+			want:   "<redacted>",
+		},
+		{
+			name:   "job named auth outside ci_env namespace keeps value",
+			source: "ci_runs_on__auth",
+			value:  "ubuntu-latest",
+			want:   "ubuntu-latest",
+		},
+		{
+			name:   "author-like key keeps value",
+			source: "ci_env__job__scan__AUTHOR",
+			value:  "octocat",
+			want:   "octocat",
+		},
+		{
+			name:   "oauth enabled flag keeps value",
+			source: "ci_env__job__scan__OAUTH_ENABLED",
+			value:  "true",
+			want:   "true",
+		},
+		{
+			name:   "ssh key standalone segment masked",
+			source: "ci_env__job__deploy__SSH_KEY",
+			value:  "ssh-canary",
+			want:   "<redacted>",
+		},
+		{
+			name:   "deploy key masked",
+			source: "ci_env__workflow__DEPLOY_KEY",
+			value:  "deploy-canary",
+			want:   "<redacted>",
+		},
+		{
+			name:   "keyboard-style name keeps value",
+			source: "ci_env__job__scan__KEYBOARD_LAYOUT",
+			value:  "qwerty",
+			want:   "qwerty",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := e.RedactEvidence(tc.source, tc.value)
+			if got != tc.want {
+				t.Errorf("RedactEvidence(%q, %q) = %q, want %q", tc.source, tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRedactEvidence_OffLevelKeepsValue(t *testing.T) {
+	e := NewEngine(LevelOff)
+	got := e.RedactEvidence("ci_env__job__scan__AWS_SECRET_ACCESS_KEY", "rawvalue")
+	if got != "rawvalue" {
+		t.Errorf("RedactEvidence(off) = %q, want rawvalue", got)
+	}
+}
+
+func TestRedactReport_EvidenceWithSecretSourceIsMasked(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	report := &schema.Report{
+		Collectors: []schema.CollectorResult{
+			{
+				Name: "ci",
+				Evidence: []schema.Evidence{
+					{Source: "ci_env__job__scan__AWS_SECRET_ACCESS_KEY", Value: "CANARYAWSKEYabcdef1234567890"},
+					{Source: "ci_env__job__scan__NODE_VERSION", Value: "20"},
+				},
+			},
+		},
+		Findings: []schema.Finding{
+			{
+				ID: "F-X",
+				Evidence: []schema.Evidence{
+					{Source: "ci_env__workflow__NPM_TOKEN", Value: "npm-canary-token"},
+				},
+			},
+		},
+	}
+	redacted := e.RedactReport(report)
+	if got := redacted.Collectors[0].Evidence[0].Value; got != "<redacted>" {
+		t.Errorf("collector secret evidence = %q, want <redacted>", got)
+	}
+	if got := redacted.Collectors[0].Evidence[1].Value; got != "20" {
+		t.Errorf("collector non-secret evidence = %q, want 20", got)
+	}
+	if got := redacted.Findings[0].Evidence[0].Value; got != "<redacted>" {
+		t.Errorf("finding secret evidence = %q, want <redacted>", got)
+	}
+}
+
+func TestRedactString_InterpolationDefaults(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "secret-named var default masked",
+			input: "services.app.environment references ${API_TOKEN:-CANARYCOMPOSEDEFAULT999}",
+			want:  "services.app.environment references ${API_TOKEN:-<redacted>}",
+		},
+		{
+			name:  "password var with dash default",
+			input: "db.env references ${DB_PASSWORD-supersecret}",
+			want:  "db.env references ${DB_PASSWORD-<redacted>}",
+		},
+		{
+			name:  "non-secret var default kept",
+			input: "app.env references ${NODE_VERSION:-20}",
+			want:  "app.env references ${NODE_VERSION:-20}",
+		},
+		{
+			name:  "no default unchanged",
+			input: "app.env references ${API_TOKEN}",
+			want:  "app.env references ${API_TOKEN}",
+		},
+		{
+			name:  "nested default masked through matching brace",
+			input: "app.env references ${A_TOKEN:-${B}-real-secret}",
+			want:  "app.env references ${A_TOKEN:-<redacted>}",
+		},
+		{
+			name:  "author var default kept",
+			input: "app.env references ${AUTHOR:-someone}",
+			want:  "app.env references ${AUTHOR:-someone}",
+		},
+		{
+			name:  "oauth enabled flag default kept",
+			input: "app.env references ${OAUTH_ENABLED:-true}",
+			want:  "app.env references ${OAUTH_ENABLED:-true}",
+		},
+		{
+			name:  "empty default unchanged",
+			input: "app.env references ${API_TOKEN:-}",
+			want:  "app.env references ${API_TOKEN:-}",
+		},
+		{
+			name:  "unbalanced interpolation left intact",
+			input: "app.env references ${API_TOKEN:-broken",
+			want:  "app.env references ${API_TOKEN:-broken",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := e.RedactString(tc.input, "collector_evidence")
+			if got != tc.want {
+				t.Errorf("RedactString(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
 	}
 }

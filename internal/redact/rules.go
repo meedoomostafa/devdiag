@@ -24,11 +24,13 @@ var defaultRuleNames = []string{
 	"env_values",
 	"secret_key_values",
 	"cli_secret_flags",
+	"interpolation_defaults",
 	"quoted_key_material",
 	"url_credentials",
 	"bearer_tokens",
 	"jwt_tokens",
 	"home_directory",
+	"evidence_secret_sources",
 }
 
 // RuleNames returns the names of the redaction rules active at the given
@@ -75,6 +77,14 @@ var (
 	// Quoted values ("multi word" / 'multi word') are consumed entirely.
 	// Case-insensitive via (?i:...).
 	cliSecretPattern = regexp.MustCompile(`(?i)(--(?:password|token|api[-_]key|client[-_]secret|secret|auth[-_]token)(?:=|\s+))("[^"]*"|'[^']*'|[^\s]+)`)
+	// secretKeyNamePattern classifies variable/key names as secret-bearing.
+	// Substring matches cover compact spellings (NPMTOKEN, GITHUBTOKEN,
+	// PRIVATEKEY) as well as delimited ones (API_TOKEN, PRIVATE_KEY, CI_JOB_JWT).
+	// KEY and AUTH match only as standalone segments so SSH_KEY/DEPLOY_KEY/
+	// SIGNING_KEY are caught while AUTHOR, OAUTH_ENABLED, and KEYBOARD-style
+	// names stay classified as non-secret diagnostics; masking a benign
+	// CACHE_KEY is an accepted trade-off against leaking a deploy key.
+	secretKeyNamePattern = regexp.MustCompile(`(?i)(password|passwd|secret|credential|token|api_?key|private_?key|access_?key|jwt|(?:^|_)key(?:_|$)|(?:^|_)auth(?:_|$))`)
 )
 
 // homeDir caches the user's home directory.
@@ -133,4 +143,81 @@ func redactEnvValues(input string) string {
 // redactCLISecrets replaces values after common secret-bearing CLI flags.
 func redactCLISecrets(input string) string {
 	return cliSecretPattern.ReplaceAllString(input, "${1}<redacted>")
+}
+
+// interpolationOpenPattern locates ${VAR:-... / ${VAR-... openings whose
+// variable name indicates secret material. The default value is scanned
+// manually so nested ${...} stay inside the masked region.
+var interpolationOpenPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_]+)(:?-)`)
+
+// redactInterpolationDefaults masks literal fallback values in secret-named
+// variable interpolations such as ${API_TOKEN:-realvalue}. The default is
+// consumed through the matching outer brace (tracking nested ${...}) so that
+// ${A_TOKEN:-${B}-suffix} does not leak the suffix.
+func redactInterpolationDefaults(input string) string {
+	locs := interpolationOpenPattern.FindAllStringSubmatchIndex(input, -1)
+	if locs == nil {
+		return input
+	}
+	var b strings.Builder
+	last := 0
+	for _, m := range locs {
+		start, end := m[0], m[1]
+		if start < last {
+			continue
+		}
+		varName := input[m[2]:m[3]]
+		if !secretKeyNamePattern.MatchString(varName) {
+			continue
+		}
+		closing := findBalancedClose(input, end)
+		if closing == -1 || closing == end {
+			continue
+		}
+		b.WriteString(input[last:end])
+		b.WriteString("<redacted>")
+		last = closing
+	}
+	if last == 0 {
+		return input
+	}
+	b.WriteString(input[last:])
+	return b.String()
+}
+
+// findBalancedClose returns the index of the '}' that closes the
+// interpolation whose default value starts at start, accounting for nested
+// ${...} groups. Returns -1 when unbalanced.
+func findBalancedClose(input string, start int) int {
+	depth := 0
+	for i := start; i < len(input); i++ {
+		switch {
+		case input[i] == '$' && i+1 < len(input) && input[i+1] == '{':
+			depth++
+		case input[i] == '}':
+			if depth == 0 {
+				return i
+			}
+			depth--
+		}
+	}
+	return -1
+}
+
+// isSecretSource reports whether an evidence Source identifier names secret
+// material. Whole-value masking is scoped to CI environment-variable evidence
+// (ci_env__ / ci_setup__ namespaces), whose values are bare secrets when the
+// key name says so; other namespaces (ci_runs_on__auth, file paths) carry
+// diagnostic values that content rules handle. The trailing key segment is
+// decoded from the %5F%5F escaping applied by sanitizeSource before matching.
+func isSecretSource(source string) bool {
+	if !strings.HasPrefix(source, "ci_env__") && !strings.HasPrefix(source, "ci_setup__") {
+		return false
+	}
+	rest := source[strings.Index(source, "__")+2:]
+	if idx := strings.LastIndex(rest, "__"); idx != -1 {
+		rest = rest[idx+2:]
+	}
+	key := strings.ReplaceAll(rest, "%5F%5F", "__")
+	return secretKeyNamePattern.MatchString(key)
 }

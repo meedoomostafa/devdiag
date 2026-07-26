@@ -23,6 +23,7 @@ func (e *Engine) RedactString(input string, sourceType string) string {
 	result := input
 	result = redactEnvValues(result)
 	result = redactCLISecrets(result)
+	result = redactInterpolationDefaults(result)
 	result = redactQuotedKeyMaterial(result)
 	result = redactURL(result)
 	result = redactBearerTokens(result)
@@ -34,6 +35,20 @@ func (e *Engine) RedactString(input string, sourceType string) string {
 	}
 
 	return result
+}
+
+// RedactEvidence redacts an evidence value using its Source identifier as
+// context. Evidence values are bare (no KEY=VALUE shape), so when the source
+// names secret material (ci_env__job__x__AWS_SECRET_ACCESS_KEY) the whole
+// value is masked; otherwise content-based rules apply as usual.
+func (e *Engine) RedactEvidence(source, value string) string {
+	if e.Level == LevelOff {
+		return value
+	}
+	if value != "" && isSecretSource(source) {
+		return "<redacted>"
+	}
+	return e.RedactString(value, "evidence_value")
 }
 
 // RedactReport returns a deep-redacted copy of the report.
@@ -80,7 +95,7 @@ func (e *Engine) redactFinding(f schema.Finding) schema.Finding {
 	for j, ev := range f.Evidence {
 		redacted.Evidence[j] = schema.Evidence{
 			Source: ev.Source,
-			Value:  e.RedactString(ev.Value, "evidence_value"),
+			Value:  e.RedactEvidence(ev.Source, ev.Value),
 		}
 	}
 	redacted.LikelyCauses = make([]string, len(f.LikelyCauses))
@@ -100,7 +115,7 @@ func (e *Engine) redactCollector(c schema.CollectorResult) schema.CollectorResul
 	for j, ev := range c.Evidence {
 		redacted.Evidence[j] = schema.Evidence{
 			Source: ev.Source,
-			Value:  e.RedactString(ev.Value, "collector_evidence"),
+			Value:  e.RedactEvidence(ev.Source, ev.Value),
 		}
 	}
 	redacted.Notes = make([]string, len(c.Notes))
