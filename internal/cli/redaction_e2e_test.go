@@ -96,7 +96,13 @@ func TestRedactionE2E_StdoutAllFormats(t *testing.T) {
 	for _, format := range []string{"human", "json", "ndjson", "markdown", "github"} {
 		for _, level := range []string{"default", "strict"} {
 			t.Run(format+"/"+level, func(t *testing.T) {
-				stdout, stderr, _ := runBinaryInDir(dir, "scan", ".", "--format", format, "--redact", level, "--view", "all", "--include-hidden", "--verbose")
+				stdout, stderr, code := runBinaryInDir(dir, "scan", ".", "--format", format, "--redact", level, "--view", "all", "--include-hidden", "--verbose")
+				if code > 1 {
+					t.Fatalf("scan exited %d (want 0 or 1); stderr: %s", code, stderr)
+				}
+				if strings.TrimSpace(stdout) == "" {
+					t.Fatalf("scan produced empty stdout for %s/%s; canary checks would be vacuous", format, level)
+				}
 				assertNoCanary(t, "scan stdout ("+format+"/"+level+")", stdout)
 				assertNoCanary(t, "scan stderr ("+format+"/"+level+")", stderr)
 			})
@@ -106,7 +112,10 @@ func TestRedactionE2E_StdoutAllFormats(t *testing.T) {
 
 func TestRedactionE2E_SavedReport(t *testing.T) {
 	dir := writeCanaryFixture(t)
-	_, stderr, _ := runBinaryInDir(dir, "scan", ".", "--save-report", "--format", "json")
+	_, stderr, code := runBinaryInDir(dir, "scan", ".", "--save-report", "--format", "json")
+	if code > 1 {
+		t.Fatalf("scan exited %d (want 0 or 1); stderr: %s", code, stderr)
+	}
 	reports, err := filepath.Glob(filepath.Join(dir, ".devdiag", "runs", "*", "report.json"))
 	if err != nil || len(reports) == 0 {
 		t.Fatalf("no saved report found: %v (stderr: %s)", err, stderr)
@@ -115,6 +124,9 @@ func TestRedactionE2E_SavedReport(t *testing.T) {
 		data, err := os.ReadFile(rep)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if len(data) == 0 {
+			t.Fatalf("saved report %s is empty; canary check would be vacuous", rep)
 		}
 		assertNoCanary(t, "saved report "+rep, string(data))
 	}

@@ -453,6 +453,54 @@ func TestRedactEvidence_SecretSourceKeyMasksBareValue(t *testing.T) {
 			value:  "https://user:pass@example.com/x",
 			want:   "https://user:<redacted>@example.com/x",
 		},
+		{
+			name:   "compact token key without separators",
+			source: "ci_env__job__scan__NPMTOKEN",
+			value:  "npm-canary",
+			want:   "<redacted>",
+		},
+		{
+			name:   "compact github token key",
+			source: "ci_env__workflow__GITHUBTOKEN",
+			value:  "ghp-canary",
+			want:   "<redacted>",
+		},
+		{
+			name:   "private key name via key segment",
+			source: "ci_env__job__deploy__PRIVATE_KEY",
+			value:  "-----BEGIN CANARY-----",
+			want:   "<redacted>",
+		},
+		{
+			name:   "jwt-named key",
+			source: "ci_env__job__scan__CI_JOB_JWT_V2",
+			value:  "eyJ-canary",
+			want:   "<redacted>",
+		},
+		{
+			name:   "escaped double underscore in key still classified",
+			source: "ci_env__job__scan__AUTH%5F%5FTOKEN",
+			value:  "canary",
+			want:   "<redacted>",
+		},
+		{
+			name:   "job named auth outside ci_env namespace keeps value",
+			source: "ci_runs_on__auth",
+			value:  "ubuntu-latest",
+			want:   "ubuntu-latest",
+		},
+		{
+			name:   "author-like key keeps value",
+			source: "ci_env__job__scan__AUTHOR",
+			value:  "octocat",
+			want:   "octocat",
+		},
+		{
+			name:   "oauth enabled flag keeps value",
+			source: "ci_env__job__scan__OAUTH_ENABLED",
+			value:  "true",
+			want:   "true",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -531,6 +579,31 @@ func TestRedactString_InterpolationDefaults(t *testing.T) {
 			name:  "no default unchanged",
 			input: "app.env references ${API_TOKEN}",
 			want:  "app.env references ${API_TOKEN}",
+		},
+		{
+			name:  "nested default masked through matching brace",
+			input: "app.env references ${A_TOKEN:-${B}-real-secret}",
+			want:  "app.env references ${A_TOKEN:-<redacted>}",
+		},
+		{
+			name:  "author var default kept",
+			input: "app.env references ${AUTHOR:-someone}",
+			want:  "app.env references ${AUTHOR:-someone}",
+		},
+		{
+			name:  "oauth enabled flag default kept",
+			input: "app.env references ${OAUTH_ENABLED:-true}",
+			want:  "app.env references ${OAUTH_ENABLED:-true}",
+		},
+		{
+			name:  "empty default unchanged",
+			input: "app.env references ${API_TOKEN:-}",
+			want:  "app.env references ${API_TOKEN:-}",
+		},
+		{
+			name:  "unbalanced interpolation left intact",
+			input: "app.env references ${API_TOKEN:-broken",
+			want:  "app.env references ${API_TOKEN:-broken",
 		},
 	}
 	for _, tc := range cases {
