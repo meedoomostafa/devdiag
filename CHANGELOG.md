@@ -25,7 +25,9 @@ this file tracks the highlights.
   `check containers`; `medium` for Dockerfile-only repos.
 - The GitHub Action stamps real versions into reports (action-ref fallback
   for tarball-extracted action paths); runner reports no longer say `dev`.
-- The mutable `latest` tag is gone; pin `@v0` or a full commit SHA.
+- `latest` is now a release-pipeline-owned alias moved atomically with
+  `v0`, only after a release fully publishes; pin `@v0`, `@latest`, or a
+  full commit SHA (SHA recommended for security-sensitive use).
 
 ## v0.4.0 — 2026-07-26
 
