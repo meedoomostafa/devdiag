@@ -2519,24 +2519,24 @@ func TestTraceCommand_EBPFBackendCapabilitiesMissing_FallsBackToStrace(t *testin
 	if _, err := exec.LookPath("strace"); err != nil {
 		t.Skip("strace not installed on host; skipping fallback validation")
 	}
-	
+
 	workDir := t.TempDir()
 	stdout, stderr, code := runBinaryInDir(workDir, "trace", "--backend", "ebpf", "--scope", "file,network", "--format", "json", "--", "true")
-	
+
 	if code != 0 {
 		t.Fatalf("expected graceful fallback to strace to succeed with exit code 0, got %d; stderr=%s", code, stderr)
 	}
-	
+
 	var report schema.Report
 	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
 		t.Fatalf("stdout is not valid JSON: %v", err)
 	}
-	
+
 	collector := findReportCollector(t, report, "trace")
 	if collector.Status != schema.CollectorOK {
 		t.Fatalf("expected collector status OK after strace fallback, got %s", collector.Status)
 	}
-	
+
 	assertCollectorEvidence(t, collector, "trace_backend", "strace")
 	assertCollectorEvidenceSource(t, collector, "trace_self_binary_path")
 }
@@ -4081,13 +4081,13 @@ func TestTraceCommand_EBPFBackendCapabilitiesMissing_PromptsAndRetries(t *testin
 			}, nil
 		}
 		return &trace.Result{
-			Command:           command,
-			Args:              args,
-			Scopes:            scopes,
-			Backend:           string(trace.BackendEBPF),
-			Events:            []trace.Event{{Syscall: "openat", Result: "3"}},
-			TraceUnavailable:  false,
-			ExitCode:          0,
+			Command:          command,
+			Args:             args,
+			Scopes:           scopes,
+			Backend:          string(trace.BackendEBPF),
+			Events:           []trace.Event{{Syscall: "openat", Result: "3"}},
+			TraceUnavailable: false,
+			ExitCode:         0,
 		}, nil
 	}
 	defer func() { runTraceEBPF = oldRunTraceEBPF }()

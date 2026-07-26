@@ -216,5 +216,3 @@ func TestWriteCache_Permissions(t *testing.T) {
 		t.Errorf("Repaired manifest file perm = %o, want 0600", perm)
 	}
 }
-
-

@@ -163,7 +163,7 @@ match modes (ID-only or fingerprint), status (active or expired), creation info,
 
   # List baseline entries for a project at a specific path
   devdiag baseline list /path/to/project`,
-	Args:  cobra.MaximumNArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 
@@ -232,7 +232,7 @@ Returns a non-zero exit code if the file does not exist, is malformed, or contai
 
   # Validate the baseline file in a custom directory
   devdiag baseline validate /path/to/project`,
-	Args:  cobra.MaximumNArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 
@@ -261,13 +261,13 @@ Returns a non-zero exit code if the file does not exist, is malformed, or contai
 var baselinePathCmd = &cobra.Command{
 	Use:   "path [path]",
 	Short: "Print the absolute path to the baseline file",
-	Long: `Print the absolute path to the baseline file for the target directory.`,
+	Long:  `Print the absolute path to the baseline file for the target directory.`,
 	Example: `  # Print the baseline path for the current directory
   devdiag baseline path
 
   # Print the baseline path for a custom directory
   devdiag baseline path /path/to/project`,
-	Args:  cobra.MaximumNArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 
@@ -297,7 +297,7 @@ and whether the file schema is valid.`,
 
   # Show baseline status for a custom directory
   devdiag baseline status /path/to/project`,
-	Args:  cobra.MaximumNArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 
@@ -367,7 +367,7 @@ This command modifies the baseline file in place.`,
 
   # Prune expired entries from a baseline file in a custom directory
   devdiag baseline prune /path/to/project`,
-	Args:  cobra.MaximumNArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 
@@ -415,7 +415,7 @@ its reason, expiry, and author will be updated.`,
 
   # Suppress F-ENV-001 matching only a specific instance fingerprint
   devdiag baseline add F-ENV-001 --reason "Exclude dev port mismatch" --fingerprint e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`,
-	Args:  cobra.RangeArgs(1, 2),
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 
@@ -506,7 +506,7 @@ Requires an exact match on finding ID and fingerprint.`,
 
   # Remove the fingerprint-specific suppression for F-ENV-001
   devdiag baseline remove F-ENV-001 --fingerprint e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`,
-	Args:  cobra.RangeArgs(1, 2),
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 
@@ -574,7 +574,7 @@ Prints to stdout by default, or writes to a file with secure (0600) permissions 
 
   # Export the current baseline to a file in YAML format
   devdiag baseline export --format yaml --output shared-baseline.yaml`,
-	Args:  cobra.MaximumNArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 
@@ -638,7 +638,7 @@ Entries with unique ID+fingerprint combinations are appended. Overlapping entrie
 
   # Import entries from a shared baseline file into a target directory's baseline
   devdiag baseline import ./team-baseline.yaml /path/to/project`,
-	Args:  cobra.RangeArgs(1, 2),
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
 
