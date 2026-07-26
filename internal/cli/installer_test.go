@@ -65,6 +65,10 @@ func runShellFunctionTest(t *testing.T, testBody string) string {
 	}
 
 	cmd := exec.Command("bash", tmpFile)
+	// The sourced prelude includes the top-level "latest" resolution block;
+	// pin a version so shell-function tests never hit the live GitHub API
+	// (403 rate limits on shared runners made this flake).
+	cmd.Env = append(os.Environ(), "DEVDIAG_INSTALL_VERSION=v0.0.0-test")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
