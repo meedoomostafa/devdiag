@@ -91,8 +91,13 @@ REPORT_DIR="${RUNNER_TEMP:-/tmp}/devdiag-artifacts"
 REPORT_PATH="${REPORT_DIR}/devdiag-report.json"
 mkdir -p "${REPORT_DIR}"
 # Remove any artifact left by a previous invocation sharing RUNNER_TEMP so a
-# failed scan in this invocation can never advertise a stale report as its own.
-rm -f "${REPORT_PATH}"
+# failed scan in this invocation can never advertise a stale report as its
+# own. Scoped to save-report mode: a save-report=false invocation neither
+# produces nor consumes REPORT_PATH, so it must not destroy an earlier
+# invocation's already-uploaded artifact either.
+if [ "${SAVE_REPORT_ENABLED}" = "true" ]; then
+  rm -f "${REPORT_PATH}"
+fi
 
 # Check if .devdiag existed beforehand
 HAD_DEVDIAG=true
@@ -102,9 +107,12 @@ fi
 
 # Record run dirs that existed before the scan; pre-existing runs (committed
 # .devdiag dirs, reused self-hosted workspaces) must never be selected as this
-# scan's report, regardless of their mtimes.
-PREEXISTING_RUNS_FILE="${RUNNER_TEMP:-/tmp}/devdiag-preexisting-runs.$$"
-: > "${PREEXISTING_RUNS_FILE}"
+# scan's report, regardless of their mtimes. mktemp + EXIT trap: unpredictable
+# name (no preseeded-symlink window on shared runners) and no residue on
+# early set -e exits.
+PREEXISTING_RUNS_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/devdiag-preexisting-runs.XXXXXX")"
+SCAN_STDOUT_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/devdiag-scan-stdout.XXXXXX")"
+trap 'rm -f "${PREEXISTING_RUNS_FILE}" "${SCAN_STDOUT_FILE}"' EXIT
 if [ -d "${PATH_ARG:-.}/.devdiag/runs" ]; then
   for prerun in "${PATH_ARG:-.}"/.devdiag/runs/*/; do
     [ -d "$prerun" ] && printf '%s\n' "$prerun" >> "${PREEXISTING_RUNS_FILE}"
@@ -114,11 +122,13 @@ fi
 if [ "${SAVE_REPORT_ENABLED}" = "true" ]; then
   # Run scan once with json format, fail-severity off, saving report.
   # Forward include-hidden so that hidden findings are actually persisted.
+  # Stdout is kept so the run ID can be extracted for exact report
+  # attribution (no mtime heuristics, no cross-invocation races).
   SCAN_ARGS=("--format" "json" "--redact" "${REDACT:-default}" "--fail-severity" "off" "--save-report")
   SCAN_ARGS+=("${PROFILE_ARGS[@]}" "${RULE_PACK_ARGS[@]}" "${CI_ARGS[@]}" "${HIDDEN_ARGS[@]}" -- "${PATH_ARG:-.}")
 
   set +e
-  devdiag scan "${SCAN_ARGS[@]}" >/dev/null
+  devdiag scan "${SCAN_ARGS[@]}" > "${SCAN_STDOUT_FILE}"
   SCAN_EXIT=$?
   set -e
 else
@@ -134,24 +144,37 @@ fi
 
 LATEST_REPORT=""
 # Find the report saved by THIS scan and copy it to the deterministic
-# REPORT_PATH. Only run dirs created during this invocation are candidates;
-# among them the newest mtime wins.
+# REPORT_PATH. Primary attribution is exact: the scan's own JSON stdout
+# carries run_id, and the saved report lives at .devdiag/runs/<run_id>/.
+# Fallback (stdout unparsable): newest run dir that did not exist before
+# this scan. Pre-existing runs are never candidates.
 if [ "${SAVE_REPORT_ENABLED}" = "true" ] && [ -d "${PATH_ARG:-.}/.devdiag/runs" ]; then
-  latest_mtime=0
-  for rundir in "${PATH_ARG:-.}"/.devdiag/runs/*/; do
-    [ -d "$rundir" ] || continue
-    if grep -Fxq "$rundir" "${PREEXISTING_RUNS_FILE}"; then
-      continue
-    fi
-    rep="${rundir}report.json"
-    if [ -f "$rep" ]; then
-      mtime=$(stat -c %Y "$rep" 2>/dev/null || stat -f %m "$rep" 2>/dev/null || echo 0)
-      if [ "$mtime" -gt "$latest_mtime" ]; then
-        latest_mtime="$mtime"
-        LATEST_REPORT="$rep"
+  RUN_ID=""
+  if [ -s "${SCAN_STDOUT_FILE}" ]; then
+    RUN_ID=$(sed -n 's/.*"run_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${SCAN_STDOUT_FILE}" | head -n1)
+  fi
+  if [ -n "$RUN_ID" ] && [ -f "${PATH_ARG:-.}/.devdiag/runs/${RUN_ID}/report.json" ]; then
+    LATEST_REPORT="${PATH_ARG:-.}/.devdiag/runs/${RUN_ID}/report.json"
+  else
+    latest_mtime=0
+    for rundir in "${PATH_ARG:-.}"/.devdiag/runs/*/; do
+      [ -d "$rundir" ] || continue
+      # Symlinked run dirs are never legitimate scan output; skip them so a
+      # crafted workspace cannot redirect discovery outside .devdiag/runs.
+      [ -L "${rundir%/}" ] && continue
+      if grep -Fxq -- "$rundir" "${PREEXISTING_RUNS_FILE}"; then
+        continue
       fi
-    fi
-  done
+      rep="${rundir}report.json"
+      if [ -f "$rep" ] && [ ! -L "$rep" ]; then
+        mtime=$(stat -c %Y "$rep" 2>/dev/null || stat -f %m "$rep" 2>/dev/null || echo 0)
+        if [ "$mtime" -gt "$latest_mtime" ]; then
+          latest_mtime="$mtime"
+          LATEST_REPORT="$rep"
+        fi
+      fi
+    done
+  fi
 
   if [ -n "$LATEST_REPORT" ] && [ -f "$LATEST_REPORT" ]; then
     echo "Copying report from ${LATEST_REPORT} to ${REPORT_PATH}" >&2
@@ -160,7 +183,6 @@ if [ "${SAVE_REPORT_ENABLED}" = "true" ] && [ -d "${PATH_ARG:-.}/.devdiag/runs" 
     echo "Warning: no saved report found under ${PATH_ARG:-.}/.devdiag/runs" >&2
   fi
 fi
-rm -f "${PREEXISTING_RUNS_FILE}"
 
 # Clean up .devdiag if it did not exist before scan
 if [ "${HAD_DEVDIAG}" = "false" ] && [ -d "${PATH_ARG:-.}/.devdiag" ]; then

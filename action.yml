@@ -86,17 +86,17 @@ runs:
         fi
         # Building from source requires the go.mod toolchain floor, not just
         # any Go: a self-hosted runner with an older Go must not skip setup.
+        # Fail closed: unparsable go.mod, devel toolchains, or any non-release
+        # GOVERSION all fall through to setup-go.
         REQUIRED_GO="$(sed -n 's/^go \([0-9.]*\).*/\1/p' "$GITHUB_ACTION_PATH/go.mod" 2>/dev/null || true)"
         GO_OK=false
-        if command -v go >/dev/null 2>&1; then
-          INSTALLED_GO="$(go env GOVERSION | sed 's/^go//')"
-          if [ -n "$REQUIRED_GO" ]; then
+        if [ -n "$REQUIRED_GO" ] && command -v go >/dev/null 2>&1; then
+          INSTALLED_GO="$(go env GOVERSION | sed -n 's/^go\([0-9][0-9.]*\)$/\1/p')"
+          if [ -n "$INSTALLED_GO" ]; then
             LOWEST="$(printf '%s\n%s\n' "$REQUIRED_GO" "$INSTALLED_GO" | sort -V | head -n1)"
             if [ "$LOWEST" = "$REQUIRED_GO" ]; then
               GO_OK=true
             fi
-          else
-            GO_OK=true
           fi
         fi
         echo "go-found=$GO_OK" >> "$GITHUB_OUTPUT"

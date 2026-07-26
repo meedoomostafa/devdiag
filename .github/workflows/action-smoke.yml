@@ -115,6 +115,36 @@ jobs:
             fi
           done
           jq -e '.collectors and .findings' "$report"
+          # Prove the canary-bearing evidence paths were exercised, so the
+          # absence checks above cannot pass vacuously after a collection
+          # regression.
+          grep -q 'AWS_SECRET_ACCESS_KEY' "$report"
+          grep -q 'docker-compose' "$report"
+
+      # Positive control: with redaction off the canaries MUST appear,
+      # proving each one actually reaches the collectors.
+      - id: control
+        uses: ./
+        with:
+          path: ${{ runner.temp }}/devdiag-canary-fixture
+          format: github
+          save-report: 'true'
+          fail-severity: off
+          include-hidden: 'true'
+          redact: 'off'
+          artifact-name: devdiag-canary-control
+
+      - name: Assert positive control sees all canaries
+        shell: bash
+        run: |
+          control='${{ steps.control.outputs.report-path }}'
+          test -f "$control"
+          for canary in CANARYAWSKEYabcdef1234567890 CANARYURLSECRET CANARYCOMPOSEDEFAULT; do
+            if ! grep -q "$canary" "$control"; then
+              echo "positive control failed: $canary never reached collectors" >&2
+              exit 1
+            fi
+          done
 
   error-propagation:
     name: Scan errors propagate through the action
@@ -141,14 +171,24 @@ jobs:
           test "${{ steps.badpath.outputs.report-uploaded }}" = "false"
           test -z "${{ steps.badpath.outputs.report-path }}"
 
+      - name: Create findings fixture
+        shell: bash
+        run: |
+          fixture="$RUNNER_TEMP/devdiag-findings-fixture"
+          mkdir -p "$fixture"
+          printf 'API_KEY=\nDB_URL=\n' > "$fixture/.env.example"
+          printf 'UNRELATED=1\n' > "$fixture/.env"
+          printf '18\n' > "$fixture/.nvmrc"
+
       - id: threshold
         uses: ./
         continue-on-error: true
         with:
-          path: .
+          path: ${{ runner.temp }}/devdiag-findings-fixture
           save-report: 'true'
           fail-severity: info
           include-hidden: 'true'
+          artifact-name: devdiag-threshold-report
 
       - name: Assert findings threshold fails the action with a report
         shell: bash
@@ -157,5 +197,11 @@ jobs:
             echo "expected threshold step to fail, got ${{ steps.threshold.outcome }}" >&2
             exit 1
           fi
+          # Failure must come from the findings threshold (render exit 1),
+          # not from an operational error masquerading as a pass.
+          test "${{ steps.threshold.outputs.scan-exit-code }}" = "0"
+          test "${{ steps.threshold.outputs.render-exit-code }}" = "1"
           test "${{ steps.threshold.outputs.report-uploaded }}" = "true"
-          test -f '${{ steps.threshold.outputs.report-path }}'
+          report='${{ steps.threshold.outputs.report-path }}'
+          test -f "$report"
+          jq -e '.findings | length > 0' "$report"
