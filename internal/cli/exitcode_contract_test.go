@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
@@ -82,16 +83,28 @@ func TestExitCodeContract(t *testing.T) {
 			want: exitcode.InvalidInput,
 		},
 		{
-			name: "trace unavailable binary",
-			dir:  cleanDir,
-			args: []string{"trace", "nosuchbinary-devdiag-contract"},
-			want: exitcode.ReproFailed,
-		},
-		{
 			name: "help exits success",
 			dir:  cleanDir,
 			args: []string{"--help"},
 			want: exitcode.Success,
+		},
+		{
+			name: "missing flag value",
+			dir:  cleanDir,
+			args: []string{"scan", ".", "--format"},
+			want: exitcode.InvalidInput,
+		},
+		{
+			name: "unknown shorthand flag",
+			dir:  cleanDir,
+			args: []string{"scan", ".", "-Z"},
+			want: exitcode.InvalidInput,
+		},
+		{
+			name: "positional arg count violation",
+			dir:  cleanDir,
+			args: []string{"agent", "run"},
+			want: exitcode.InvalidInput,
 		},
 	}
 
@@ -109,6 +122,19 @@ func TestExitCodeContract(t *testing.T) {
 				t.Errorf("exit code = %d, want %d (%s); stderr: %s", code, tc.want.Int(), tc.name, stderr)
 			}
 		})
+	}
+}
+
+// TestExitCodeContract_TraceMissingBinary accepts either failure code: on
+// hosts with a working trace backend the missing binary reaches repro and
+// exits 6; when strace/ptrace is unavailable the backend check fires first
+// and exits 7. Both are contract-valid; success or other codes are not.
+func TestExitCodeContract_TraceMissingBinary(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := runBinaryInDir(dir, "trace", "nosuchbinary-devdiag-contract")
+	if code != exitcode.ReproFailed.Int() && code != exitcode.TraceUnavailable.Int() {
+		t.Fatalf("trace missing binary exit = %d, want %d or %d; stderr: %s",
+			code, exitcode.ReproFailed.Int(), exitcode.TraceUnavailable.Int(), stderr)
 	}
 }
 
@@ -144,20 +170,30 @@ func TestExitCodeContract_FixUnknownFindingIsInvalidInput(t *testing.T) {
 	if code != exitcode.InvalidInput.Int() {
 		t.Fatalf("fix unknown finding exit = %d, want %d; stderr: %s", code, exitcode.InvalidInput.Int(), stderr)
 	}
+
+	// Documented contract: with --fresh the same miss exits 0, because fresh
+	// mode revalidates and a now-absent finding means "nothing to fix".
+	stdout, stderr, code := runBinaryInDir(dir, "fix", "F-NO-SUCH-FINDING", "--dry-run", "--fresh")
+	if code != exitcode.Success.Int() {
+		t.Fatalf("fix --fresh unknown finding exit = %d, want %d; stderr: %s", code, exitcode.Success.Int(), stderr)
+	}
+	if !strings.Contains(stdout, "No fix proposals") {
+		t.Fatalf("fix --fresh unknown finding should report no proposals, got: %s", stdout)
+	}
 }
 
 func TestExitCodeContract_ScanSaveReportPersistFailure(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("running as root; directory permissions are not enforced")
-	}
 	dir := t.TempDir()
-	// Read-only .devdiag: baseline loading succeeds (no baseline.yaml), but
-	// persistReport cannot create the runs directory.
+	// A regular file at .devdiag/runs makes the run-dir creation fail with
+	// ENOTDIR regardless of privileges (works under root too, unlike mode
+	// bits), while baseline loading still succeeds.
 	devdiagDir := filepath.Join(dir, ".devdiag")
-	if err := os.Mkdir(devdiagDir, 0555); err != nil {
+	if err := os.Mkdir(devdiagDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(devdiagDir, 0755) })
+	if err := os.WriteFile(filepath.Join(devdiagDir, "runs"), []byte("not a dir"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	_, stderr, code := runBinaryInDir(dir, "scan", ".", "--save-report", "--format", "json")
 	if code != exitcode.InternalError.Int() {
 		t.Fatalf("scan --save-report with unwritable .devdiag exit = %d, want %d; stderr: %s", code, exitcode.InternalError.Int(), stderr)

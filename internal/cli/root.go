@@ -55,6 +55,12 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
+	// Flag parse failures (unknown flag, bad syntax, missing value) are user
+	// invocation errors; type them at the source so Execute() maps them to
+	// InvalidInput without guessing from message content.
+	rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+	})
 	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "human", "Output format: human, json, ndjson, markdown, github")
 	rootCmd.PersistentFlags().StringVar(&flagRedact, "redact", "default", "Redaction level: default, strict, off")
 	rootCmd.PersistentFlags().BoolVar(&flagDebug, "debug", false, "Enable debug/trace logs")
@@ -88,26 +94,21 @@ func Execute() int {
 	return exitcode.Success.Int()
 }
 
-// isUsageError classifies cobra argument/flag parse failures. These are user
-// invocation mistakes (unknown flag, unknown subcommand, bad arg count) and
-// must map to InvalidInput, not InternalError, per the exit-code contract.
+// isUsageError classifies cobra usage failures that cannot be typed at the
+// source: unknown subcommands and positional-arg count violations. Flag parse
+// errors are wrapped as exitCodeError by the FlagErrorFunc installed in
+// init(), so no content-ambiguous markers (like "invalid argument", which
+// also appears in EINVAL syscall errors) are needed here.
 func isUsageError(err error) bool {
 	msg := err.Error()
-	for _, marker := range []string{
-		"unknown flag:",
-		"unknown shorthand flag:",
-		"unknown command",
-		"invalid argument",
-		"flag needs an argument:",
-		"accepts at most",
-		"accepts at least",
-		"requires at least",
-		"requires at most",
-		"accepts between",
-	} {
-		if strings.Contains(msg, marker) {
-			return true
-		}
+	// "unknown command %q for %q" — cobra command routing.
+	if strings.Contains(msg, "unknown command") {
+		return true
+	}
+	// cobra arg validators (ExactArgs, MinimumNArgs, MaximumNArgs,
+	// RangeArgs) all phrase violations with "arg(s)".
+	if strings.Contains(msg, "arg(s)") {
+		return true
 	}
 	return false
 }

@@ -1,6 +1,7 @@
 package fix
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,10 @@ import (
 
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
+
+// ErrFindingNotFound marks planning requests for a finding ID absent from
+// the report. Callers map it to the InvalidInput exit code.
+var ErrFindingNotFound = errors.New("finding not found in report")
 
 // Planner resolves finding fix_hints against the registry and produces proposals.
 type Planner struct {
@@ -45,7 +50,7 @@ func (p *Planner) Resolve(report *schema.Report, opts ResolveOptions) ([]schema.
 		}
 	}
 	if target == nil {
-		return nil, fmt.Errorf("finding %q not found in report", opts.FindingID)
+		return nil, fmt.Errorf("finding %q: %w", opts.FindingID, ErrFindingNotFound)
 	}
 
 	// Build evidence lookup

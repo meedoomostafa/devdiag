@@ -103,8 +103,13 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 		return nil, nil
 	}
 
-	// For apply operations, ensure audit is writable first.
+	// For apply operations, ensure audit is writable first. An unwritable
+	// audit log is a privilege problem at the boundary, not an internal
+	// fault; tag it so the CLI maps it to PermissionDenied.
 	if err := e.PreflightAudit(proposal); err != nil {
+		if os.IsPermission(err) || errors.Is(err, os.ErrPermission) {
+			return nil, fmt.Errorf("audit log unavailable, refusing apply: %v: %w", err, ErrPermissionDenied)
+		}
 		return nil, fmt.Errorf("audit log unavailable, refusing apply: %w", err)
 	}
 
@@ -256,6 +261,9 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 				execution.Error = msg
 			}
 			execution.Success = false
+			// An audit failure is an internal fault and outranks the
+			// command's own permission classification.
+			permissionDenied = false
 		}
 	}
 

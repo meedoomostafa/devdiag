@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -81,7 +80,7 @@ func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger) error 
 		},
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "not found in report") {
+		if errors.Is(err, fix.ErrFindingNotFound) {
 			if fixFresh {
 				fmt.Fprintf(cmd.OutOrStdout(), "No fix proposals for finding %s.\n", findingID)
 				return nil
