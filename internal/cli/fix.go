@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -80,9 +81,15 @@ func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger) error 
 		},
 	})
 	if err != nil {
-		if fixFresh && strings.Contains(err.Error(), "not found in report") {
-			fmt.Fprintf(cmd.OutOrStdout(), "No fix proposals for finding %s.\n", findingID)
-			return nil
+		if strings.Contains(err.Error(), "not found in report") {
+			if fixFresh {
+				fmt.Fprintf(cmd.OutOrStdout(), "No fix proposals for finding %s.\n", findingID)
+				return nil
+			}
+			// A finding ID absent from a valid report is a user-selection
+			// error (typo, stale ID), not an internal failure.
+			logger.Error("fix", fmt.Sprintf("planning failed: %v", err))
+			return exitCodeError{code: exitcode.InvalidInput}
 		}
 		logger.Error("fix", fmt.Sprintf("planning failed: %v", err))
 		return exitCodeError{code: exitcode.InternalError}
@@ -120,6 +127,7 @@ func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger) error 
 
 	refused := false
 	internalErr := false
+	permDenied := false
 	// Apply if requested
 	if fixApply {
 		for _, p := range proposals {
@@ -131,8 +139,10 @@ func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger) error 
 			})
 			if err != nil {
 				logger.Error("fix", fmt.Sprintf("apply failed for %s: %v", p.HintID, err))
-				switch p.Class {
-				case schema.FixBlocked, schema.FixManual, schema.FixGuarded:
+				switch {
+				case errors.Is(err, fix.ErrPermissionDenied):
+					permDenied = true
+				case p.Class == schema.FixBlocked || p.Class == schema.FixManual || p.Class == schema.FixGuarded:
 					refused = true
 				default:
 					internalErr = true
@@ -141,7 +151,7 @@ func runFix(cmd *cobra.Command, findingID string, logger *logging.Logger) error 
 		}
 	}
 
-	code := exitCodeFromFixResults(true, refused, internalErr)
+	code := exitCodeFromFixResults(true, refused, internalErr, permDenied)
 	if code != exitcode.Success {
 		return exitCodeError{code: code}
 	}
@@ -177,7 +187,7 @@ func runFixList(cmd *cobra.Command, logger *logging.Logger) error {
 	if err := renderer.Render(proposals, cmd.OutOrStdout()); err != nil {
 		return err
 	}
-	code := exitCodeFromFixResults(true, false, false)
+	code := exitCodeFromFixResults(true, false, false, false)
 	if code != exitcode.Success {
 		return exitCodeError{code: code}
 	}

@@ -222,9 +222,12 @@ func parseFailSeverityThreshold(v string) (schema.Severity, bool, bool) {
 //	4 = permission denied during apply
 //	5 = unsafe operation refused
 //	8 = internal error.
-func exitCodeFromFixResults(reportFound bool, blocked bool, internalErr bool) exitcode.Code {
+func exitCodeFromFixResults(reportFound bool, blocked bool, internalErr bool, permDenied bool) exitcode.Code {
 	if internalErr {
 		return exitcode.InternalError
+	}
+	if permDenied {
+		return exitcode.PermissionDenied
 	}
 	if blocked {
 		return exitcode.UnsafeRefused

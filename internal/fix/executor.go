@@ -3,6 +3,7 @@ package fix
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,11 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
+
+// ErrPermissionDenied marks fix executions that failed because the fix
+// command could not be run with the current privileges. Callers map it to
+// the PermissionDenied exit code.
+var ErrPermissionDenied = errors.New("fix permission denied")
 
 // ExecutorOptions controls execution behavior.
 type ExecutorOptions struct {
@@ -213,6 +219,7 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 	execution.Stdout = redact(res.Stdout)
 	execution.Stderr = redact(res.Stderr)
 	execution.ExitCode = res.ExitCode
+	permissionDenied := false
 	switch {
 	case res.TimedOut:
 		execution.Success = false
@@ -223,6 +230,7 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 	case res.PermissionDenied:
 		execution.Success = false
 		execution.Error = fmt.Sprintf("permission denied running %s", bin)
+		permissionDenied = true
 	case res.ExitCode != 0:
 		execution.Success = false
 		execution.Error = redact(fmt.Sprintf("command exited with code %d", res.ExitCode))
@@ -252,6 +260,9 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 	}
 
 	if !execution.Success {
+		if permissionDenied {
+			return execution, fmt.Errorf("fix execution failed: %s: %w", execution.Error, ErrPermissionDenied)
+		}
 		return execution, fmt.Errorf("fix execution failed: %s", execution.Error)
 	}
 	return execution, nil
