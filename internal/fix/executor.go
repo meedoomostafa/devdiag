@@ -3,6 +3,7 @@ package fix
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,11 @@ import (
 	"github.com/meedoomostafa/devdiag/internal/cmdrunner"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
+
+// ErrPermissionDenied marks fix executions that failed because the fix
+// command could not be run with the current privileges. Callers map it to
+// the PermissionDenied exit code.
+var ErrPermissionDenied = errors.New("fix permission denied")
 
 // ExecutorOptions controls execution behavior.
 type ExecutorOptions struct {
@@ -97,8 +103,13 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 		return nil, nil
 	}
 
-	// For apply operations, ensure audit is writable first.
+	// For apply operations, ensure audit is writable first. An unwritable
+	// audit log is a privilege problem at the boundary, not an internal
+	// fault; tag it so the CLI maps it to PermissionDenied.
 	if err := e.PreflightAudit(proposal); err != nil {
+		if os.IsPermission(err) || errors.Is(err, os.ErrPermission) {
+			return nil, fmt.Errorf("audit log unavailable, refusing apply: %v: %w", err, ErrPermissionDenied)
+		}
 		return nil, fmt.Errorf("audit log unavailable, refusing apply: %w", err)
 	}
 
@@ -213,6 +224,7 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 	execution.Stdout = redact(res.Stdout)
 	execution.Stderr = redact(res.Stderr)
 	execution.ExitCode = res.ExitCode
+	permissionDenied := false
 	switch {
 	case res.TimedOut:
 		execution.Success = false
@@ -223,6 +235,7 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 	case res.PermissionDenied:
 		execution.Success = false
 		execution.Error = fmt.Sprintf("permission denied running %s", bin)
+		permissionDenied = true
 	case res.ExitCode != 0:
 		execution.Success = false
 		execution.Error = redact(fmt.Sprintf("command exited with code %d", res.ExitCode))
@@ -248,10 +261,16 @@ func (e *Executor) Execute(ctx context.Context, proposal schema.FixProposal, opt
 				execution.Error = msg
 			}
 			execution.Success = false
+			// An audit failure is an internal fault and outranks the
+			// command's own permission classification.
+			permissionDenied = false
 		}
 	}
 
 	if !execution.Success {
+		if permissionDenied {
+			return execution, fmt.Errorf("fix execution failed: %s: %w", execution.Error, ErrPermissionDenied)
+		}
 		return execution, fmt.Errorf("fix execution failed: %s", execution.Error)
 	}
 	return execution, nil

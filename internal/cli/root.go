@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -54,6 +55,12 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
+	// Flag parse failures (unknown flag, bad syntax, missing value) are user
+	// invocation errors; type them at the source so Execute() maps them to
+	// InvalidInput without guessing from message content.
+	rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+	})
 	rootCmd.PersistentFlags().StringVar(&flagFormat, "format", "human", "Output format: human, json, ndjson, markdown, github")
 	rootCmd.PersistentFlags().StringVar(&flagRedact, "redact", "default", "Redaction level: default, strict, off")
 	rootCmd.PersistentFlags().BoolVar(&flagDebug, "debug", false, "Enable debug/trace logs")
@@ -79,9 +86,39 @@ func Execute() int {
 			return ec.Code()
 		}
 		fmt.Fprintf(os.Stderr, "devdiag: %v\n", err)
+		if isUsageError(err) {
+			return exitcode.InvalidInput.Int()
+		}
 		return exitcode.InternalError.Int()
 	}
 	return exitcode.Success.Int()
+}
+
+// isUsageError classifies cobra usage failures that cannot be typed at the
+// source: unknown subcommands and positional-arg count violations. Flag parse
+// errors are wrapped as exitCodeError by the FlagErrorFunc installed in
+// init(), so no content-ambiguous markers (like "invalid argument", which
+// also appears in EINVAL syscall errors) are needed here.
+//
+// The matched phrasings are an implicit contract with un-exported cobra
+// strings, stable from cobra v1.1.1 through current main:
+//   - "unknown command %q for %q" — command.go findNext/ExecuteC routing
+//   - "...arg(s)..." — args.go ExactArgs/MinimumNArgs/MaximumNArgs/RangeArgs
+//
+// The contract test (exitcode_contract_test.go) pins these cases end-to-end,
+// so a cobra upgrade that rewords them fails CI loudly instead of silently
+// degrading to InternalError. OnlyValidArgs/ExactValidArgs phrase violations
+// differently ("invalid argument %q for %q") and are intentionally NOT
+// matched; if adopted, type their errors at the source instead.
+func isUsageError(err error) bool {
+	msg := err.Error()
+	if strings.Contains(msg, "unknown command") {
+		return true
+	}
+	if strings.Contains(msg, "arg(s)") {
+		return true
+	}
+	return false
 }
 
 func validateFormat(v string) error {

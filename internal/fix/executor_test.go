@@ -2,6 +2,7 @@ package fix
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -60,6 +61,9 @@ func TestExecutorPermissionDeniedReportedAsFailure(t *testing.T) {
 	exec, err := executor.Execute(context.Background(), proposal, ExecutorOptions{Apply: true})
 	if err == nil {
 		t.Fatal("expected error for permission-denied fix")
+	}
+	if !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("expected error wrapping ErrPermissionDenied, got %v", err)
 	}
 	if exec == nil || exec.Success {
 		t.Fatalf("expected failed execution, got %#v", exec)
