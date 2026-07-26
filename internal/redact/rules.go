@@ -24,11 +24,13 @@ var defaultRuleNames = []string{
 	"env_values",
 	"secret_key_values",
 	"cli_secret_flags",
+	"interpolation_defaults",
 	"quoted_key_material",
 	"url_credentials",
 	"bearer_tokens",
 	"jwt_tokens",
 	"home_directory",
+	"evidence_secret_sources",
 }
 
 // RuleNames returns the names of the redaction rules active at the given
@@ -75,6 +77,18 @@ var (
 	// Quoted values ("multi word" / 'multi word') are consumed entirely.
 	// Case-insensitive via (?i:...).
 	cliSecretPattern = regexp.MustCompile(`(?i)(--(?:password|token|api[-_]key|client[-_]secret|secret|auth[-_]token)(?:=|\s+))("[^"]*"|'[^']*'|[^\s]+)`)
+	// interpolationDefaultPattern matches shell/compose variable interpolation
+	// with inline defaults (${VAR:-default} / ${VAR-default}) whose variable
+	// name indicates secret material. The literal default value is masked
+	// because it frequently carries real fallback credentials copied from
+	// docker-compose files into collector evidence.
+	interpolationDefaultPattern = regexp.MustCompile(`(?i)(\$\{[A-Z0-9_]*(?:password|passwd|secret|token|api_?key|credential|auth)[A-Z0-9_]*:?-)([^}]+)(\})`)
+	// secretSourceKeyPattern matches evidence Source identifiers whose trailing
+	// key segment names secret material (ci_env__job__scan__AWS_SECRET_ACCESS_KEY,
+	// ci_env__workflow__NPM_TOKEN, ...). Evidence values are bare (no KEY=VALUE
+	// context), so content patterns cannot fire; the source name is the only
+	// reliable signal that the value is secret-bearing.
+	secretSourceKeyPattern = regexp.MustCompile(`(?i)(?:^|_)(?:[A-Z0-9]*_)*(?:password|passwd|secret|token|api_?key|credential|auth)(?:_[A-Z0-9_]*)?$`)
 )
 
 // homeDir caches the user's home directory.
@@ -133,4 +147,16 @@ func redactEnvValues(input string) string {
 // redactCLISecrets replaces values after common secret-bearing CLI flags.
 func redactCLISecrets(input string) string {
 	return cliSecretPattern.ReplaceAllString(input, "${1}<redacted>")
+}
+
+// redactInterpolationDefaults masks literal fallback values in secret-named
+// variable interpolations such as ${API_TOKEN:-realvalue}.
+func redactInterpolationDefaults(input string) string {
+	return interpolationDefaultPattern.ReplaceAllString(input, "${1}<redacted>${3}")
+}
+
+// isSecretSource reports whether an evidence Source identifier names secret
+// material in its trailing key segment.
+func isSecretSource(source string) bool {
+	return secretSourceKeyPattern.MatchString(source)
 }
