@@ -1,0 +1,62 @@
+name: Bug report
+description: Something misbehaves, crashes, or returns the wrong exit code
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. If this is a **security issue** (especially a
+        redaction bypass), please use
+        [private vulnerability reporting](https://github.com/meedoomostafa/devdiag/security/advisories/new)
+        instead of a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: DevDiag version
+      description: Output of the `devdiag_version` field in a report, or the release tag
+      placeholder: v0.5.0
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did it happen?
+      options:
+        - CLI (scan/check/fix/baseline/...)
+        - GitHub Action
+        - install.sh / update
+        - TUI (inspect)
+        - Remote (ssh/container/k8s)
+        - Trace
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact command(s) and a minimal fixture layout if relevant
+      placeholder: |
+        1. devdiag scan . --format json
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual behavior
+      description: Include the exit code if it matters (`echo $?`)
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant output
+      description: |
+        Paste redacted output. DevDiag redacts by default, but double-check
+        before pasting: never include raw secrets.
+      render: text
+  - type: input
+    id: os
+    attributes:
+      label: OS / environment
+      placeholder: Fedora 43, kernel 7.1, GitHub ubuntu-latest runner, ...
