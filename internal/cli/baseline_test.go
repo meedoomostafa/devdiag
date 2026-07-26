@@ -1307,3 +1307,54 @@ func TestBaselineCreateAllSweepsEverything(t *testing.T) {
 		t.Fatalf("entries = %d, want 2", len(b.Entries))
 	}
 }
+
+func TestBaselineCreateFindingWithFingerprintKeepsAllInstances(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-PORT-001", Severity: schema.SeverityMedium, Title: "Port conflict", Symptom: "port 8080 in use"},
+		{ID: "F-PORT-001", Severity: schema.SeverityMedium, Title: "Port conflict", Symptom: "port 9090 in use"},
+	})
+	_, stderr, code := runBinary("baseline", "create", dir, "--reason", "accepted ports",
+		"--finding", "F-PORT-001", "--fingerprint")
+	if code != 0 {
+		t.Fatalf("exit=%d; stderr=%s", code, stderr)
+	}
+	b, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load baseline: %v", err)
+	}
+	if len(b.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2 distinct fingerprints for the same ID", len(b.Entries))
+	}
+	if b.Entries[0].Fingerprint == "" || b.Entries[1].Fingerprint == "" || b.Entries[0].Fingerprint == b.Entries[1].Fingerprint {
+		t.Fatalf("expected two distinct non-empty fingerprints, got %+v", b.Entries)
+	}
+}
+
+func TestBaselineCreateFindingRejectsMinSeverity(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityLow, Title: "Env issue"},
+	})
+	_, stderr, code := runBinary("baseline", "create", dir, "--reason", "x",
+		"--finding", "F-ENV-001", "--min-severity", "medium")
+	if code != exitcode.InvalidInput.Int() {
+		t.Fatalf("--finding with --min-severity exit = %d, want %d; stderr=%s", code, exitcode.InvalidInput.Int(), stderr)
+	}
+	if _, err := os.Stat(baseline.DefaultPath(dir)); !os.IsNotExist(err) {
+		t.Fatal("baseline must not be written")
+	}
+}
+
+func TestBaselineCreateSummaryListsRunIDAndDestination(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+	_, stderr, code := runBinary("baseline", "create", dir, "--reason", "accepted", "--finding", "F-ENV-001")
+	if code != 0 {
+		t.Fatalf("exit=%d; stderr=%s", code, stderr)
+	}
+	for _, want := range []string{"Baselining from run ", "F-ENV-001", "baseline.yaml", "match: id"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("summary missing %q: %s", want, stderr)
+		}
+	}
+}

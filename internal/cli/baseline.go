@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -58,7 +59,13 @@ var baselineCreateCmd = &cobra.Command{
 	Use:   "create [path]",
 	Short: "Create a baseline file from a saved scan report",
 	Long: `Create a .devdiag/baseline.yaml file from the latest saved scan report.
-All visible findings from the saved report become baseline entries.
+
+Selection is explicit: pass --finding <id> (repeatable) to baseline specific
+findings, or --all to deliberately baseline every finding in the report.
+Unknown --finding IDs fail the command without writing anything.
+
+Use 'baseline add'/'baseline remove' to edit an existing baseline
+incrementally; 'create' initializes or (with --force) replaces the file.
 
 If the saved report was created without --include-hidden, low/info/evidence-only
 findings are not present and cannot be baselined from that report.`,
@@ -96,6 +103,12 @@ findings are not present and cannot be baselined from that report.`,
 				message: "select findings explicitly: pass --finding <id> (repeatable) for specific findings, " +
 					"or --all to deliberately baseline every finding in the report",
 			}
+		}
+		// An explicit ID selection is already the filter; layering a
+		// severity filter on top could silently drop requested findings
+		// and write an empty baseline.
+		if len(baselineCreateFindings) > 0 && baselineCreateMinSev != "" {
+			return exitCodeError{code: exitcode.InvalidInput, message: "--min-severity applies to --all sweeps; it cannot be combined with explicit --finding selection"}
 		}
 
 		scanPath := "."
@@ -184,10 +197,11 @@ findings are not present and cannot be baselined from that report.`,
 		}
 		ids := make([]string, 0, len(b.Entries))
 		for _, e := range b.Entries {
-			ids = append(ids, e.ID)
+			ids = append(ids, sanitizeTerminal(e.ID))
 		}
 		fmt.Fprintf(cmd.ErrOrStderr(), "Baselining from run %s: %d entr%s [%s] (match: %s) -> %s\n",
-			resolvedRunID, len(b.Entries), pluralYIes(len(b.Entries)), strings.Join(ids, ", "), matchMode, baselinePath)
+			sanitizeTerminal(resolvedRunID), len(b.Entries), pluralYIes(len(b.Entries)),
+			strings.Join(ids, ", "), matchMode, sanitizeTerminal(buildRedactEngine().RedactString(baselinePath, "path")))
 
 		if err := baseline.Save(baselinePath, b); err != nil {
 			logger.Error("baseline", err.Error())
@@ -759,7 +773,9 @@ func formatBaselineTime(t time.Time) string {
 // resolveCreatedBy determines the author of the baseline entry.
 // selectFindingsByID filters findings to the requested IDs. Matching is
 // exact-ID and case-insensitive; requests are deduplicated; any requested ID
-// absent from the report is an error (fail closed).
+// absent from the report is an error (fail closed). All report instances of
+// a requested ID are kept: fingerprint mode needs every instance, and
+// CreateFromFindings already deduplicates by ID or ID:fingerprint.
 func selectFindingsByID(findings []schema.Finding, requested []string) ([]schema.Finding, error) {
 	want := make(map[string]bool, len(requested))
 	for _, r := range requested {
@@ -773,7 +789,7 @@ func selectFindingsByID(findings []schema.Finding, requested []string) ([]schema
 	found := make(map[string]bool, len(want))
 	for _, f := range findings {
 		key := strings.ToUpper(strings.TrimSpace(f.ID))
-		if want[key] && !found[key] {
+		if want[key] {
 			selected = append(selected, f)
 			found[key] = true
 		}
@@ -796,6 +812,18 @@ func pluralYIes(n int) string {
 		return "y"
 	}
 	return "ies"
+}
+
+// sanitizeTerminal strips control characters (including ANSI escape
+// sequences) from values echoed to the terminal, so report- or
+// flag-sourced strings cannot inject cursor movement or fake output.
+func sanitizeTerminal(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func resolveCreatedBy() string {

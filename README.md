@@ -224,13 +224,13 @@ devdiag baseline create --reason "manual audit" --all --created-by "security-tea
 To baseline a specific run rather than the latest:
 
 ```bash
-devdiag baseline create --reason "fixed reference run" --run-id "2026-06-06T12-00-00Z_abcd"
+devdiag baseline create --reason "fixed reference run" --all --run-id "2026-06-06T12-00-00Z_abcd"
 ```
 
 To create a baseline with exact instance-level fingerprinting (so only finding instances with the exact same ID and symptom are suppressed, rather than silencing all findings of a given ID globally):
 
 ```bash
-devdiag baseline create --reason "accepted specific instance" --fingerprint
+devdiag baseline create --reason "accepted specific instance" --all --fingerprint
 ```
 
 > [!NOTE]
