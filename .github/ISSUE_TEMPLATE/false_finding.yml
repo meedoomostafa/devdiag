@@ -48,6 +48,11 @@ body:
     id: evidence
     attributes:
       label: Finding output (redacted)
+      description: |
+        DevDiag redacts by default, but double-check before pasting: never
+        include raw secrets. If this report describes a redaction bypass
+        (a real secret reaching output), do NOT file it here — use
+        [private vulnerability reporting](https://github.com/meedoomostafa/devdiag/security/advisories/new).
       render: text
   - type: textarea
     id: workaround
