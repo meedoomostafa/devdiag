@@ -121,10 +121,14 @@ var scanCmd = &cobra.Command{
 			return err
 		}
 
-		// Persist reports only when explicitly requested. By default scan is read-only.
+		// Persist reports only when explicitly requested. By default scan is
+		// read-only. An explicit --save-report that cannot persist is an
+		// error: downstream consumers (the GitHub Action) depend on the
+		// saved report existing when the flag is set.
 		if scanSaveReport {
 			if err := persistReport(absPath, filtered); err != nil {
-				logger.Warn("scan", fmt.Sprintf("failed to persist report: %v", err))
+				logger.Error("scan", fmt.Sprintf("failed to persist report: %v", err))
+				return exitCodeError{code: exitcode.InternalError}
 			}
 		}
 
