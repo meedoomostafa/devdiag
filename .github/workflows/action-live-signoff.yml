@@ -73,7 +73,10 @@ jobs:
           test '${{ steps.allow.outputs.report-uploaded }}' = 'true'
           test -n '${{ steps.allow.outputs.scan-exit-code }}'
           test -n '${{ steps.allow.outputs.render-exit-code }}'
-          grep -q '### DevDiag scan' "$GITHUB_STEP_SUMMARY"
+          # Each step gets its own step_summary file; the action wrote its
+          # summary in ITS step's file, not this one's. Search the runner's
+          # file-command directory instead of this step's empty summary.
+          grep -rq '### DevDiag scan' "$(dirname "$GITHUB_STEP_SUMMARY")"
           jq -e '.. | strings | select(contains("<redacted>"))' "$report_path" >/dev/null
           if grep -q 'secret123' "$report_path"; then echo "redaction leak in report" >&2; exit 1; fi
           jq -e '.schema_version and .collectors and .findings' "$report_path"
