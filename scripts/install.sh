@@ -18,7 +18,10 @@ usage() {
 	cat <<'USAGE'
 DevDiag installer for Linux.
 
-Builds DevDiag from the selected GitHub ref and installs the binary.
+For release tags with published binary assets, downloads the prebuilt
+binary archive and verifies it against the release checksums.txt
+(mandatory). For branches, commit SHAs, and releases without assets,
+falls back to building from the source archive.
 
 Usage:
   scripts/install.sh [--version <ref>] [--bin-dir <dir>] [--sha256 <hex>] [--dry-run]
@@ -214,7 +217,7 @@ write_metadata() {
   "install_dir": "${esc_dir}",
   "binary_path": "${esc_bin}",
   "installed_at": "${installed_at}",
-  "install_method": "source-archive",
+  "install_method": "${INSTALL_METHOD:-source-archive}",
   "archive_url": "${esc_url}",
   "checksum_required": ${checksum_req},
   "checksum_provided": ${checksum_prov}
@@ -477,9 +480,38 @@ if ! go_version_ok; then
 	exit 2
 fi
 
+# detect_arch maps uname -m to release-asset architecture names.
+detect_arch() {
+	case "$(uname -m)" in
+		x86_64) printf 'amd64\n' ;;
+		aarch64 | arm64) printf 'arm64\n' ;;
+		*) printf '\n' ;;
+	esac
+}
+
+# binary_asset_url prints the release binary-archive URL for VERSION when
+# VERSION is a release tag and the current architecture is supported;
+# prints nothing otherwise (callers fall back to source builds).
+binary_asset_url() {
+	local arch
+	arch="$(detect_arch)"
+	[[ -n "${arch}" ]] || return 0
+	case "${VERSION}" in
+		v[0-9]*) ;;
+		*) return 0 ;;
+	esac
+	printf 'https://github.com/%s/releases/download/%s/devdiag_%s_linux_%s.tar.gz\n' \
+		"${REPO}" "${VERSION}" "${VERSION#v}" "${arch}"
+}
+
+checksums_url() {
+	printf 'https://github.com/%s/releases/download/%s/checksums.txt\n' "${REPO}" "${VERSION}"
+}
+
 RESOLVED_VERSION="$(strip_version "${VERSION}")"
 APP_VERSION="${RESOLVED_VERSION}"
 URL="$(archive_url)"
+BINARY_URL="$(binary_asset_url)"
 TARGET_DIR="$(default_bin_dir)"
 INSTALL_PATH="${TARGET_DIR}/devdiag"
 METADATA_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/devdiag"
@@ -567,32 +599,94 @@ ARCHIVE="${TMP_DIR}/devdiag.tar.gz"
 SRC_DIR="${TMP_DIR}/src"
 OUT="${TMP_DIR}/devdiag"
 
-download "${URL}" "${ARCHIVE}"
-
-if [[ -n "${SHA256}" ]]; then
-	echo "Verifying checksum..."
+verify_sha256() {
+	local expected="$1"
+	local file="$2"
 	if command -v sha256sum >/dev/null 2>&1; then
-		echo "${SHA256}  ${ARCHIVE}" | sha256sum -c -
+		echo "${expected}  ${file}" | sha256sum -c -
 	elif command -v shasum >/dev/null 2>&1; then
-		echo "${SHA256}  ${ARCHIVE}" | shasum -a 256 -c -
+		echo "${expected}  ${file}" | shasum -a 256 -c -
 	else
 		echo "error: sha256sum or shasum not found; cannot verify checksum" >&2
 		exit 1
 	fi
-elif [[ "${REQUIRE_CHECKSUM}" == "1" ]]; then
-	echo "error: DEVDIAG_REQUIRE_CHECKSUM=1 set but no checksum provided" >&2
-	exit 1
+}
+
+# release_has_assets checks whether the tagged release publishes a
+# checksums.txt (releases from the GoReleaser pipeline always do; releases
+# v0.4.0 and earlier have no assets and legitimately fall back to source).
+release_has_assets() {
+	local code
+	if command -v curl >/dev/null 2>&1; then
+		code="$(curl -o /dev/null -sIL -w '%{http_code}' "$(checksums_url)")"
+		[[ "${code}" == "200" ]]
+	else
+		wget --spider -q "$(checksums_url)"
+	fi
+}
+
+INSTALL_METHOD="source-archive"
+BINARY_INSTALLED=0
+if [[ -n "${BINARY_URL}" ]] && release_has_assets; then
+	# From here on, fail closed: a release that publishes checksums.txt is
+	# expected to install via verified binary. A blocked or failed asset
+	# download must not silently downgrade to an unverified source build.
+	echo "Installing prebuilt release binary: ${BINARY_URL}"
+	BIN_ARCHIVE="${TMP_DIR}/devdiag-binary.tar.gz"
+	CHECKSUMS="${TMP_DIR}/checksums.txt"
+	download "${BINARY_URL}" "${BIN_ARCHIVE}"
+	download "$(checksums_url)" "${CHECKSUMS}"
+	echo "Verifying release checksum..."
+	expected="$(awk -v name="$(basename "${BINARY_URL}")" '$2 == name {print $1}' "${CHECKSUMS}")"
+	if [[ -z "${expected}" ]]; then
+		echo "error: $(basename "${BINARY_URL}") not present in release checksums.txt" >&2
+		exit 1
+	fi
+	verify_sha256 "${expected}" "${BIN_ARCHIVE}"
+	# Optional hardening: verify the signed provenance attestation when the
+	# GitHub CLI is available (narrows release-edit-level tampering).
+	if command -v gh >/dev/null 2>&1; then
+		echo "Verifying provenance attestation..."
+		if ! gh attestation verify "${BIN_ARCHIVE}" --owner "${REPO%%/*}" >/dev/null 2>&1; then
+			echo "warning: provenance attestation could not be verified (gh auth or network); checksum verification already passed" >&2
+		fi
+	fi
+	BIN_DIR_TMP="${TMP_DIR}/bin"
+	mkdir -p "${BIN_DIR_TMP}"
+	tar -xzf "${BIN_ARCHIVE}" -C "${BIN_DIR_TMP}"
+	if [[ ! -f "${BIN_DIR_TMP}/devdiag" ]]; then
+		echo "error: release archive did not contain a devdiag binary" >&2
+		exit 1
+	fi
+	cp "${BIN_DIR_TMP}/devdiag" "${OUT}"
+	INSTALL_METHOD="release-binary"
+	BINARY_INSTALLED=1
+	URL="${BINARY_URL}"
+elif [[ -n "${BINARY_URL}" ]]; then
+	echo "Release publishes no binary assets (pre-pipeline release); building from source."
 fi
 
-mkdir -p "${SRC_DIR}"
-tar -xzf "${ARCHIVE}" -C "${SRC_DIR}" --strip-components=1
+if [[ "${BINARY_INSTALLED}" == "0" ]]; then
+	download "${URL}" "${ARCHIVE}"
 
-(
-	cd "${SRC_DIR}"
-	CGO_ENABLED=0 go build -trimpath \
-		-ldflags "-s -w -X github.com/meedoomostafa/devdiag/internal/version.Version=${APP_VERSION}" \
-		-o "${OUT}" ./cmd/devdiag
-)
+	if [[ -n "${SHA256}" ]]; then
+		echo "Verifying checksum..."
+		verify_sha256 "${SHA256}" "${ARCHIVE}"
+	elif [[ "${REQUIRE_CHECKSUM}" == "1" ]]; then
+		echo "error: DEVDIAG_REQUIRE_CHECKSUM=1 set but no checksum provided" >&2
+		exit 1
+	fi
+
+	mkdir -p "${SRC_DIR}"
+	tar -xzf "${ARCHIVE}" -C "${SRC_DIR}" --strip-components=1
+
+	(
+		cd "${SRC_DIR}"
+		CGO_ENABLED=0 go build -trimpath \
+			-ldflags "-s -w -X github.com/meedoomostafa/devdiag/internal/version.Version=${APP_VERSION}" \
+			-o "${OUT}" ./cmd/devdiag
+	)
+fi
 
 mkdir -p "${TARGET_DIR}"
 
