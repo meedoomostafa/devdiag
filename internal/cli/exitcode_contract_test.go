@@ -182,6 +182,54 @@ func TestExitCodeContract_FixUnknownFindingIsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestExitCodeContract_FixApplyPermissionDenied(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "build.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho ok\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	writeSavedReport(t, dir, "fix-perm-run", schema.Report{
+		SchemaVersion:   schema.SchemaVersion,
+		DevDiagVersion:  "test",
+		RunID:           "fix-perm-run",
+		RedactionStatus: "default",
+		Repo:            schema.RepoInfo{Root: dir},
+		Collectors: []schema.CollectorResult{{
+			Name:     "permission",
+			Status:   schema.CollectorOK,
+			Evidence: []schema.Evidence{{Source: "host_script_not_executable", Value: scriptPath}},
+		}},
+		Findings: []schema.Finding{{
+			ID:       "F-FS-001",
+			Title:    "Script missing executable bit",
+			Severity: schema.SeverityMedium,
+			Evidence: []schema.Evidence{{
+				Source: "host_script_not_executable",
+				Value:  scriptPath,
+			}},
+			FixHints: []string{"chmod-script"},
+		}},
+	})
+
+	// Stub chmod ahead of the real one on PATH: fails with the permission
+	// wording the runner classifies. Root-proof (no mode-bit tricks) and
+	// deterministic across hosts.
+	binDir := filepath.Join(dir, "stubbin")
+	if err := os.Mkdir(binDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	stub := "#!/bin/sh\necho 'chmod: permission denied' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "chmod"), []byte(stub), 0755); err != nil {
+		t.Fatal(err)
+	}
+	env := append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, stderr, code := runBinaryInDirWithEnv(dir, env, "fix", "F-FS-001", "--apply", "--format", "json")
+	if code != exitcode.PermissionDenied.Int() {
+		t.Fatalf("fix --apply permission-denied exit = %d, want %d; stderr: %s", code, exitcode.PermissionDenied.Int(), stderr)
+	}
+}
+
 func TestExitCodeContract_ScanSaveReportPersistFailure(t *testing.T) {
 	dir := t.TempDir()
 	// A regular file at .devdiag/runs makes the run-dir creation fail with

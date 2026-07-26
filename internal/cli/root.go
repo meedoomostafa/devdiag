@@ -99,14 +99,22 @@ func Execute() int {
 // errors are wrapped as exitCodeError by the FlagErrorFunc installed in
 // init(), so no content-ambiguous markers (like "invalid argument", which
 // also appears in EINVAL syscall errors) are needed here.
+//
+// The matched phrasings are an implicit contract with un-exported cobra
+// strings, stable from cobra v1.1.1 through current main:
+//   - "unknown command %q for %q" — command.go findNext/ExecuteC routing
+//   - "...arg(s)..." — args.go ExactArgs/MinimumNArgs/MaximumNArgs/RangeArgs
+//
+// The contract test (exitcode_contract_test.go) pins these cases end-to-end,
+// so a cobra upgrade that rewords them fails CI loudly instead of silently
+// degrading to InternalError. OnlyValidArgs/ExactValidArgs phrase violations
+// differently ("invalid argument %q for %q") and are intentionally NOT
+// matched; if adopted, type their errors at the source instead.
 func isUsageError(err error) bool {
 	msg := err.Error()
-	// "unknown command %q for %q" — cobra command routing.
 	if strings.Contains(msg, "unknown command") {
 		return true
 	}
-	// cobra arg validators (ExactArgs, MinimumNArgs, MaximumNArgs,
-	// RangeArgs) all phrase violations with "arg(s)".
 	if strings.Contains(msg, "arg(s)") {
 		return true
 	}
