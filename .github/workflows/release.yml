@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Serialize releases: concurrent tag pushes must not interleave publishing
+# or race the major-tag mover.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
@@ -21,18 +27,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Require release tag to be on main
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" origin/main; then
+            echo "release tags must point at commits reachable from main" >&2
+            exit 1
+          fi
+
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version-file: go.mod
 
       - name: Install syft (SBOM generator)
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          syft-version: v1.49.0
 
+      # Release is created as a DRAFT by goreleaser (see .goreleaser.yaml);
+      # it is published only after provenance attestation succeeds, so a
+      # public release can never exist without its attestation.
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: v2.17.1
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -42,10 +63,17 @@ jobs:
         with:
           subject-checksums: ./dist/checksums.txt
 
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "$RELEASE_TAG" --draft=false
+
   # The v0 major tag moves only after the release job (build, checksums,
-  # SBOM, attestation, publish) fully succeeded, so it can never point at a
-  # tag whose artifacts failed. Consumers wanting immutability should pin
-  # the full commit SHA instead and let Dependabot propose bumps.
+  # SBOM, attestation, publish) fully succeeded, and only forward: a
+  # re-release of an older version must not roll consumers back. Consumers
+  # wanting immutability should pin the full commit SHA instead and let
+  # Dependabot propose bumps.
   move-major-tag:
     needs: goreleaser
     if: ${{ !contains(github.ref_name, '-') }}
@@ -56,7 +84,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
-      - name: Force-move major tag
+      - name: Force-move major tag (forward only)
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_SHA: ${{ github.sha }}
@@ -66,6 +94,14 @@ jobs:
             v[0-9]*) ;;
             *) echo "unexpected tag format: $RELEASE_TAG" >&2; exit 1 ;;
           esac
+          # Reject rollback: only move when RELEASE_TAG is the highest
+          # stable semver tag for this major line.
+          git fetch origin --tags --quiet
+          highest="$(git tag -l "${major}.*" | grep -Ev -- '-' | sort -V | tail -n1)"
+          if [ -n "$highest" ] && [ "$highest" != "$RELEASE_TAG" ]; then
+            echo "not moving $major: $RELEASE_TAG is not the highest stable tag ($highest)" >&2
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -fa "$major" -m "point $major at $RELEASE_TAG" "$RELEASE_SHA"

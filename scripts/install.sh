@@ -612,37 +612,58 @@ verify_sha256() {
 	fi
 }
 
+# release_has_assets checks whether the tagged release publishes a
+# checksums.txt (releases from the GoReleaser pipeline always do; releases
+# v0.4.0 and earlier have no assets and legitimately fall back to source).
+release_has_assets() {
+	local code
+	if command -v curl >/dev/null 2>&1; then
+		code="$(curl -o /dev/null -sIL -w '%{http_code}' "$(checksums_url)")"
+		[[ "${code}" == "200" ]]
+	else
+		wget --spider -q "$(checksums_url)"
+	fi
+}
+
 INSTALL_METHOD="source-archive"
 BINARY_INSTALLED=0
-if [[ -n "${BINARY_URL}" ]]; then
-	echo "Trying prebuilt release binary: ${BINARY_URL}"
+if [[ -n "${BINARY_URL}" ]] && release_has_assets; then
+	# From here on, fail closed: a release that publishes checksums.txt is
+	# expected to install via verified binary. A blocked or failed asset
+	# download must not silently downgrade to an unverified source build.
+	echo "Installing prebuilt release binary: ${BINARY_URL}"
 	BIN_ARCHIVE="${TMP_DIR}/devdiag-binary.tar.gz"
 	CHECKSUMS="${TMP_DIR}/checksums.txt"
-	if download "${BINARY_URL}" "${BIN_ARCHIVE}" 2>/dev/null; then
-		# Checksum verification is mandatory for binary assets: the
-		# release pipeline always publishes checksums.txt alongside them.
-		download "$(checksums_url)" "${CHECKSUMS}"
-		echo "Verifying release checksum..."
-		expected="$(awk -v name="$(basename "${BINARY_URL}")" '$2 == name {print $1}' "${CHECKSUMS}")"
-		if [[ -z "${expected}" ]]; then
-			echo "error: $(basename "${BINARY_URL}") not present in release checksums.txt" >&2
-			exit 1
-		fi
-		verify_sha256 "${expected}" "${BIN_ARCHIVE}"
-		BIN_DIR_TMP="${TMP_DIR}/bin"
-		mkdir -p "${BIN_DIR_TMP}"
-		tar -xzf "${BIN_ARCHIVE}" -C "${BIN_DIR_TMP}"
-		if [[ ! -f "${BIN_DIR_TMP}/devdiag" ]]; then
-			echo "error: release archive did not contain a devdiag binary" >&2
-			exit 1
-		fi
-		cp "${BIN_DIR_TMP}/devdiag" "${OUT}"
-		INSTALL_METHOD="release-binary"
-		BINARY_INSTALLED=1
-		URL="${BINARY_URL}"
-	else
-		echo "No prebuilt asset for this release/architecture; building from source."
+	download "${BINARY_URL}" "${BIN_ARCHIVE}"
+	download "$(checksums_url)" "${CHECKSUMS}"
+	echo "Verifying release checksum..."
+	expected="$(awk -v name="$(basename "${BINARY_URL}")" '$2 == name {print $1}' "${CHECKSUMS}")"
+	if [[ -z "${expected}" ]]; then
+		echo "error: $(basename "${BINARY_URL}") not present in release checksums.txt" >&2
+		exit 1
 	fi
+	verify_sha256 "${expected}" "${BIN_ARCHIVE}"
+	# Optional hardening: verify the signed provenance attestation when the
+	# GitHub CLI is available (narrows release-edit-level tampering).
+	if command -v gh >/dev/null 2>&1; then
+		echo "Verifying provenance attestation..."
+		if ! gh attestation verify "${BIN_ARCHIVE}" --owner "${REPO%%/*}" >/dev/null 2>&1; then
+			echo "warning: provenance attestation could not be verified (gh auth or network); checksum verification already passed" >&2
+		fi
+	fi
+	BIN_DIR_TMP="${TMP_DIR}/bin"
+	mkdir -p "${BIN_DIR_TMP}"
+	tar -xzf "${BIN_ARCHIVE}" -C "${BIN_DIR_TMP}"
+	if [[ ! -f "${BIN_DIR_TMP}/devdiag" ]]; then
+		echo "error: release archive did not contain a devdiag binary" >&2
+		exit 1
+	fi
+	cp "${BIN_DIR_TMP}/devdiag" "${OUT}"
+	INSTALL_METHOD="release-binary"
+	BINARY_INSTALLED=1
+	URL="${BINARY_URL}"
+elif [[ -n "${BINARY_URL}" ]]; then
+	echo "Release publishes no binary assets (pre-pipeline release); building from source."
 fi
 
 if [[ "${BINARY_INSTALLED}" == "0" ]]; then

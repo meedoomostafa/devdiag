@@ -43,7 +43,7 @@ changelog:
   sort: asc
   groups:
     - title: Security
-      regexp: '^.*?(fix|feat)\(redact|security\)!?:.+$'
+      regexp: '^.*?(fix|feat)\((redact|security)\)!?:.+$'
       order: 0
     - title: Breaking changes
       regexp: '^.*?[a-z]+(\(.+\))?!:.+$'
@@ -62,7 +62,9 @@ changelog:
       - "^style:"
 
 release:
-  draft: false
+  # Draft until the workflow's provenance attestation succeeds; the
+  # release job publishes it explicitly afterwards.
+  draft: true
   prerelease: auto
   footer: |
     ## Verify these artifacts
