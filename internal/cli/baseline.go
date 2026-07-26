@@ -802,7 +802,7 @@ func selectFindingsByID(findings []schema.Finding, requested []string) ([]schema
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		return nil, fmt.Errorf("finding(s) not present in the saved report: %s (nothing was baselined)", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("finding(s) not present in the saved report: %s (nothing was baselined)", sanitizeTerminal(strings.Join(missing, ", ")))
 	}
 	return selected, nil
 }
