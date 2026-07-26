@@ -320,7 +320,7 @@ fish_add_path \"${display_path}\"
 
 print_path_command() {
 	local display_path="${TARGET_DIR}"
-	if [[ "${TARGET_DIR}" == "${HOME}"* ]]; then
+	if [[ "${TARGET_DIR}" == "${HOME}" || "${TARGET_DIR}" == "${HOME}"/* ]]; then
 		display_path="\$HOME${TARGET_DIR#"${HOME}"}"
 	fi
 
@@ -626,7 +626,7 @@ write_metadata
 # PATH integration
 if [[ "${ADD_TO_PATH}" == "1" && "${PATH_STATUS}" == "not_on_path" ]]; then
 	display_path="${TARGET_DIR}"
-	if [[ "${TARGET_DIR}" == "${HOME}"* ]]; then
+	if [[ "${TARGET_DIR}" == "${HOME}" || "${TARGET_DIR}" == "${HOME}"/* ]]; then
 		display_path="\$HOME${TARGET_DIR#"${HOME}"}"
 	fi
 
