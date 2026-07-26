@@ -718,12 +718,26 @@ Always check out your repository code before executing the DevDiag scan:
 - uses: actions/checkout@v4
 ```
 
+**Version pinning**: reference the action by major tag (`@v0`), which moves
+only after a release fully publishes (binaries, checksums, provenance
+attestation). For immutable pinning, use the full commit SHA of a release and
+let Dependabot/Renovate propose bumps:
+
+```yaml
+- uses: meedoomostafa/devdiag@v0          # tracks latest v0.x release
+# or
+- uses: meedoomostafa/devdiag@<full-sha>  # immutable
+```
+
+The `latest` and `main` refs are not recommended for CI: they are mutable and
+carry no release guarantees.
+
 #### 1. Fail on High/Critical Findings (Default)
 Emits workflow annotations for findings and fails the build if high or critical issues are found:
 
 ```yaml
 - name: Run DevDiag Scan
-  uses: meedoomostafa/devdiag@main
+  uses: meedoomostafa/devdiag@v0
 ```
 
 #### 2. Report-Only / Non-Blocking Mode
@@ -731,7 +745,7 @@ Generates annotations and uploads artifacts without failing the build, allowing 
 
 ```yaml
 - name: Run DevDiag Scan (Non-Blocking)
-  uses: meedoomostafa/devdiag@main
+  uses: meedoomostafa/devdiag@v0
   with:
     fail-severity: off
 ```
@@ -741,7 +755,7 @@ Checks for version drift and environment matches between your local container co
 
 ```yaml
 - name: Run DevDiag CI Parity Scan
-  uses: meedoomostafa/devdiag@main
+  uses: meedoomostafa/devdiag@v0
   with:
     ci: 'true'
     fail-severity: medium
@@ -752,7 +766,7 @@ Includes low-severity and informational rules in the final artifact report for t
 
 ```yaml
 - name: Run Detailed DevDiag Scan
-  uses: meedoomostafa/devdiag@main
+  uses: meedoomostafa/devdiag@v0
   with:
     include-hidden: 'true'
     artifact-name: devdiag-audit-report

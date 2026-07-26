@@ -1,0 +1,76 @@
+version: 2
+
+project_name: devdiag
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: devdiag
+    main: ./cmd/devdiag
+    binary: devdiag
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/meedoomostafa/devdiag/internal/version.Version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Security
+      regexp: '^.*?(fix|feat)\(redact|security\)!?:.+$'
+      order: 0
+    - title: Breaking changes
+      regexp: '^.*?[a-z]+(\(.+\))?!:.+$'
+      order: 1
+    - title: Features
+      regexp: '^.*?feat(\(.+\))?:.+$'
+      order: 2
+    - title: Fixes
+      regexp: '^.*?fix(\(.+\))?:.+$'
+      order: 3
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - "^chore\\(deps\\):"
+      - "^style:"
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Verify these artifacts
+
+    Every asset is covered by `checksums.txt` and a signed SLSA build
+    provenance attestation:
+
+    ```bash
+    sha256sum -c --ignore-missing checksums.txt
+    gh attestation verify --owner meedoomostafa <asset>
+    ```
