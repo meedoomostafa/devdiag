@@ -104,11 +104,12 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # latest is a convenience alias for consumers pinned to @latest,
+          # with the same guarantees as the major tag: moved only after a
+          # release fully publishes, forward-only. Both refs are pushed in
+          # one atomic operation so they can never point at different
+          # releases. SHA or vN pinning remains the recommendation for
+          # anything security-sensitive.
           git tag -fa "$major" -m "point $major at $RELEASE_TAG" "$RELEASE_SHA"
-          git push origin "$major" --force
-          # Convenience alias kept for consumers already pinned to @latest.
-          # Same guarantees as the major tag: moved only after a release
-          # fully publishes, forward-only. SHA or vN pinning remains the
-          # recommendation for anything security-sensitive.
           git tag -fa latest -m "point latest at $RELEASE_TAG" "$RELEASE_SHA"
-          git push origin latest --force
+          git push origin --atomic --force "refs/tags/$major" refs/tags/latest
