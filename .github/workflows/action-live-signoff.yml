@@ -75,7 +75,7 @@ jobs:
           test -n '${{ steps.allow.outputs.render-exit-code }}'
           grep -q '### DevDiag scan' "$GITHUB_STEP_SUMMARY"
           jq -e '.. | strings | select(contains("<redacted>"))' "$report_path" >/dev/null
-          ! grep -q 'secret123' "$report_path"
+          if grep -q 'secret123' "$report_path"; then echo "redaction leak in report" >&2; exit 1; fi
           jq -e '.schema_version and .collectors and .findings' "$report_path"
           sha256sum "$report_path" | tee "$RUNNER_TEMP/devdiag-report.sha256"
 
@@ -92,7 +92,7 @@ jobs:
           test -f "$downloaded"
           jq -e '.schema_version and .collectors and .findings' "$downloaded"
           jq -e '.. | strings | select(contains("<redacted>"))' "$downloaded" >/dev/null
-          ! grep -q 'secret123' "$downloaded"
+          if grep -q 'secret123' "$downloaded"; then echo "redaction leak in downloaded artifact" >&2; exit 1; fi
           sha256sum "$downloaded"
 
       - id: report_only

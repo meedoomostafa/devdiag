@@ -20,7 +20,7 @@ jobs:
     name: GitHub format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - id: devdiag
         uses: ./
@@ -43,7 +43,7 @@ jobs:
     name: Markdown format with hidden findings
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - id: devdiag
         uses: ./
@@ -61,3 +61,101 @@ jobs:
           test -f "${{ steps.devdiag.outputs.report-path }}"
           test "${{ steps.devdiag.outputs.report-uploaded }}" = "true"
           test "${{ steps.devdiag.outputs.summary-written }}" = "true"
+
+  redaction-canary:
+    name: Redaction canary end-to-end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Create canary fixture
+        shell: bash
+        run: |
+          fixture="$RUNNER_TEMP/devdiag-canary-fixture"
+          mkdir -p "$fixture/.github/workflows"
+          cat > "$fixture/.github/workflows/ci.yml" <<'YAML'
+          name: fixture
+          on: [push]
+          jobs:
+            scan:
+              runs-on: ubuntu-latest
+              env:
+                AWS_SECRET_ACCESS_KEY: CANARYAWSKEYabcdef1234567890
+                SERVICE_URL: https://devdiag:CANARYURLSECRET@example.invalid/resource
+              steps:
+                - run: npm test
+          YAML
+          cat > "$fixture/docker-compose.yml" <<'YAML'
+          services:
+            app:
+              image: node:20
+              environment:
+                - API_TOKEN=${API_TOKEN:-CANARYCOMPOSEDEFAULT}
+          YAML
+          printf '18\n' > "$fixture/.nvmrc"
+
+      - id: devdiag
+        uses: ./
+        with:
+          path: ${{ runner.temp }}/devdiag-canary-fixture
+          format: github
+          save-report: 'true'
+          fail-severity: off
+          include-hidden: 'true'
+
+      - name: Assert canaries never reach the report
+        shell: bash
+        run: |
+          report='${{ steps.devdiag.outputs.report-path }}'
+          test -f "$report"
+          for canary in CANARYAWSKEYabcdef1234567890 CANARYURLSECRET CANARYCOMPOSEDEFAULT; do
+            if grep -q "$canary" "$report"; then
+              echo "redaction leak: $canary found in report" >&2
+              exit 1
+            fi
+          done
+          jq -e '.collectors and .findings' "$report"
+
+  error-propagation:
+    name: Scan errors propagate through the action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - id: badpath
+        uses: ./
+        continue-on-error: true
+        with:
+          path: /nonexistent-devdiag-smoke-path
+          save-report: 'true'
+          fail-severity: off
+
+      - name: Assert exit 2 propagates and no stale artifact is advertised
+        shell: bash
+        run: |
+          if [ '${{ steps.badpath.outcome }}' != 'failure' ]; then
+            echo "expected badpath step to fail, got ${{ steps.badpath.outcome }}" >&2
+            exit 1
+          fi
+          test "${{ steps.badpath.outputs.scan-exit-code }}" = "2"
+          test "${{ steps.badpath.outputs.report-uploaded }}" = "false"
+          test -z "${{ steps.badpath.outputs.report-path }}"
+
+      - id: threshold
+        uses: ./
+        continue-on-error: true
+        with:
+          path: .
+          save-report: 'true'
+          fail-severity: info
+          include-hidden: 'true'
+
+      - name: Assert findings threshold fails the action with a report
+        shell: bash
+        run: |
+          if [ '${{ steps.threshold.outcome }}' != 'failure' ]; then
+            echo "expected threshold step to fail, got ${{ steps.threshold.outcome }}" >&2
+            exit 1
+          fi
+          test "${{ steps.threshold.outputs.report-uploaded }}" = "true"
+          test -f '${{ steps.threshold.outputs.report-path }}'
