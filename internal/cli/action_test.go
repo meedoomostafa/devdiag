@@ -908,3 +908,58 @@ func TestActionScript_IgnoresPreexistingForeignRuns(t *testing.T) {
 		t.Errorf("exported report does not contain the fresh run: %s", string(data))
 	}
 }
+
+// TestActionVersionScript pins the version-derivation contract for
+// runner-built binaries: git describe in git checkouts, DEVDIAG_ACTION_REF
+// fallback in tarball-extracted action paths, dev as last resort.
+func TestActionVersionScript(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Clean(filepath.Join(cwd, "..", "..", "scripts", "action-version.sh"))
+	if _, err := os.Stat(script); err != nil {
+		t.Fatalf("action-version.sh not found: %v", err)
+	}
+
+	run := func(dir string, env map[string]string) string {
+		t.Helper()
+		cmd := exec.Command("bash", script)
+		cmd.Dir = dir
+		cmd.Env = os.Environ()
+		for k, v := range env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("script failed: %v", err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	noGit := t.TempDir()
+	if got := run(noGit, map[string]string{"DEVDIAG_ACTION_REF": "refs/tags/v9.9.9"}); got != "v9.9.9" {
+		t.Errorf("tag ref fallback = %q, want v9.9.9", got)
+	}
+	if got := run(noGit, map[string]string{"DEVDIAG_ACTION_REF": "v0"}); got != "v0" {
+		t.Errorf("bare ref fallback = %q, want v0", got)
+	}
+	if got := run(noGit, map[string]string{"DEVDIAG_ACTION_REF": ""}); got != "dev" {
+		t.Errorf("no-ref fallback = %q, want dev", got)
+	}
+	// In a git checkout, git describe wins over the ref.
+	gitDir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"},
+		{"tag", "v1.2.3"},
+	} {
+		c := exec.Command("git", args...)
+		c.Dir = gitDir
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	if got := run(gitDir, map[string]string{"DEVDIAG_ACTION_REF": "refs/tags/v9.9.9"}); got != "v1.2.3" {
+		t.Errorf("git describe should win in a checkout, got %q want v1.2.3", got)
+	}
+}
