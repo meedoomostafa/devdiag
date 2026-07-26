@@ -80,9 +80,11 @@ var (
 	// secretKeyNamePattern classifies variable/key names as secret-bearing.
 	// Substring matches cover compact spellings (NPMTOKEN, GITHUBTOKEN,
 	// PRIVATEKEY) as well as delimited ones (API_TOKEN, PRIVATE_KEY, CI_JOB_JWT).
-	// AUTH matches only as a standalone segment ((?:^|_)auth(?:_|$)) so that
-	// AUTHOR and OAUTH_ENABLED stay classified as non-secret diagnostics.
-	secretKeyNamePattern = regexp.MustCompile(`(?i)(password|passwd|secret|credential|token|api_?key|apikey|private_?key|access_?key|jwt|(?:^|_)auth(?:_|$))`)
+	// KEY and AUTH match only as standalone segments so SSH_KEY/DEPLOY_KEY/
+	// SIGNING_KEY are caught while AUTHOR, OAUTH_ENABLED, and KEYBOARD-style
+	// names stay classified as non-secret diagnostics; masking a benign
+	// CACHE_KEY is an accepted trade-off against leaking a deploy key.
+	secretKeyNamePattern = regexp.MustCompile(`(?i)(password|passwd|secret|credential|token|api_?key|private_?key|access_?key|jwt|(?:^|_)key(?:_|$)|(?:^|_)auth(?:_|$))`)
 )
 
 // homeDir caches the user's home directory.

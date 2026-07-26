@@ -501,6 +501,24 @@ func TestRedactEvidence_SecretSourceKeyMasksBareValue(t *testing.T) {
 			value:  "true",
 			want:   "true",
 		},
+		{
+			name:   "ssh key standalone segment masked",
+			source: "ci_env__job__deploy__SSH_KEY",
+			value:  "ssh-canary",
+			want:   "<redacted>",
+		},
+		{
+			name:   "deploy key masked",
+			source: "ci_env__workflow__DEPLOY_KEY",
+			value:  "deploy-canary",
+			want:   "<redacted>",
+		},
+		{
+			name:   "keyboard-style name keeps value",
+			source: "ci_env__job__scan__KEYBOARD_LAYOUT",
+			value:  "qwerty",
+			want:   "qwerty",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

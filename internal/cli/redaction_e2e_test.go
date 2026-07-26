@@ -103,6 +103,16 @@ func TestRedactionE2E_StdoutAllFormats(t *testing.T) {
 				if strings.TrimSpace(stdout) == "" {
 					t.Fatalf("scan produced empty stdout for %s/%s; canary checks would be vacuous", format, level)
 				}
+				// For formats that render collector evidence, prove the
+				// canary-bearing sources were actually exercised so the
+				// negative checks cannot pass vacuously after a collection
+				// regression. human/github omit collector evidence by design;
+				// they are covered by the off-mode positive control.
+				if format == "json" || format == "ndjson" || format == "markdown" {
+					if !strings.Contains(stdout, "ci.yml") && !strings.Contains(stdout, "docker-compose") && !strings.Contains(stdout, "ci_env") {
+						t.Fatalf("scan output for %s/%s references no fixture source; canary checks are vacuous", format, level)
+					}
+				}
 				assertNoCanary(t, "scan stdout ("+format+"/"+level+")", stdout)
 				assertNoCanary(t, "scan stderr ("+format+"/"+level+")", stderr)
 			})
