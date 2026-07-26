@@ -21,7 +21,9 @@ jobs:
           go-version: ${{ matrix.go-version }}
       - name: gofmt
         run: |
-          unformatted="$(gofmt -l .)"
+          # Gate tracked first-party files only: generated code (bpf2go) and
+          # any future vendored dirs are exempt.
+          unformatted="$(git ls-files '*.go' | grep -v '_bpfel\.go$' | xargs gofmt -l)"
           if [ -n "$unformatted" ]; then
             echo "gofmt required for:" >&2
             echo "$unformatted" >&2
@@ -30,8 +32,8 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
-      - name: race detector (cli, tui)
-        run: go test -race ./internal/cli ./internal/tui -count=1
+      - name: race detector
+        run: go test -race ./... -count=1
 
   staticcheck:
     runs-on: ubuntu-latest
@@ -52,6 +54,9 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
+          # Core scripts gate at default (style) severity; live signoff
+          # harnesses gate at warning until their style debt is paid down.
           shellcheck scripts/action.sh scripts/install.sh
+          shellcheck -S warning scripts/live/*.sh
       - name: actionlint
         uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
