@@ -90,11 +90,25 @@ fi
 REPORT_DIR="${RUNNER_TEMP:-/tmp}/devdiag-artifacts"
 REPORT_PATH="${REPORT_DIR}/devdiag-report.json"
 mkdir -p "${REPORT_DIR}"
+# Remove any artifact left by a previous invocation sharing RUNNER_TEMP so a
+# failed scan in this invocation can never advertise a stale report as its own.
+rm -f "${REPORT_PATH}"
 
 # Check if .devdiag existed beforehand
 HAD_DEVDIAG=true
 if [ ! -d "${PATH_ARG:-.}/.devdiag" ]; then
   HAD_DEVDIAG=false
+fi
+
+# Record run dirs that existed before the scan; pre-existing runs (committed
+# .devdiag dirs, reused self-hosted workspaces) must never be selected as this
+# scan's report, regardless of their mtimes.
+PREEXISTING_RUNS_FILE="${RUNNER_TEMP:-/tmp}/devdiag-preexisting-runs.$$"
+: > "${PREEXISTING_RUNS_FILE}"
+if [ -d "${PATH_ARG:-.}/.devdiag/runs" ]; then
+  for prerun in "${PATH_ARG:-.}"/.devdiag/runs/*/; do
+    [ -d "$prerun" ] && printf '%s\n' "$prerun" >> "${PREEXISTING_RUNS_FILE}"
+  done
 fi
 
 if [ "${SAVE_REPORT_ENABLED}" = "true" ]; then
@@ -119,10 +133,17 @@ else
 fi
 
 LATEST_REPORT=""
-# Find the saved report and copy it to the deterministic REPORT_PATH
+# Find the report saved by THIS scan and copy it to the deterministic
+# REPORT_PATH. Only run dirs created during this invocation are candidates;
+# among them the newest mtime wins.
 if [ "${SAVE_REPORT_ENABLED}" = "true" ] && [ -d "${PATH_ARG:-.}/.devdiag/runs" ]; then
   latest_mtime=0
-  for rep in "${PATH_ARG:-.}"/.devdiag/runs/*/report.json; do
+  for rundir in "${PATH_ARG:-.}"/.devdiag/runs/*/; do
+    [ -d "$rundir" ] || continue
+    if grep -Fxq "$rundir" "${PREEXISTING_RUNS_FILE}"; then
+      continue
+    fi
+    rep="${rundir}report.json"
     if [ -f "$rep" ]; then
       mtime=$(stat -c %Y "$rep" 2>/dev/null || stat -f %m "$rep" 2>/dev/null || echo 0)
       if [ "$mtime" -gt "$latest_mtime" ]; then
@@ -139,6 +160,7 @@ if [ "${SAVE_REPORT_ENABLED}" = "true" ] && [ -d "${PATH_ARG:-.}/.devdiag/runs" 
     echo "Warning: no saved report found under ${PATH_ARG:-.}/.devdiag/runs" >&2
   fi
 fi
+rm -f "${PREEXISTING_RUNS_FILE}"
 
 # Clean up .devdiag if it did not exist before scan
 if [ "${HAD_DEVDIAG}" = "false" ] && [ -d "${PATH_ARG:-.}/.devdiag" ]; then
@@ -178,11 +200,15 @@ fi
 
 SUMMARY_WRITTEN="false"
 if [ "${SUMMARY_ENABLED}" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  # Sanitize the user-supplied artifact name for Markdown context: strip
+  # control characters and backticks so a crafted input cannot break out of
+  # the inline code span or inject misleading summary content.
+  SAFE_ARTIFACT_NAME=$(printf '%s' "${ARTIFACT_NAME:-devdiag-report}" | tr -d '[:cntrl:]`')
   {
     echo "### DevDiag scan"
     echo ""
     if [ "${REPORT_UPLOADED}" = "true" ]; then
-      echo "- Report artifact: \`${ARTIFACT_NAME:-devdiag-report}\`"
+      echo "- Report artifact: \`${SAFE_ARTIFACT_NAME}\`"
       echo "- Report path: \`${FINAL_REPORT_PATH}\`"
     fi
     echo "- Scan exit: \`${SCAN_EXIT}\`"
@@ -194,13 +220,15 @@ if [ "${SUMMARY_ENABLED}" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 fi
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
-  echo "report-path=${FINAL_REPORT_PATH}" >> "${GITHUB_OUTPUT}"
-  echo "summary-written=${SUMMARY_WRITTEN}" >> "${GITHUB_OUTPUT}"
-  echo "scan-exit-code=${SCAN_EXIT}" >> "${GITHUB_OUTPUT}"
-  echo "report-uploaded=${REPORT_UPLOADED}" >> "${GITHUB_OUTPUT}"
-  if [ -n "${RENDER_EXIT}" ]; then
-    echo "render-exit-code=${RENDER_EXIT}" >> "${GITHUB_OUTPUT}"
-  fi
+  {
+    echo "report-path=${FINAL_REPORT_PATH}"
+    echo "summary-written=${SUMMARY_WRITTEN}"
+    echo "scan-exit-code=${SCAN_EXIT}"
+    echo "report-uploaded=${REPORT_UPLOADED}"
+    if [ -n "${RENDER_EXIT}" ]; then
+      echo "render-exit-code=${RENDER_EXIT}"
+    fi
+  } >> "${GITHUB_OUTPUT}"
 fi
 
 # Handle fail-on-findings/fail-severity exit code check
