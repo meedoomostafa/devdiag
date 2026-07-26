@@ -10,6 +10,7 @@ import (
 
 	"github.com/meedoomostafa/devdiag/internal/artifact"
 	"github.com/meedoomostafa/devdiag/internal/baseline"
+	"github.com/meedoomostafa/devdiag/internal/exitcode"
 	"github.com/meedoomostafa/devdiag/internal/schema"
 )
 
@@ -54,7 +55,7 @@ func TestBaselineCreateFromLatestReport(t *testing.T) {
 		{ID: "F-HIGH-001", Severity: schema.SeverityHigh, Title: "High issue"},
 	})
 
-	stdout, stderr, code := runBinary("baseline", "create", dir, "--reason", "accepted for v1.0")
+	stdout, stderr, code := runBinary("baseline", "create", dir, "--reason", "accepted for v1.0", "--all")
 	if code != 0 {
 		t.Fatalf("exit=%d; stdout=%s; stderr=%s", code, stdout, stderr)
 	}
@@ -92,13 +93,13 @@ func TestBaselineCreateRefusesOverwriteWithoutForce(t *testing.T) {
 	})
 
 	// Create baseline first time
-	_, _, code := runBinary("baseline", "create", dir, "--reason", "first")
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "first", "--all")
 	if code != 0 {
 		t.Fatalf("first create failed with exit %d", code)
 	}
 
 	// Try again without --force
-	_, _, code = runBinary("baseline", "create", dir, "--reason", "second")
+	_, _, code = runBinary("baseline", "create", dir, "--reason", "second", "--all")
 	if code == 0 {
 		t.Fatal("expected non-zero exit without --force")
 	}
@@ -109,12 +110,12 @@ func TestBaselineCreateWithForceOverwrites(t *testing.T) {
 		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
 	})
 
-	_, _, code := runBinary("baseline", "create", dir, "--reason", "first")
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "first", "--all")
 	if code != 0 {
 		t.Fatalf("first create failed with exit %d", code)
 	}
 
-	_, _, code = runBinary("baseline", "create", dir, "--reason", "overwritten", "--force")
+	_, _, code = runBinary("baseline", "create", dir, "--reason", "overwritten", "--force", "--all")
 	if code != 0 {
 		t.Fatalf("force overwrite failed with exit %d", code)
 	}
@@ -133,7 +134,7 @@ func TestBaselineCreateWithExpiry(t *testing.T) {
 		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
 	})
 
-	_, _, code := runBinary("baseline", "create", dir, "--reason", "temporary", "--expires", "30d")
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "temporary", "--expires", "30d", "--all")
 	if code != 0 {
 		t.Fatalf("create with expiry failed with exit %d", code)
 	}
@@ -157,7 +158,7 @@ func TestBaselineCreateWithMinSeverity(t *testing.T) {
 		{ID: "F-HIGH-001", Severity: schema.SeverityHigh, Title: "High"},
 	})
 
-	_, _, code := runBinary("baseline", "create", dir, "--reason", "high only", "--min-severity", "high")
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "high only", "--min-severity", "high", "--all")
 	if code != 0 {
 		t.Fatalf("create with min-severity failed with exit %d", code)
 	}
@@ -179,7 +180,7 @@ func TestBaselineCreateWithRunID(t *testing.T) {
 		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
 	})
 
-	_, stderr, code := runBinary("baseline", "create", dir, "--reason", "run test", "--run-id", "2026-06-06T12-00-00Z_abcd")
+	_, stderr, code := runBinary("baseline", "create", dir, "--reason", "run test", "--run-id", "2026-06-06T12-00-00Z_abcd", "--all")
 	if code != 0 {
 		t.Fatalf("create with --run-id failed with exit %d; stderr=%s", code, stderr)
 	}
@@ -196,7 +197,7 @@ func TestBaselineCreateWithRunID(t *testing.T) {
 func TestBaselineCreateNoSavedReport(t *testing.T) {
 	dir := t.TempDir()
 
-	_, _, code := runBinary("baseline", "create", dir, "--reason", "test")
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "test", "--all")
 	if code == 0 {
 		t.Fatal("expected non-zero exit when no saved report exists")
 	}
@@ -311,7 +312,7 @@ func TestBaselineCreateRefusesWhitespaceReason(t *testing.T) {
 		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
 	})
 
-	_, _, code := runBinary("baseline", "create", dir, "--reason", "   ")
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "   ", "--all")
 	if code == 0 {
 		t.Fatal("expected non-zero exit for whitespace-only --reason")
 	}
@@ -482,7 +483,7 @@ func TestBaselineCreateWithFingerprintWritesFingerprint(t *testing.T) {
 		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue", Symptom: "symptom 1"},
 	})
 
-	stdout, stderr, code := runBinary("baseline", "create", dir, "--reason", "accepted specific", "--fingerprint")
+	stdout, stderr, code := runBinary("baseline", "create", dir, "--reason", "accepted specific", "--fingerprint", "--all")
 	if code != 0 {
 		t.Fatalf("exit=%d; stdout=%s; stderr=%s", code, stdout, stderr)
 	}
@@ -1204,5 +1205,105 @@ func TestScanExplicitMissingBaselineFailsBeforeCollectors(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "baseline not found") {
 		t.Fatalf("expected error message to contain 'baseline not found', got: %s", stderr)
+	}
+}
+
+func TestBaselineCreateRequiresFindingOrAll(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+	_, stderr, code := runBinary("baseline", "create", dir, "--reason", "sweep")
+	if code != exitcode.InvalidInput.Int() {
+		t.Fatalf("bare create exit = %d, want %d (must demand --finding or --all); stderr=%s", code, exitcode.InvalidInput.Int(), stderr)
+	}
+	if !strings.Contains(stderr, "--finding") || !strings.Contains(stderr, "--all") {
+		t.Fatalf("error should point at --finding/--all, got: %s", stderr)
+	}
+}
+
+func TestBaselineCreateFindingSelectsOnlyRequested(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+		{ID: "F-HIGH-001", Severity: schema.SeverityHigh, Title: "High issue"},
+	})
+	stdout, stderr, code := runBinary("baseline", "create", dir, "--reason", "accepted", "--finding", "F-ENV-001")
+	if code != 0 {
+		t.Fatalf("exit=%d; stdout=%s; stderr=%s", code, stdout, stderr)
+	}
+	b, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load baseline: %v", err)
+	}
+	if len(b.Entries) != 1 || b.Entries[0].ID != "F-ENV-001" {
+		t.Fatalf("entries = %+v, want exactly F-ENV-001", b.Entries)
+	}
+	// The selection summary must be visible so stale-report mistakes are
+	// catchable: run id + matched IDs + destination on stderr.
+	if !strings.Contains(stderr, "F-ENV-001") {
+		t.Fatalf("stderr should list matched IDs, got: %s", stderr)
+	}
+}
+
+func TestBaselineCreateFindingRepeatableCaseInsensitiveDeduped(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+		{ID: "F-HIGH-001", Severity: schema.SeverityHigh, Title: "High issue"},
+	})
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "accepted",
+		"--finding", "f-env-001", "--finding", "F-HIGH-001", "--finding", "F-ENV-001")
+	if code != 0 {
+		t.Fatalf("exit=%d", code)
+	}
+	b, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load baseline: %v", err)
+	}
+	if len(b.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2 (deduped)", len(b.Entries))
+	}
+}
+
+func TestBaselineCreateFindingFailsClosedOnUnknownID(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+	_, stderr, code := runBinary("baseline", "create", dir, "--reason", "accepted",
+		"--finding", "F-ENV-001", "--finding", "F-NOPE-999")
+	if code != exitcode.InvalidInput.Int() {
+		t.Fatalf("unknown ID exit = %d, want %d", code, exitcode.InvalidInput.Int())
+	}
+	if !strings.Contains(stderr, "F-NOPE-999") {
+		t.Fatalf("stderr should name the unknown ID, got: %s", stderr)
+	}
+	if _, err := os.Stat(baseline.DefaultPath(dir)); !os.IsNotExist(err) {
+		t.Fatalf("baseline must not be written when any requested ID is absent (stat err: %v)", err)
+	}
+}
+
+func TestBaselineCreateAllAndFindingAreMutuallyExclusive(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+	})
+	_, _, code := runBinary("baseline", "create", dir, "--reason", "x", "--all", "--finding", "F-ENV-001")
+	if code != exitcode.InvalidInput.Int() {
+		t.Fatalf("--all with --finding exit = %d, want %d", code, exitcode.InvalidInput.Int())
+	}
+}
+
+func TestBaselineCreateAllSweepsEverything(t *testing.T) {
+	dir := setupBaselineTestProject(t, []schema.Finding{
+		{ID: "F-ENV-001", Severity: schema.SeverityMedium, Title: "Env issue"},
+		{ID: "F-HIGH-001", Severity: schema.SeverityHigh, Title: "High issue"},
+	})
+	_, stderr, code := runBinary("baseline", "create", dir, "--reason", "accepted release baseline", "--all")
+	if code != 0 {
+		t.Fatalf("exit=%d; stderr=%s", code, stderr)
+	}
+	b, err := baseline.Load(baseline.DefaultPath(dir))
+	if err != nil {
+		t.Fatalf("load baseline: %v", err)
+	}
+	if len(b.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(b.Entries))
 	}
 }

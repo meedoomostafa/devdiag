@@ -181,34 +181,44 @@ Baselined findings are treated as suppressed: they are hidden from standard scan
 
 ### Creating a Baseline
 
-Create a baseline file from the latest saved run report in the target directory:
+Baseline specific accepted findings by ID (recommended — each suppression is
+an explicit decision):
 
 ```bash
-devdiag baseline create --reason "accepted local dev configuration"
+devdiag baseline create --reason "CI-only deploy secrets" --finding F-CI-ENV-001
+devdiag baseline create --reason "known dev drift" --finding F-ENV-001 --finding F-DISK-001
 ```
 
-To restrict the baseline to specific finding severities (e.g., only medium or higher):
+`--finding` is repeatable and exact-match; unknown IDs fail the command so a
+typo can never silently baseline nothing. To deliberately baseline every
+finding in the latest saved report, pass `--all` explicitly:
 
 ```bash
-devdiag baseline create --reason "critical bypass" --min-severity medium
+devdiag baseline create --reason "accepted release baseline" --all
+```
+
+To restrict a sweep to specific finding severities (e.g., only medium or higher):
+
+```bash
+devdiag baseline create --reason "critical bypass" --all --min-severity medium
 ```
 
 To set a temporary suppression expiry (supports `d` for days, `h` for hours, `m` for minutes):
 
 ```bash
-devdiag baseline create --reason "temporary certificates drift" --expires 30d
+devdiag baseline create --reason "temporary certificates drift" --all --expires 30d
 ```
 
 If a baseline already exists, use `--force` to overwrite it:
 
 ```bash
-devdiag baseline create --reason "updated reason" --force
+devdiag baseline create --reason "updated reason" --all --force
 ```
 
 To specify the author of the baseline entry (defaults to `$USER`):
 
 ```bash
-devdiag baseline create --reason "manual audit" --created-by "security-team"
+devdiag baseline create --reason "manual audit" --all --created-by "security-team"
 ```
 
 To baseline a specific run rather than the latest:
