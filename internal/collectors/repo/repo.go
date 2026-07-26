@@ -83,12 +83,15 @@ func (c *Collector) Collect(ctx context.Context) (schema.CollectorResult, error)
 	evidence = append(evidence, localCISimulatorEvidence(root)...)
 	evidence = append(evidence, localCommandEvidence(root)...)
 
-	// Devcontainer image extraction
+	// Devcontainer detection. Presence is recorded even when no image can be
+	// parsed (compose-based or Dockerfile-based devcontainers) so downstream
+	// rules see the same signal HasDockerSignal uses.
 	devcontainerPath := filepath.Join(root, ".devcontainer", "devcontainer.json")
 	if fileExists(devcontainerPath) {
-		img := parseDevcontainerImage(devcontainerPath)
-		if img != "" {
+		if img := parseDevcontainerImage(devcontainerPath); img != "" {
 			evidence = append(evidence, schema.Evidence{Source: "devcontainer_image", Value: img})
+		} else {
+			evidence = append(evidence, schema.Evidence{Source: "devcontainer", Value: "Devcontainer config detected"})
 		}
 	}
 

@@ -120,6 +120,13 @@ jobs:
           # regression.
           grep -q 'AWS_SECRET_ACCESS_KEY' "$report"
           grep -q 'docker-compose' "$report"
+          # Version stamping: in this PR-checkout context the action path
+          # has .git, so the report must carry the exact git-describe value
+          # (the no-git DEVDIAG_ACTION_REF fallback is pinned by
+          # TestActionVersionScript). This also catches a regression to the
+          # consumer repo's github.sha.
+          expected_version="$(git describe --tags --always)"
+          jq -e --arg v "$expected_version" '.devdiag_version == $v' "$report"
 
       # Positive control: with redaction off the canaries MUST appear,
       # proving each one actually reaches the collectors.
