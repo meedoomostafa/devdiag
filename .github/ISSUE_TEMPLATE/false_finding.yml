@@ -1,0 +1,61 @@
+name: False or noisy finding
+description: A finding fired where it should not, or its severity feels wrong
+labels: ["finding-quality"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Finding quality reports are the most valuable feedback DevDiag gets:
+        severities are tuned for what a *stranger's* CI should experience,
+        so real-world counterexamples directly improve the rules.
+  - type: input
+    id: finding
+    attributes:
+      label: Finding ID
+      placeholder: F-DOCKER-001
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: DevDiag version
+      placeholder: v0.5.0
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is wrong?
+      options:
+        - Fires but should not (false positive)
+        - Should fire but does not (false negative)
+        - Severity too high for the context
+        - Severity too low for the context
+        - Message/evidence misleading
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Repo context
+      description: |
+        What does the repo look like where this fired? (e.g. "Dockerfile is
+        only a deploy artifact, tests never run containers"). A minimal
+        fixture layout is ideal.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Finding output (redacted)
+      description: |
+        DevDiag redacts by default, but double-check before pasting: never
+        include raw secrets. If this report describes a redaction bypass
+        (a real secret reaching output), do NOT file it here — use
+        [private vulnerability reporting](https://github.com/meedoomostafa/devdiag/security/advisories/new).
+      render: text
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Current workaround
+      placeholder: baselined with `devdiag baseline create --finding ... --reason ...`
