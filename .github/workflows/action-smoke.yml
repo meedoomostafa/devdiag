@@ -123,7 +123,7 @@ jobs:
           # Version stamping: a runner-built binary must never report "dev"
           # (git describe in the checkout, or action_ref fallback for
           # tarball-extracted action paths).
-          jq -e '.devdiag_version != "dev" and .devdiag_version != ""' "$report"
+          jq -e '(.devdiag_version | type == "string") and .devdiag_version != "dev" and .devdiag_version != ""' "$report"
 
       # Positive control: with redaction off the canaries MUST appear,
       # proving each one actually reaches the collectors.

@@ -471,6 +471,13 @@ local-only variables that should not appear in CI.
 flags always win, and invalid config values are reported as partial collector
 results.
 
+Some findings tier their severity by context. `F-DOCKER-001` (Docker daemon
+inactive) is `high` when the repo demonstrably runs containers (Compose files
+or a devcontainer) or when you explicitly run `devdiag check containers`, but
+only `medium` for Dockerfile-only repos, where the image is typically a
+build/deploy artifact and a stopped local daemon should not fail a
+`--fail-severity high` CI gate.
+
 By default, `scan` and `inspect` keep the screen focused on actionable medium,
 high, and critical findings. Low-severity, informational, evidence-only, and
 configured suppressed findings are hidden from rendered and saved reports unless

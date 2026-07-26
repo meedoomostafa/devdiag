@@ -946,6 +946,15 @@ func TestM1Engine_DockerRules_Unavailable(t *testing.T) {
 			collectors:   []schema.CollectorResult{dockerUnavailable, repoWith()},
 			wantSeverity: schema.SeverityMedium,
 		},
+		{
+			// A failed repo collection is not evidence of no container
+			// usage; unknown repos must fail toward high.
+			name: "failed repo collector keeps high",
+			collectors: []schema.CollectorResult{dockerUnavailable, {
+				Name: "repo", Status: schema.CollectorFailed,
+			}},
+			wantSeverity: schema.SeverityHigh,
+		},
 	}
 
 	for _, tc := range cases {

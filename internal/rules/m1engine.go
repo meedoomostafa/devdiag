@@ -1088,6 +1088,12 @@ func dockerDaemonSeverity(collectors map[string]schema.CollectorResult) schema.S
 	if !ok {
 		return schema.SeverityHigh
 	}
+	// A failed or partial repo collection is not trustworthy evidence of
+	// "no container usage"; fail toward high rather than silently
+	// downgrading on unknown repos.
+	if repo.Status != schema.CollectorOK {
+		return schema.SeverityHigh
+	}
 	for _, ev := range repo.Evidence {
 		switch ev.Source {
 		case "compose", "devcontainer", "devcontainer_image":
