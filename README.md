@@ -739,8 +739,10 @@ let Dependabot/Renovate propose bumps:
 - uses: meedoomostafa/devdiag@<full-sha>  # immutable
 ```
 
-The `latest` and `main` refs are not recommended for CI: they are mutable and
-carry no release guarantees.
+A `latest` alias also exists for convenience; the release pipeline moves it
+together with `v0`, only after a release fully publishes. `main` is not
+recommended for CI: it is unreleased code with no publication guarantees.
+For anything security-sensitive, pin the full commit SHA.
 
 #### 1. Fail on High/Critical Findings (Default)
 Emits workflow annotations for findings and fails the build if high or critical issues are found:
