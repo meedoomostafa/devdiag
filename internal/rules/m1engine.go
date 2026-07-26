@@ -1090,8 +1090,9 @@ func dockerDaemonSeverity(collectors map[string]schema.CollectorResult) schema.S
 	}
 	// A failed or partial repo collection is not trustworthy evidence of
 	// "no container usage"; fail toward high rather than silently
-	// downgrading on unknown repos.
-	if repo.Status != schema.CollectorOK {
+	// downgrading on unknown repos. Partial is a separate flag that can be
+	// set alongside an OK status.
+	if repo.Status != schema.CollectorOK || repo.Partial {
 		return schema.SeverityHigh
 	}
 	for _, ev := range repo.Evidence {

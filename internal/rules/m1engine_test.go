@@ -955,6 +955,15 @@ func TestM1Engine_DockerRules_Unavailable(t *testing.T) {
 			}},
 			wantSeverity: schema.SeverityHigh,
 		},
+		{
+			// Partial is a separate flag that can accompany an OK status;
+			// incomplete evidence must not downgrade.
+			name: "partial repo collector keeps high",
+			collectors: []schema.CollectorResult{dockerUnavailable, {
+				Name: "repo", Status: schema.CollectorOK, Partial: true,
+			}},
+			wantSeverity: schema.SeverityHigh,
+		},
 	}
 
 	for _, tc := range cases {

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -922,9 +923,12 @@ func TestActionVersionScript(t *testing.T) {
 		t.Fatalf("action-version.sh not found: %v", err)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	run := func(dir string, env map[string]string) string {
 		t.Helper()
-		cmd := exec.Command("bash", script)
+		cmd := exec.CommandContext(ctx, "bash", script)
 		cmd.Dir = dir
 		cmd.Env = os.Environ()
 		for k, v := range env {
@@ -953,7 +957,7 @@ func TestActionVersionScript(t *testing.T) {
 		{"init", "-q"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"},
 		{"tag", "v1.2.3"},
 	} {
-		c := exec.Command("git", args...)
+		c := exec.CommandContext(ctx, "git", args...)
 		c.Dir = gitDir
 		if out, err := c.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
