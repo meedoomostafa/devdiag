@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -20,6 +22,8 @@ import (
 
 var (
 	baselineCreateReason      string
+	baselineCreateFindings    []string
+	baselineCreateAll         bool
 	baselineCreateExpires     string
 	baselineCreateCreatedBy   string
 	baselineCreateForce       bool
@@ -55,21 +59,33 @@ var baselineCreateCmd = &cobra.Command{
 	Use:   "create [path]",
 	Short: "Create a baseline file from a saved scan report",
 	Long: `Create a .devdiag/baseline.yaml file from the latest saved scan report.
-All visible findings from the saved report become baseline entries.
+
+Selection is explicit: pass --finding <id> (repeatable) to baseline specific
+findings, or --all to deliberately baseline every finding in the report.
+Unknown --finding IDs fail the command without writing anything.
+
+Use 'baseline add'/'baseline remove' to edit an existing baseline
+incrementally; 'create' initializes or (with --force) replaces the file.
 
 If the saved report was created without --include-hidden, low/info/evidence-only
 findings are not present and cannot be baselined from that report.`,
-	Example: `  # Create baseline from the latest saved report under current directory
-  devdiag baseline create --reason "Suppressing known dev warnings"
+	Example: `  # Baseline one specific accepted finding (recommended)
+  devdiag baseline create --reason "CI-only deploy secrets" --finding F-CI-ENV-001
 
-  # Create baseline specifying an author and duration-based expiry
-  devdiag baseline create --reason "Temporary cert drift" --expires 30d --created-by "dev-team"
+  # Baseline several findings at once
+  devdiag baseline create --reason "known dev drift" --finding F-ENV-001 --finding F-DISK-001
 
-  # Create baseline only for medium and higher severity findings
-  devdiag baseline create --reason "Critical suppressions" --min-severity medium
+  # Explicitly baseline every finding in the report (deliberate sweep)
+  devdiag baseline create --reason "accepted release baseline" --all
 
-  # Create a baseline using exact instance-level fingerprinting
-  devdiag baseline create --reason "Specific container ports" --fingerprint`,
+  # Sweep with an author and duration-based expiry
+  devdiag baseline create --reason "Temporary cert drift" --all --expires 30d --created-by "dev-team"
+
+  # Sweep only medium and higher severity findings
+  devdiag baseline create --reason "Critical suppressions" --all --min-severity medium
+
+  # Use exact instance-level fingerprinting
+  devdiag baseline create --reason "Specific container ports" --all --fingerprint`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := buildLogger()
@@ -77,6 +93,22 @@ findings are not present and cannot be baselined from that report.`,
 		reason := strings.TrimSpace(baselineCreateReason)
 		if reason == "" {
 			return exitCodeError{code: exitcode.InvalidInput, message: "--reason is required"}
+		}
+		if baselineCreateAll && len(baselineCreateFindings) > 0 {
+			return exitCodeError{code: exitcode.InvalidInput, message: "--all and --finding are mutually exclusive"}
+		}
+		if !baselineCreateAll && len(baselineCreateFindings) == 0 {
+			return exitCodeError{
+				code: exitcode.InvalidInput,
+				message: "select findings explicitly: pass --finding <id> (repeatable) for specific findings, " +
+					"or --all to deliberately baseline every finding in the report",
+			}
+		}
+		// An explicit ID selection is already the filter; layering a
+		// severity filter on top could silently drop requested findings
+		// and write an empty baseline.
+		if len(baselineCreateFindings) > 0 && baselineCreateMinSev != "" {
+			return exitCodeError{code: exitcode.InvalidInput, message: "--min-severity applies to --all sweeps; it cannot be combined with explicit --finding selection"}
 		}
 
 		scanPath := "."
@@ -91,14 +123,27 @@ findings are not present and cannot be baselined from that report.`,
 
 		// Load the saved report.
 		var rep *schema.Report
+		resolvedRunID := baselineCreateRunID
 		if baselineCreateRunID != "" {
 			rep, err = resolveReportFromRunID(absPath, baselineCreateRunID)
 		} else {
-			rep, _, err = resolveLatestReport(absPath)
+			rep, resolvedRunID, err = resolveLatestReport(absPath)
 		}
 		if err != nil {
 			logger.Error("baseline", err.Error())
 			return exitCodeError{code: exitcode.InvalidInput, message: fmt.Sprintf("load saved report: %v", err)}
+		}
+
+		// Resolve the finding selection. Exact-ID, case-insensitive,
+		// deduplicated; fail closed when any requested ID is absent from
+		// the report so a typo cannot silently baseline nothing.
+		selected := rep.Findings
+		if len(baselineCreateFindings) > 0 {
+			selected, err = selectFindingsByID(rep.Findings, baselineCreateFindings)
+			if err != nil {
+				logger.Error("baseline", err.Error())
+				return exitCodeError{code: exitcode.InvalidInput, message: err.Error()}
+			}
 		}
 
 		// Check if baseline already exists.
@@ -142,7 +187,22 @@ findings are not present and cannot be baselined from that report.`,
 			opts.MinSeverity = sev
 		}
 
-		b := baseline.CreateFromFindings(rep.Findings, opts)
+		b := baseline.CreateFromFindings(selected, opts)
+
+		// Print the selection summary before writing so stale-report or
+		// wrong-run mistakes are visible at the moment they happen.
+		matchMode := "id"
+		if baselineCreateFingerprint {
+			matchMode = "fingerprint"
+		}
+		ids := make([]string, 0, len(b.Entries))
+		for _, e := range b.Entries {
+			ids = append(ids, sanitizeTerminal(e.ID))
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "Baselining from run %s: %d entr%s [%s] (match: %s) -> %s\n",
+			sanitizeTerminal(resolvedRunID), len(b.Entries), pluralYIes(len(b.Entries)),
+			strings.Join(ids, ", "), matchMode, sanitizeTerminal(buildRedactEngine().RedactString(baselinePath, "path")))
+
 		if err := baseline.Save(baselinePath, b); err != nil {
 			logger.Error("baseline", err.Error())
 			return exitCodeError{code: exitcode.InternalError, message: fmt.Sprintf("save baseline: %v", err)}
@@ -711,6 +771,61 @@ func formatBaselineTime(t time.Time) string {
 }
 
 // resolveCreatedBy determines the author of the baseline entry.
+// selectFindingsByID filters findings to the requested IDs. Matching is
+// exact-ID and case-insensitive; requests are deduplicated; any requested ID
+// absent from the report is an error (fail closed). All report instances of
+// a requested ID are kept: fingerprint mode needs every instance, and
+// CreateFromFindings already deduplicates by ID or ID:fingerprint.
+func selectFindingsByID(findings []schema.Finding, requested []string) ([]schema.Finding, error) {
+	want := make(map[string]bool, len(requested))
+	for _, r := range requested {
+		id := strings.ToUpper(strings.TrimSpace(r))
+		if id == "" {
+			return nil, fmt.Errorf("--finding value must not be empty")
+		}
+		want[id] = true
+	}
+	selected := make([]schema.Finding, 0, len(want))
+	found := make(map[string]bool, len(want))
+	for _, f := range findings {
+		key := strings.ToUpper(strings.TrimSpace(f.ID))
+		if want[key] {
+			selected = append(selected, f)
+			found[key] = true
+		}
+	}
+	var missing []string
+	for id := range want {
+		if !found[id] {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return nil, fmt.Errorf("finding(s) not present in the saved report: %s (nothing was baselined)", sanitizeTerminal(strings.Join(missing, ", ")))
+	}
+	return selected, nil
+}
+
+func pluralYIes(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
+}
+
+// sanitizeTerminal strips control characters (including ANSI escape
+// sequences) from values echoed to the terminal, so report- or
+// flag-sourced strings cannot inject cursor movement or fake output.
+func sanitizeTerminal(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 func resolveCreatedBy() string {
 	if baselineCreateCreatedBy != "" {
 		return strings.TrimSpace(baselineCreateCreatedBy)
@@ -743,6 +858,8 @@ func parseSeverity(v string) (schema.Severity, bool) {
 
 func init() {
 	baselineCreateCmd.Flags().StringVar(&baselineCreateReason, "reason", "", "Reason for accepting these findings (required)")
+	baselineCreateCmd.Flags().StringArrayVar(&baselineCreateFindings, "finding", nil, "Finding ID to baseline (repeatable; exact match, fails on unknown IDs)")
+	baselineCreateCmd.Flags().BoolVar(&baselineCreateAll, "all", false, "Deliberately baseline every finding in the report")
 	baselineCreateCmd.Flags().StringVar(&baselineCreateExpires, "expires", "", "Expiry duration for all entries (e.g., 30d, 12h, 90m)")
 	baselineCreateCmd.Flags().StringVar(&baselineCreateCreatedBy, "created-by", "", "Author of the baseline entries (default: $USER)")
 	baselineCreateCmd.Flags().BoolVar(&baselineCreateForce, "force", false, "Overwrite existing baseline file")
