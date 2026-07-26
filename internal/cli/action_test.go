@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestActionScript validates action.sh logic under various conditions.
@@ -724,4 +725,186 @@ func getArgValue(slice []string, argName string) string {
 		}
 	}
 	return ""
+}
+
+// actionHarness bundles the fixture set for a single action.sh invocation.
+type actionHarness struct {
+	actionScript string
+	tmpDir       string
+	mockBinDir   string
+	runnerTemp   string
+	ghOutput     string
+	ghSummary    string
+	scanDir      string
+}
+
+func newActionHarness(t *testing.T) *actionHarness {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	actionScript := filepath.Clean(filepath.Join(cwd, "..", "..", "scripts", "action.sh"))
+	if _, err := os.Stat(actionScript); err != nil {
+		t.Fatalf("action.sh not found at %s: %v", actionScript, err)
+	}
+	tmpDir := t.TempDir()
+	h := &actionHarness{
+		actionScript: actionScript,
+		tmpDir:       tmpDir,
+		mockBinDir:   filepath.Join(tmpDir, "bin"),
+		runnerTemp:   filepath.Join(tmpDir, "temp-runner"),
+		ghOutput:     filepath.Join(tmpDir, "gh-output"),
+		ghSummary:    filepath.Join(tmpDir, "gh-summary"),
+		scanDir:      filepath.Join(tmpDir, "scan-target"),
+	}
+	for _, d := range []string{h.mockBinDir, h.runnerTemp, h.scanDir} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{h.ghOutput, h.ghSummary} {
+		if err := os.WriteFile(f, []byte{}, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return h
+}
+
+// writeMock installs a mock devdiag that saves a report tagged with runID
+// (when saveReport) and exits with scanExit for scan invocations.
+func (h *actionHarness) writeMock(t *testing.T, runID string, saveReport bool, scanExit string) {
+	t.Helper()
+	saveBlock := ""
+	if saveReport {
+		saveBlock = `
+for arg in "$@"; do
+  if [ "$arg" = "--save-report" ]; then
+    PATH_ARG="${@: -1}"
+    RUNS_DIR="${PATH_ARG}/.devdiag/runs/` + runID + `"
+    mkdir -p "${RUNS_DIR}"
+    echo '{"RunID": "` + runID + `", "Findings": []}' > "${RUNS_DIR}/report.json"
+  fi
+done`
+	}
+	mock := `#!/usr/bin/env bash` + saveBlock + `
+if [ "$1" = "scan" ]; then
+  exit ` + scanExit + `
+fi
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(h.mockBinDir, "devdiag"), []byte(mock), 0755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (h *actionHarness) run(t *testing.T, extraEnv map[string]string) (string, int) {
+	t.Helper()
+	// Reset GITHUB_OUTPUT between invocations like a fresh step would.
+	if err := os.WriteFile(h.ghOutput, []byte{}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(h.actionScript)
+	cmd.Dir = h.tmpDir
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("PATH=%s%c%s", h.mockBinDir, filepath.ListSeparator, os.Getenv("PATH")),
+		fmt.Sprintf("RUNNER_TEMP=%s", h.runnerTemp),
+		fmt.Sprintf("GITHUB_OUTPUT=%s", h.ghOutput),
+		fmt.Sprintf("GITHUB_STEP_SUMMARY=%s", h.ghSummary),
+		fmt.Sprintf("PATH_ARG=%s", h.scanDir),
+		"CI=true", "SUMMARY=true", "SAVE_REPORT=true",
+		"FAIL_ON_FINDINGS=false", "FAIL_SEVERITY=off",
+		"FORMAT=github", "REDACT=default",
+	)
+	for k, v := range extraEnv {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+	}
+	out, err := cmd.CombinedOutput()
+	code := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code = exitErr.ExitCode()
+		} else {
+			t.Fatalf("run action.sh: %v", err)
+		}
+	}
+	return string(out), code
+}
+
+// TestActionScript_NoStaleReportAcrossInvocations pins that a failed scan in
+// a second invocation sharing RUNNER_TEMP cannot report the first
+// invocation's artifact as its own (report-uploaded must be false and the
+// stale REPORT_PATH must not be advertised).
+func TestActionScript_NoStaleReportAcrossInvocations(t *testing.T) {
+	h := newActionHarness(t)
+
+	h.writeMock(t, "firstrun", true, "0")
+	_, code := h.run(t, nil)
+	if code != 0 {
+		t.Fatalf("first invocation exit = %d, want 0", code)
+	}
+	first := readGHFile(t, h.ghOutput)
+	if first["report-uploaded"] != "true" {
+		t.Fatalf("first invocation report-uploaded = %s, want true", first["report-uploaded"])
+	}
+
+	// Second invocation: scan fails with an operational error (exit 2) and
+	// saves nothing. Same RUNNER_TEMP, fresh scan dir.
+	h.scanDir = filepath.Join(h.tmpDir, "scan-target-2")
+	if err := os.MkdirAll(h.scanDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	h.writeMock(t, "secondrun", false, "2")
+	_, code = h.run(t, nil)
+	if code != 2 {
+		t.Fatalf("second invocation exit = %d, want 2 (scan error must propagate)", code)
+	}
+	second := readGHFile(t, h.ghOutput)
+	if second["report-uploaded"] != "false" {
+		t.Errorf("second invocation report-uploaded = %s, want false (stale artifact from first run reused)", second["report-uploaded"])
+	}
+	if second["report-path"] != "" {
+		t.Errorf("second invocation report-path = %s, want empty", second["report-path"])
+	}
+}
+
+// TestActionScript_IgnoresPreexistingForeignRuns pins that a pre-existing
+// .devdiag run dir (committed to the repo or left by a previous workspace
+// user) cannot be selected over the report the scan just produced, even with
+// a future mtime.
+func TestActionScript_IgnoresPreexistingForeignRuns(t *testing.T) {
+	h := newActionHarness(t)
+
+	foreignDir := filepath.Join(h.scanDir, ".devdiag", "runs", "FOREIGN_RUN")
+	if err := os.MkdirAll(foreignDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	foreignReport := filepath.Join(foreignDir, "report.json")
+	if err := os.WriteFile(foreignReport, []byte(`{"RunID": "FOREIGN_RUN", "stale": true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(24 * time.Hour)
+	if err := os.Chtimes(foreignReport, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	h.writeMock(t, "freshrun", true, "0")
+	_, code := h.run(t, nil)
+	if code != 0 {
+		t.Fatalf("action exit = %d, want 0", code)
+	}
+	out := readGHFile(t, h.ghOutput)
+	if out["report-uploaded"] != "true" {
+		t.Fatalf("report-uploaded = %s, want true", out["report-uploaded"])
+	}
+	data, err := os.ReadFile(out["report-path"])
+	if err != nil {
+		t.Fatalf("read exported report: %v", err)
+	}
+	if strings.Contains(string(data), "FOREIGN_RUN") {
+		t.Errorf("exported report is the foreign pre-existing run, want freshrun: %s", string(data))
+	}
+	if !strings.Contains(string(data), "freshrun") {
+		t.Errorf("exported report does not contain the fresh run: %s", string(data))
+	}
 }

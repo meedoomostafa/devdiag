@@ -512,7 +512,8 @@ func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 		"steps.allow.outputs.summary-written",
 		"jq -e '.schema_version and .collectors and .findings'",
 		"jq -e '.. | strings | select(contains(\"<redacted>\"))'",
-		"! grep -q 'secret123'",
+		"if grep -q 'secret123' \"$report_path\"; then echo \"redaction leak in report\" >&2; exit 1; fi",
+		"if grep -q 'secret123' \"$downloaded\"; then echo \"redaction leak in downloaded artifact\" >&2; exit 1; fi",
 		"continue-on-error: true",
 		"fail-on-findings: 'true'",
 		"fail-severity: medium",
@@ -542,7 +543,7 @@ func TestActionSmokeWorkflowContract(t *testing.T) {
 		"workflow_dispatch:",
 		"permissions:",
 		"contents: read",
-		"uses: actions/checkout@v6",
+		"uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6",
 		"uses: ./",
 		"format: github",
 		"format: markdown",
@@ -553,6 +554,16 @@ func TestActionSmokeWorkflowContract(t *testing.T) {
 		"test -f \"${{ steps.devdiag.outputs.report-path }}\"",
 		"steps.devdiag.outputs.summary-written",
 		"steps.devdiag.outputs.report-uploaded",
+		// PR-gating canary and error-propagation jobs
+		"redaction-canary:",
+		"CANARYAWSKEYabcdef1234567890",
+		"CANARYCOMPOSEDEFAULT",
+		"error-propagation:",
+		"path: /nonexistent-devdiag-smoke-path",
+		"steps.badpath.outputs.scan-exit-code }}\" = \"2\"",
+		"steps.badpath.outputs.report-uploaded }}\" = \"false\"",
+		"fail-severity: info",
+		"steps.threshold.outputs.report-uploaded }}\" = \"true\"",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Fatalf("action smoke workflow missing %q:\n%s", want, workflow)

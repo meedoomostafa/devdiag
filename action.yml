@@ -84,29 +84,43 @@ runs:
         else
           echo "devdiag-found=false" >> "$GITHUB_OUTPUT"
         fi
-        if command -v go >/dev/null 2>&1; then
-          echo "go-found=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "go-found=false" >> "$GITHUB_OUTPUT"
+        # Building from source requires the go.mod toolchain floor, not just
+        # any Go: a self-hosted runner with an older Go must not skip setup.
+        # Fail closed: unparsable go.mod, devel toolchains, or any non-release
+        # GOVERSION all fall through to setup-go.
+        REQUIRED_GO="$(sed -n 's/^go \([0-9.]*\).*/\1/p' "$GITHUB_ACTION_PATH/go.mod" 2>/dev/null || true)"
+        GO_OK=false
+        if [ -n "$REQUIRED_GO" ] && command -v go >/dev/null 2>&1; then
+          INSTALLED_GO="$(go env GOVERSION | sed -n 's/^go\([0-9][0-9.]*\)$/\1/p')"
+          if [ -n "$INSTALLED_GO" ]; then
+            LOWEST="$(printf '%s\n%s\n' "$REQUIRED_GO" "$INSTALLED_GO" | sort -V | head -n1)"
+            if [ "$LOWEST" = "$REQUIRED_GO" ]; then
+              GO_OK=true
+            fi
+          fi
         fi
+        echo "go-found=$GO_OK" >> "$GITHUB_OUTPUT"
       shell: bash
 
     - name: Set up Go
       if: steps.check-tools.outputs.go-found != 'true' && (inputs.use-system-devdiag != 'true' || steps.check-tools.outputs.devdiag-found != 'true')
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
       with:
         go-version: 'stable'
 
     - name: Ensure devdiag binary is prepared
+      env:
+        USE_SYSTEM_DEVDIAG: ${{ inputs.use-system-devdiag }}
+        DEVDIAG_FOUND: ${{ steps.check-tools.outputs.devdiag-found }}
       run: |
-        if [ "${{ inputs.use-system-devdiag }}" = "true" ] && [ "${{ steps.check-tools.outputs.devdiag-found }}" = "true" ]; then
+        if [ "${USE_SYSTEM_DEVDIAG}" = "true" ] && [ "${DEVDIAG_FOUND}" = "true" ]; then
           echo "Using preinstalled devdiag binary from system PATH."
         else
-          if [ -f "${{ github.action_path }}/go.mod" ]; then
-            echo "Building devdiag from action source in ${{ github.action_path }}..."
+          if [ -f "$GITHUB_ACTION_PATH/go.mod" ]; then
+            echo "Building devdiag from action source in $GITHUB_ACTION_PATH..."
             mkdir -p "$RUNNER_TEMP/devdiag-bin"
             (
-              cd "${{ github.action_path }}"
+              cd "$GITHUB_ACTION_PATH"
               APP_VERSION="$(git describe --tags --always 2>/dev/null || echo dev)"
               go build -v -ldflags "-X github.com/meedoomostafa/devdiag/internal/version.Version=${APP_VERSION}" -o "$RUNNER_TEMP/devdiag-bin/devdiag" ./cmd/devdiag
             )
@@ -122,7 +136,7 @@ runs:
       id: devdiag
       run: |
         # Run action helper script
-        "${{ github.action_path }}/scripts/action.sh"
+        "$GITHUB_ACTION_PATH/scripts/action.sh"
       shell: bash
       env:
         PATH_ARG: ${{ inputs.path }}
@@ -140,8 +154,12 @@ runs:
         SAVE_REPORT: ${{ inputs.save-report }}
 
     - name: Upload JSON Report Artifact
-      uses: actions/upload-artifact@v4
-      if: always() && inputs.save-report == 'true' && steps.devdiag.outputs.report-uploaded == 'true'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      # report-uploaded is the single source of truth: the script sets it only
+      # when save-report normalized to true AND a fresh report was produced.
+      # Re-checking the raw input here would diverge for accepted spellings
+      # like TRUE/yes/1.
+      if: always() && steps.devdiag.outputs.report-uploaded == 'true'
       with:
         name: ${{ inputs.artifact-name }}
         path: ${{ runner.temp }}/devdiag-artifacts/devdiag-report.json
