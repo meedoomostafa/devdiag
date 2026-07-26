@@ -1075,6 +1075,28 @@ func evidenceContainsValue(evidence []schema.Evidence, needle string) bool {
 	return false
 }
 
+// dockerDaemonSeverity tiers F-DOCKER-001 by how strongly the snapshot says
+// a running daemon is required:
+//   - no repo collector in the snapshot: the user explicitly asked about
+//     containers (check containers) — high
+//   - compose or devcontainer evidence: the workflow runs containers — high
+//   - Dockerfile-only (or no container evidence): the image is a build/deploy
+//     artifact; local tests and CI rarely need the daemon — medium, so a
+//     flaky runner daemon does not trip fail-severity:high gates
+func dockerDaemonSeverity(collectors map[string]schema.CollectorResult) schema.Severity {
+	repo, ok := collectors["repo"]
+	if !ok {
+		return schema.SeverityHigh
+	}
+	for _, ev := range repo.Evidence {
+		switch ev.Source {
+		case "compose", "devcontainer", "devcontainer_image":
+			return schema.SeverityHigh
+		}
+	}
+	return schema.SeverityMedium
+}
+
 // dockerRules creates findings from docker collector evidence.
 func (e *M1Engine) dockerRules(result schema.CollectorResult, collectors map[string]schema.CollectorResult) []schema.Finding {
 	var findings []schema.Finding
@@ -1110,7 +1132,7 @@ func (e *M1Engine) dockerRules(result schema.CollectorResult, collectors map[str
 			findings = append(findings, schema.Finding{
 				ID:         "F-DOCKER-001",
 				Title:      "Docker daemon inactive or inaccessible",
-				Severity:   schema.SeverityHigh,
+				Severity:   dockerDaemonSeverity(collectors),
 				Confidence: 0.8,
 				Symptom:    "Docker daemon is not running or is unreachable",
 				Evidence:   result.Evidence,
@@ -1123,7 +1145,9 @@ func (e *M1Engine) dockerRules(result schema.CollectorResult, collectors map[str
 		}
 	}
 
-	// Only emit F-DOCKER-003 if repo has compose/devcontainer signals
+	// Only emit F-DOCKER-003 when the repo actually uses Compose files: the
+	// finding is about the missing compose plugin, which devcontainer-only
+	// repos do not need.
 	repoHasCompose := false
 	if compose, ok := collectors["compose"]; ok {
 		for _, ev := range compose.Evidence {

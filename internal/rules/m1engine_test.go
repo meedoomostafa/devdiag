@@ -892,30 +892,82 @@ func TestM1Engine_PortRules_Conflict(t *testing.T) {
 }
 
 func TestM1Engine_DockerRules_Unavailable(t *testing.T) {
-	engine := NewM1Engine()
-	snapshot := graph.NormalizedSnapshot{
-		Collectors: []schema.CollectorResult{
-			{
-				Name:   "docker",
-				Status: schema.CollectorUnavailable,
-				Evidence: []schema.Evidence{
-					{Source: "docker_binary", Value: "/usr/bin/docker"},
-				},
-			},
+	dockerUnavailable := schema.CollectorResult{
+		Name:   "docker",
+		Status: schema.CollectorUnavailable,
+		Evidence: []schema.Evidence{
+			{Source: "docker_binary", Value: "/usr/bin/docker"},
 		},
 	}
-	findings, err := engine.Evaluate(snapshot)
-	if err != nil {
-		t.Fatalf("Evaluate error: %v", err)
-	}
-	var hasDocker001 bool
-	for _, f := range findings {
-		if f.ID == "F-DOCKER-001" {
-			hasDocker001 = true
+	repoWith := func(sources ...string) schema.CollectorResult {
+		ev := make([]schema.Evidence, 0, len(sources))
+		for _, s := range sources {
+			ev = append(ev, schema.Evidence{Source: s, Value: "detected"})
 		}
+		return schema.CollectorResult{Name: "repo", Status: schema.CollectorOK, Evidence: ev}
 	}
-	if !hasDocker001 {
-		t.Errorf("expected F-DOCKER-001 finding, got: %v", findings)
+
+	cases := []struct {
+		name         string
+		collectors   []schema.CollectorResult
+		wantSeverity schema.Severity
+	}{
+		{
+			// check containers: no repo collector in snapshot means the user
+			// explicitly asked about docker; daemon down is high.
+			name:         "explicit container check without repo collector",
+			collectors:   []schema.CollectorResult{dockerUnavailable},
+			wantSeverity: schema.SeverityHigh,
+		},
+		{
+			// Dockerfile-only repos build images but rarely need a local
+			// daemon for tests/CI; a down daemon must not trip high gates.
+			name:         "dockerfile-only repo downgrades to medium",
+			collectors:   []schema.CollectorResult{dockerUnavailable, repoWith("Dockerfile")},
+			wantSeverity: schema.SeverityMedium,
+		},
+		{
+			name:         "compose repo stays high",
+			collectors:   []schema.CollectorResult{dockerUnavailable, repoWith("Dockerfile", "compose")},
+			wantSeverity: schema.SeverityHigh,
+		},
+		{
+			name:         "devcontainer with image stays high",
+			collectors:   []schema.CollectorResult{dockerUnavailable, repoWith("Dockerfile", "devcontainer_image")},
+			wantSeverity: schema.SeverityHigh,
+		},
+		{
+			name:         "devcontainer without parsed image stays high",
+			collectors:   []schema.CollectorResult{dockerUnavailable, repoWith("Dockerfile", "devcontainer")},
+			wantSeverity: schema.SeverityHigh,
+		},
+		{
+			name:         "repo without container evidence downgrades to medium",
+			collectors:   []schema.CollectorResult{dockerUnavailable, repoWith()},
+			wantSeverity: schema.SeverityMedium,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := NewM1Engine()
+			findings, err := engine.Evaluate(graph.NormalizedSnapshot{Collectors: tc.collectors})
+			if err != nil {
+				t.Fatalf("Evaluate error: %v", err)
+			}
+			var got *schema.Finding
+			for i := range findings {
+				if findings[i].ID == "F-DOCKER-001" {
+					got = &findings[i]
+				}
+			}
+			if got == nil {
+				t.Fatalf("expected F-DOCKER-001 finding, got: %v", findings)
+			}
+			if got.Severity != tc.wantSeverity {
+				t.Errorf("F-DOCKER-001 severity = %s, want %s", got.Severity, tc.wantSeverity)
+			}
+		})
 	}
 }
 
