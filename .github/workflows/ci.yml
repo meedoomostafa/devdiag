@@ -47,7 +47,7 @@ jobs:
         with:
           go-version: '1.25'
       - name: Test with coverage
-        run: go test ./... -count=1 -coverprofile=coverage.out
+        run: go test ./... -count=1 -coverpkg=./... -coverprofile=coverage.out
       # Upload BEFORE enforcement so the profile survives floor failures
       # (the artifact is exactly what a regression diagnosis needs).
       - name: Upload coverage artifact
@@ -61,12 +61,12 @@ jobs:
       - name: Enforce coverage floor
         run: |
           total="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/,"",$3); print $3}')"
-          # Baseline 70.3% at introduction; 0.8pt allowance for platform
+          # Baseline 71.2% cross-package at introduction; allowance for platform
           # variance. Ratchet policy: raise the floor as coverage grows,
           # never lower it. Known blind spot: internal/cli black-box tests
           # execute a real binary built WITHOUT instrumentation (TestMain),
           # so their exercised paths do not count toward this number.
-          floor="69.5"
+          floor="70.4"
           echo "total coverage: ${total}% (floor: ${floor}%)"
           if awk -v t="$total" -v f="$floor" 'BEGIN { exit !(t < f) }'; then
             echo "coverage ${total}% fell below the ${floor}% floor" >&2
