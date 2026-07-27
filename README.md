@@ -1,5 +1,10 @@
 # DevDiag
 
+[![CI](https://github.com/meedoomostafa/devdiag/actions/workflows/ci.yml/badge.svg)](https://github.com/meedoomostafa/devdiag/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/meedoomostafa/devdiag/badge)](https://scorecard.dev/viewer/?uri=github.com/meedoomostafa/devdiag)
+[![Latest release](https://img.shields.io/github/v/release/meedoomostafa/devdiag)](https://github.com/meedoomostafa/devdiag/releases/latest)
+[![Go Report Card](https://goreportcard.com/badge/github.com/meedoomostafa/devdiag)](https://goreportcard.com/report/github.com/meedoomostafa/devdiag)
+
 DevDiag is a Linux-first, evidence-driven diagnostic CLI for developers. It correlates repo metadata, host state, containers, services, logs, CI config, caches, GPU signals, and optional traces to explain why a project does not run correctly on the current Linux machine.
 
 ![DevDiag Architecture and Core Concepts Overview](docs/images/overview.png)
