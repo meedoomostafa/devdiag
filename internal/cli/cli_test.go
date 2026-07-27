@@ -493,18 +493,35 @@ func TestGitHubActionMetadataSupportsArtifactsSummaryAndConfigurableFindings(t *
 	}
 }
 
+// usesRefPattern captures the ref of every external `uses:` line. Local
+// composite references (uses: ./) have no ref and are skipped.
+var usesRefPattern = regexp.MustCompile(`(?m)^\s*-?\s*uses:\s*([^\s@]+)@(\S+)`)
+
+// assertAllUsesSHAPinned enforces the generalized invariant that every
+// external action reference in a workflow is pinned to a full 40-hex commit
+// SHA. Dependabot pin bumps pass; tag or branch refs fail.
+func assertAllUsesSHAPinned(t *testing.T, name, workflow string) {
+	t.Helper()
+	fullSHA := regexp.MustCompile(`^[0-9a-f]{40}$`)
+	matches := usesRefPattern.FindAllStringSubmatch(workflow, -1)
+	if len(matches) == 0 {
+		t.Fatalf("%s workflow contains no external uses: references; contract check is vacuous", name)
+	}
+	for _, m := range matches {
+		action, ref := m[1], m[2]
+		if !fullSHA.MatchString(ref) {
+			t.Errorf("%s workflow: %s@%s is not pinned to a full 40-hex commit SHA", name, action, ref)
+		}
+	}
+}
+
 func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "action-live-signoff.yml"))
 	if err != nil {
 		t.Fatalf("read action live signoff workflow: %v", err)
 	}
 	workflow := string(data)
-	// SHA-pinning is the invariant, not one specific SHA: Dependabot bumps
-	// pins and must not break this contract test.
-	shaPinnedDownload := regexp.MustCompile(`uses: actions/download-artifact@[0-9a-f]{40}`)
-	if !shaPinnedDownload.MatchString(workflow) {
-		t.Fatalf("live signoff workflow must SHA-pin actions/download-artifact:\n%s", workflow)
-	}
+	assertAllUsesSHAPinned(t, "live signoff", workflow)
 	for _, want := range []string{
 		"workflow_dispatch:",
 		"go-version: ['1.25', '1.26']",
@@ -543,12 +560,7 @@ func TestActionSmokeWorkflowContract(t *testing.T) {
 		t.Fatalf("read action smoke workflow: %v", err)
 	}
 	workflow := string(data)
-	// The invariant is SHA-pinning, not one specific SHA: Dependabot bumps
-	// the pin and must not break this contract test.
-	shaPinnedCheckout := regexp.MustCompile(`uses: actions/checkout@[0-9a-f]{40}`)
-	if !shaPinnedCheckout.MatchString(workflow) {
-		t.Fatalf("action smoke workflow must SHA-pin actions/checkout:\n%s", workflow)
-	}
+	assertAllUsesSHAPinned(t, "action smoke", workflow)
 	for _, want := range []string{
 		"name: Action Smoke",
 		"pull_request:",
