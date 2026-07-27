@@ -46,9 +46,15 @@ We agree to restrict the following behaviors in our community. Instances, threat
 
 Tensions can occur between community members even when they are trying their best to collaborate. Not every conflict represents a code of conduct violation, and this Code of Conduct reinforces encouraged behaviors and norms that can help avoid conflicts and minimize harm.
 
-When an incident does occur, it is important to report it promptly. To report a possible violation, email the maintainer at the address on the [GitHub profile](https://github.com/meedoomostafa), or use [GitHub private vulnerability reporting](https://github.com/meedoomostafa/devdiag/security/advisories/new) for conduct issues that overlap with security concerns. Reports are handled confidentially by the project maintainer.
+When an incident does occur, it is important to report it promptly. To report a possible violation, email the maintainer at the address on the [GitHub profile](https://github.com/meedoomostafa), or use [GitHub private vulnerability reporting](https://github.com/meedoomostafa/devdiag/security/advisories/new) for conduct issues that overlap with security concerns. Reports are handled confidentially by the project maintainer. If a report concerns the maintainer themselves, report the behavior directly to GitHub via [Report abuse](https://github.com/contact/report-abuse), which provides an enforcement path independent of this project.
 
 Community Moderators take reports of violations seriously and will make every effort to respond in a timely manner. They will investigate all reports of code of conduct violations, reviewing messages, logs, and recordings, or interviewing witnesses and other participants. Community Moderators will keep investigation and enforcement actions as transparent as possible while prioritizing safety and confidentiality. In order to honor these values, enforcement actions are carried out in private with the involved parties, but communicating to the whole community may be part of a mutually agreed upon resolution.
+
+
+
+### Roles in this project
+
+DevDiag is currently maintained by a single maintainer, who acts as the "Community Moderator" and "Community Manager" referenced throughout this document. Should the maintainer team grow, enforcement responsibilities will be shared and this section updated.
 
 
 ## Addressing and Repairing Harm
@@ -82,7 +88,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Attribution
 
-This Code of Conduct is adapted from the Contributor Covenant, version 3.0, permanently available at [https://www.contributor-covenant.org/version/3/0/](https://www.contributor-covenant.org/version/3/0/).
+This Code of Conduct is adapted from the Contributor Covenant, version 3.0, and this adaptation is itself licensed under CC BY-SA 4.0 (unlike the rest of this repository, which is licensed under the terms in [LICENSE](LICENSE)). The upstream text is permanently available at [https://www.contributor-covenant.org/version/3/0/](https://www.contributor-covenant.org/version/3/0/).
 
 Contributor Covenant is stewarded by the Organization for Ethical Source and licensed under CC BY-SA 4.0. To view a copy of this license, visit [https://creativecommons.org/licenses/by-sa/4.0/](https://creativecommons.org/licenses/by-sa/4.0/)
 
