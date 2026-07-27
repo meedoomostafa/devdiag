@@ -46,7 +46,12 @@ We agree to restrict the following behaviors in our community. Instances, threat
 
 Tensions can occur between community members even when they are trying their best to collaborate. Not every conflict represents a code of conduct violation, and this Code of Conduct reinforces encouraged behaviors and norms that can help avoid conflicts and minimize harm.
 
-When an incident does occur, it is important to report it promptly. To report a possible violation, email the maintainer at the address on the [GitHub profile](https://github.com/meedoomostafa), or use [GitHub private vulnerability reporting](https://github.com/meedoomostafa/devdiag/security/advisories/new) for conduct issues that overlap with security concerns. Reports are handled confidentially by the project maintainer. If a report concerns the maintainer themselves, report the behavior directly to GitHub via [Report abuse](https://github.com/contact/report-abuse), which provides an enforcement path independent of this project.
+When an incident does occur, it is important to report it promptly. To report a possible violation, use one of the following channels:
+
+- **[GitHub private reporting](https://github.com/meedoomostafa/devdiag/security/advisories/new)** (primary): visible only to the project maintainer, who handles the report confidentially. Despite the "vulnerability" framing, this channel is accepted for any conduct report.
+- **[GitHub Report Abuse](https://github.com/contact/report-abuse)**: for reports that concern the maintainer themselves, or when an enforcement path independent of this project is preferred. These reports go to GitHub staff, not to the maintainer.
+
+Reports made through public issues or discussions are, by nature, not confidential; use the channels above for anything sensitive.
 
 Community Moderators take reports of violations seriously and will make every effort to respond in a timely manner. They will investigate all reports of code of conduct violations, reviewing messages, logs, and recordings, or interviewing witnesses and other participants. Community Moderators will keep investigation and enforcement actions as transparent as possible while prioritizing safety and confidentiality. In order to honor these values, enforcement actions are carried out in private with the involved parties, but communicating to the whole community may be part of a mutually agreed upon resolution.
 
