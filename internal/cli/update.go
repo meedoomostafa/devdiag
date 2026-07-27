@@ -52,17 +52,24 @@ func getMetadataPath() string {
 	return filepath.Join(home, ".config", "devdiag", "install.json")
 }
 
-// updaterOptions builds updater options. The API/download override env vars
-// are test seams: the updater itself refuses to attach credentials to
-// non-github, non-loopback hosts, so a hostile override cannot exfiltrate
-// GITHUB_TOKEN (it previously could).
+// updaterOptions builds updater options. Override env vars are TEST SEAMS
+// only: the API/download overrides are honored exclusively when they point
+// at loopback (so production binaries cannot be redirected to hostile
+// mirrors), and the gh-path override — which could stub out provenance
+// verification entirely — is honored only when the API base is a loopback
+// test server too.
 func updaterOptions(repo string) *updater.Options {
-	return &updater.Options{
-		Repo:         repo,
-		APIBase:      os.Getenv("DEVDIAG_GITHUB_API_BASE_URL"),
-		DownloadBase: os.Getenv("DEVDIAG_DOWNLOAD_BASE_URL"),
-		GHPath:       os.Getenv("DEVDIAG_GH_PATH"),
+	opts := &updater.Options{Repo: repo}
+	apiOverride := os.Getenv("DEVDIAG_GITHUB_API_BASE_URL")
+	loopback := apiOverride != "" && updater.IsLoopbackURL(apiOverride)
+	if loopback {
+		opts.APIBase = apiOverride
+		if dl := os.Getenv("DEVDIAG_DOWNLOAD_BASE_URL"); dl != "" && updater.IsLoopbackURL(dl) {
+			opts.DownloadBase = dl
+		}
+		opts.GHPath = os.Getenv("DEVDIAG_GH_PATH")
 	}
+	return opts
 }
 
 func redactUpdateError(err error) string {
@@ -132,9 +139,14 @@ var updateCmd = &cobra.Command{
 			}
 		}
 
-		repo := "meedoomostafa/devdiag"
-		if hasMetadata && metadata.Repo != "" {
-			repo = metadata.Repo
+		// The trusted repo (and therefore the attestation signer identity)
+		// is pinned to the canonical repository. Install metadata is
+		// user-writable state and must not be able to redirect updates or
+		// relax the provenance policy; forks distributing modified builds
+		// change this constant in their source.
+		const repo = updater.DefaultRepo
+		if hasMetadata && metadata.Repo != "" && metadata.Repo != repo {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: install metadata names repo %q; updates are pinned to %q\n", metadata.Repo, repo)
 		}
 
 		opts := updaterOptions(repo)
@@ -190,14 +202,36 @@ var updateCmd = &cobra.Command{
 		if hasMetadata && metadata.BinaryPath != "" {
 			targetPath = metadata.BinaryPath
 		}
+		runningExe := ""
 		if exe, exeErr := os.Executable(); exeErr == nil {
-			resolved, rerr := filepath.EvalSymlinks(exe)
-			if rerr == nil {
-				exe = resolved
+			if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+				runningExe = resolved
+			} else {
+				runningExe = exe
 			}
-			if targetPath == "" {
-				targetPath = exe
+		}
+		if targetPath == "" {
+			targetPath = runningExe
+		} else if runningExe != "" && opts.APIBase == "" {
+			// Coherence is enforced in production only: the loopback test
+			// seam deliberately drives a target binary that differs from
+			// the running test harness.
+			// Metadata and the running executable must agree (after symlink
+			// resolution): stale metadata pointing elsewhere would update a
+			// binary the user is not actually running.
+			metaResolved := targetPath
+			if r, rerr := filepath.EvalSymlinks(targetPath); rerr == nil {
+				metaResolved = r
 			}
+			if metaResolved != runningExe {
+				return exitCodeError{
+					code: exitcode.InvalidInput,
+					message: fmt.Sprintf(
+						"install metadata points at %s but the running binary is %s; metadata is stale - reinstall with scripts/install.sh or fix ~/.config/devdiag/install.json",
+						targetPath, runningExe),
+				}
+			}
+			targetPath = metaResolved
 		}
 		if targetPath == "" {
 			return exitCodeError{

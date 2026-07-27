@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // --- fixtures ---------------------------------------------------------
@@ -501,5 +502,81 @@ func TestLatestRelease_BadResponses(t *testing.T) {
 				t.Fatal("expected error")
 			}
 		})
+	}
+}
+
+func TestSwapBinary_ConcurrentLockRefused(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "devdiag")
+	os.WriteFile(target, []byte("old"), 0o755)
+	// Simulate an in-flight update holding the lock.
+	if err := os.WriteFile(target+".update-lock", []byte("42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	newBin := filepath.Join(t.TempDir(), "new")
+	os.WriteFile(newBin, []byte("new"), 0o755)
+	if err := SwapBinary(newBin, target); err == nil || !strings.Contains(err.Error(), "in progress") {
+		t.Fatalf("error = %v, want lock refusal", err)
+	}
+	if data, _ := os.ReadFile(target); string(data) != "old" {
+		t.Fatalf("target modified while locked: %q", data)
+	}
+}
+
+func TestSwapBinary_StaleLockBroken(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "devdiag")
+	os.WriteFile(target, []byte("old"), 0o755)
+	lock := target + ".update-lock"
+	os.WriteFile(lock, []byte("42\n"), 0o644)
+	stale := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(lock, stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	newBin := filepath.Join(t.TempDir(), "new")
+	os.WriteFile(newBin, []byte("new"), 0o755)
+	if err := SwapBinary(newBin, target); err != nil {
+		t.Fatalf("stale lock should be broken, got %v", err)
+	}
+	if data, _ := os.ReadFile(target); string(data) != "new" {
+		t.Fatalf("target = %q, want new", data)
+	}
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Fatalf("lock should be released after swap")
+	}
+}
+
+func TestExtractBinary_TooManyEntries(t *testing.T) {
+	entries := make([]tarEntry, 0, maxArchiveEntries+2)
+	for i := 0; i < maxArchiveEntries+1; i++ {
+		entries = append(entries, tarEntry{name: fmt.Sprintf("f%d", i), body: []byte("x")})
+	}
+	_, err := ExtractBinary(makeTarGz(t, entries), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "entries") {
+		t.Fatalf("error = %v, want entry-cap refusal", err)
+	}
+}
+
+func TestAuthHeaderAllowed_RejectsPlainHTTPGitHub(t *testing.T) {
+	if authHeaderAllowed("http://api.github.com/repos/x") {
+		t.Fatal("plain HTTP to github must not carry credentials")
+	}
+	if !authHeaderAllowed("http://127.0.0.1:1234/x") {
+		t.Fatal("loopback test servers may carry credentials over HTTP")
+	}
+}
+
+func TestIsLoopbackURL(t *testing.T) {
+	cases := map[string]bool{
+		"http://127.0.0.1:8080": true,
+		"http://localhost:99":   true,
+		"http://[::1]:9":        true,
+		"https://github.com":    false,
+		"https://evil.com":      false,
+	}
+	for u, want := range cases {
+		if got := IsLoopbackURL(u); got != want {
+			t.Errorf("IsLoopbackURL(%q) = %v, want %v", u, got, want)
+		}
 	}
 }

@@ -13,6 +13,11 @@ import (
 // maxBinaryBytes caps the extracted binary size (decompression-bomb guard).
 const maxBinaryBytes = 512 << 20
 
+// maxArchiveEntries caps the number of tar headers processed. Release
+// archives carry three entries; a signed bomb with millions of headers
+// must not spin CPU.
+const maxArchiveEntries = 1024
+
 // ExtractBinary pulls the single `devdiag` regular file out of a release
 // tar.gz into destDir and returns its path. Everything hostile is rejected:
 // path traversal, absolute paths, symlinks, hardlinks, devices, duplicate
@@ -27,6 +32,7 @@ func ExtractBinary(archive []byte, destDir string) (string, error) {
 
 	tr := tar.NewReader(gz)
 	outPath := ""
+	entries := 0
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -34,6 +40,10 @@ func ExtractBinary(archive []byte, destDir string) (string, error) {
 		}
 		if err != nil {
 			return "", fmt.Errorf("read release archive: %w", err)
+		}
+		entries++
+		if entries > maxArchiveEntries {
+			return "", fmt.Errorf("release archive carries more than %d entries; refusing", maxArchiveEntries)
 		}
 		name := hdr.Name
 		clean := filepath.Clean(name)

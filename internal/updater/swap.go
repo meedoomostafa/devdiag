@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // SwapBinary atomically replaces targetPath with newBinaryPath:
@@ -35,6 +36,17 @@ func SwapBinary(newBinaryPath, targetPath string) (err error) {
 		return fmt.Errorf("cannot write to %s: %v; re-run from a user with write access or reinstall to a user-writable directory with scripts/install.sh", dir, werr)
 	}
 
+	// Exclusive per-target lock: two concurrent updaters must not
+	// interleave backup/stage/rename and corrupt each other's rollback
+	// state. O_EXCL creation is the lock; a stale lock older than an hour
+	// is broken (a crashed updater cannot hold updates hostage forever).
+	lockPath := targetPath + ".update-lock"
+	unlock, lerr := acquireLock(lockPath)
+	if lerr != nil {
+		return lerr
+	}
+	defer unlock()
+
 	backupPath := targetPath + ".old"
 	backedUp := false
 	if _, serr := os.Stat(targetPath); serr == nil {
@@ -52,8 +64,14 @@ func SwapBinary(newBinaryPath, targetPath string) (err error) {
 		if err != nil {
 			_ = os.Remove(stagedPath)
 			if backedUp {
-				// Roll back: the backup still holds the previous binary.
-				_ = os.Rename(backupPath, targetPath)
+				// Roll back by COPY so devdiag.old itself survives as a
+				// recovery point even if this restore is interrupted, and
+				// fsync so the recovered binary is durable.
+				if cerr := copyFileSync(backupPath, targetPath); cerr != nil {
+					err = fmt.Errorf("%w; ROLLBACK ALSO FAILED (%v) - restore manually from %s", err, cerr, backupPath)
+					return
+				}
+				_ = syncDir(dir)
 			}
 		}
 	}()
@@ -65,6 +83,27 @@ func SwapBinary(newBinaryPath, targetPath string) (err error) {
 		return fmt.Errorf("sync install directory: %w", derr)
 	}
 	return nil
+}
+
+// acquireLock creates lockPath exclusively and returns an unlock func.
+func acquireLock(lockPath string) (func(), error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		f, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			_, _ = fmt.Fprintf(f, "%d\n", os.Getpid())
+			_ = f.Close()
+			return func() { _ = os.Remove(lockPath) }, nil
+		}
+		if !os.IsExist(err) {
+			return nil, fmt.Errorf("acquire update lock: %w", err)
+		}
+		if fi, serr := os.Stat(lockPath); serr == nil && time.Since(fi.ModTime()) > time.Hour {
+			_ = os.Remove(lockPath) // stale lock from a crashed updater
+			continue
+		}
+		return nil, fmt.Errorf("another devdiag update appears to be in progress (lock: %s); retry later or remove the lock if no update is running", lockPath)
+	}
+	return nil, fmt.Errorf("could not acquire update lock at %s", lockPath)
 }
 
 func checkWritable(dir string) error {

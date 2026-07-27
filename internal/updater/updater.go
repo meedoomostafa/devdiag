@@ -73,18 +73,38 @@ func (o *Options) client() *http.Client {
 
 // authHeaderAllowed reports whether GITHUB_TOKEN/GH_TOKEN may be attached to
 // requests against base. Credentials only ever go to github.com properties
-// or loopback (test servers); an environment override pointing anywhere else
-// must not receive the caller's token.
+// over HTTPS, or to loopback (test servers); an environment override
+// pointing anywhere else must not receive the caller's token, and plain
+// HTTP to GitHub is refused so a downgrade cannot expose the token.
 func authHeaderAllowed(base string) bool {
 	u, err := url.Parse(base)
 	if err != nil {
 		return false
 	}
 	host := u.Hostname()
-	if host == "api.github.com" || host == "github.com" || strings.HasSuffix(host, ".github.com") {
+	if isLoopbackHost(host) {
 		return true
 	}
+	if u.Scheme != "https" {
+		return false
+	}
+	return host == "api.github.com" || host == "github.com" || strings.HasSuffix(host, ".github.com")
+}
+
+func isLoopbackHost(host string) bool {
 	return host == "127.0.0.1" || host == "::1" || host == "localhost"
+}
+
+// IsLoopbackURL reports whether raw points at a loopback host. Test-only
+// override seams (API base, download base, gh path) are honored exclusively
+// in loopback mode so production binaries cannot be redirected or have
+// verification stubbed via environment variables.
+func IsLoopbackURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return isLoopbackHost(u.Hostname())
 }
 
 func (o *Options) newRequest(method, rawURL, accept string) (*http.Request, error) {
