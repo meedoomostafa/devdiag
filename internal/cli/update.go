@@ -3,10 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/meedoomostafa/devdiag/internal/exitcode"
+	"github.com/meedoomostafa/devdiag/internal/updater"
 	"github.com/meedoomostafa/devdiag/internal/version"
 )
 
@@ -34,13 +32,7 @@ type InstallMetadata struct {
 	ChecksumProvided bool   `json:"checksum_provided"`
 }
 
-type GitHubRelease struct {
-	TagName string `json:"tag_name"`
-}
-
 var metadataPathOverride string
-var gitHubAPIBase = "https://api.github.com"
-var installScriptURLOverride string
 
 func getMetadataPath() string {
 	if metadataPathOverride != "" {
@@ -60,90 +52,17 @@ func getMetadataPath() string {
 	return filepath.Join(home, ".config", "devdiag", "install.json")
 }
 
-func getGitHubAPIBase() string {
-	if url := os.Getenv("DEVDIAG_GITHUB_API_BASE_URL"); url != "" {
-		return url
+// updaterOptions builds updater options. The API/download override env vars
+// are test seams: the updater itself refuses to attach credentials to
+// non-github, non-loopback hosts, so a hostile override cannot exfiltrate
+// GITHUB_TOKEN (it previously could).
+func updaterOptions(repo string) *updater.Options {
+	return &updater.Options{
+		Repo:         repo,
+		APIBase:      os.Getenv("DEVDIAG_GITHUB_API_BASE_URL"),
+		DownloadBase: os.Getenv("DEVDIAG_DOWNLOAD_BASE_URL"),
+		GHPath:       os.Getenv("DEVDIAG_GH_PATH"),
 	}
-	return gitHubAPIBase
-}
-
-func fetchLatestVersion(repo string) (string, error) {
-	if repo == "" {
-		repo = "meedoomostafa/devdiag"
-	}
-	apiURL := fmt.Sprintf("%s/repos/%s/releases/latest", getGitHubAPIBase(), repo)
-
-	req, err := http.NewRequest("GET", apiURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "devdiag-updater")
-
-	token := os.Getenv("GITHUB_TOKEN")
-	if token == "" {
-		token = os.Getenv("GH_TOKEN")
-	}
-	if token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	}
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
-	}
-
-	var release GitHubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", err
-	}
-	return release.TagName, nil
-}
-
-func fetchInstallScript(repo, versionRef string) ([]byte, error) {
-	scriptURL := getInstallScriptURL(repo, versionRef)
-	req, err := http.NewRequest("GET", scriptURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "text/plain")
-	req.Header.Set("User-Agent", "devdiag-updater")
-
-	token := os.Getenv("GITHUB_TOKEN")
-	if token == "" {
-		token = os.Getenv("GH_TOKEN")
-	}
-	if token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("installer download returned status %d", resp.StatusCode)
-	}
-	return io.ReadAll(resp.Body)
-}
-
-func getInstallScriptURL(repo, versionRef string) string {
-	if installScriptURLOverride != "" {
-		return installScriptURLOverride
-	}
-	if url := os.Getenv("DEVDIAG_INSTALL_SCRIPT_URL"); url != "" {
-		return url
-	}
-	return fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/scripts/install.sh", repo, versionRef)
 }
 
 func redactUpdateError(err error) string {
@@ -158,17 +77,6 @@ func redactUpdateError(err error) string {
 		errMsg = strings.ReplaceAll(errMsg, token, "<redacted>")
 	}
 	return errMsg
-}
-
-func appendEnv(env []string, key, value string) []string {
-	prefix := key + "="
-	out := env[:0]
-	for _, item := range env {
-		if !strings.HasPrefix(item, prefix) {
-			out = append(out, item)
-		}
-	}
-	return append(out, prefix+value)
 }
 
 func normalizeVersion(v string) string {
@@ -229,10 +137,12 @@ var updateCmd = &cobra.Command{
 			repo = metadata.Repo
 		}
 
-		latestVersionRaw, err := fetchLatestVersion(repo)
+		opts := updaterOptions(repo)
+		rel, err := opts.LatestRelease()
 		if err != nil {
 			return fmt.Errorf("failed to resolve latest DevDiag release: %s", redactUpdateError(err))
 		}
+		latestVersionRaw := rel.TagName
 
 		latestVersion := normalizeVersion(latestVersionRaw)
 		currentVersion := normalizeVersion(version.Version)
@@ -273,40 +183,85 @@ var updateCmd = &cobra.Command{
 			}
 		}
 
-		script, err := fetchInstallScript(repo, latestVersionRaw)
-		if err != nil {
-			return fmt.Errorf("failed to download DevDiag installer: %s", redactUpdateError(err))
+		// Resolve the binary to replace: install metadata first, the
+		// running executable as fallback. Both must agree when both exist,
+		// otherwise the metadata is stale and mutation is unsafe.
+		targetPath := ""
+		if hasMetadata && metadata.BinaryPath != "" {
+			targetPath = metadata.BinaryPath
 		}
-
-		tmpDir, err := os.MkdirTemp("", "devdiag-update-*")
-		if err != nil {
-			return fmt.Errorf("failed to create update temp directory: %w", err)
+		if exe, exeErr := os.Executable(); exeErr == nil {
+			resolved, rerr := filepath.EvalSymlinks(exe)
+			if rerr == nil {
+				exe = resolved
+			}
+			if targetPath == "" {
+				targetPath = exe
+			}
 		}
-		defer os.RemoveAll(tmpDir)
-
-		scriptPath := filepath.Join(tmpDir, "install.sh")
-		if err := os.WriteFile(scriptPath, script, 0o700); err != nil {
-			return fmt.Errorf("failed to write update installer: %w", err)
+		if targetPath == "" {
+			return exitCodeError{
+				code:    exitcode.InvalidInput,
+				message: "cannot determine the installed binary path; reinstall with scripts/install.sh",
+			}
 		}
 
 		fmt.Fprintln(cmd.OutOrStdout(), "action: applying_update")
 
-		installCmd := exec.Command("bash", scriptPath, "--no-add-to-path")
-		installCmd.Stdout = cmd.OutOrStdout()
-		installCmd.Stderr = cmd.ErrOrStderr()
-		installCmd.Env = appendEnv(os.Environ(), "DEVDIAG_REPO", repo)
-		installCmd.Env = appendEnv(installCmd.Env, "DEVDIAG_INSTALL_VERSION", latestVersionRaw)
-		if hasMetadata && metadata.InstallDir != "" {
-			installCmd.Env = appendEnv(installCmd.Env, "DEVDIAG_BIN_DIR", metadata.InstallDir)
-		}
-		if err := installCmd.Run(); err != nil {
-			return fmt.Errorf("DevDiag installer failed: %s", redactUpdateError(err))
+		res, err := opts.Apply(rel, targetPath, func(step string) {
+			fmt.Fprintf(cmd.OutOrStdout(), "step: %s\n", step)
+		})
+		if err != nil {
+			return fmt.Errorf("update refused: %s", redactUpdateError(err))
 		}
 
+		// Refresh install metadata after the successful swap. A metadata
+		// write failure is partial success: the binary IS updated.
+		if metaErr := writeUpdatedMetadata(metadataPath, metadata, hasMetadata, repo, res); metaErr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: binary updated but metadata refresh failed: %v\n", metaErr)
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "backup: %s\n", res.BackupPath)
 		fmt.Fprintln(cmd.OutOrStdout(), "action: updated")
 
 		return nil
 	},
+}
+
+// writeUpdatedMetadata refreshes install.json after a successful update.
+// The write is atomic (temp file + rename) so a crash cannot leave a
+// truncated metadata file.
+func writeUpdatedMetadata(metadataPath string, old InstallMetadata, hadMetadata bool, repo string, res *updater.Result) error {
+	if metadataPath == "" {
+		return fmt.Errorf("no metadata path resolvable")
+	}
+	meta := old
+	if !hadMetadata {
+		meta = InstallMetadata{SchemaVersion: "1"}
+	}
+	meta.Repo = repo
+	meta.SourceRef = res.Tag
+	meta.ResolvedVersion = normalizeVersion(res.Tag)
+	meta.InstallDir = filepath.Dir(res.TargetPath)
+	meta.BinaryPath = res.TargetPath
+	meta.InstalledAt = time.Now().UTC().Format(time.RFC3339)
+	meta.InstallMethod = "release-binary"
+	meta.ArchiveURL = res.AssetName
+	meta.ChecksumRequired = true
+	meta.ChecksumProvided = true
+
+	if err := os.MkdirAll(filepath.Dir(metadataPath), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := metadataPath + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, metadataPath)
 }
 
 func init() {

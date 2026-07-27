@@ -382,9 +382,11 @@ checks requested.
 ## Update
 
 To update DevDiag, run the updater. It resolves the latest GitHub Release,
-downloads that release's installer, builds a fresh binary from the source
-archive, and atomically replaces the previous binary. It does not download
-binary diffs.
+downloads the platform binary asset, verifies it against the release
+`checksums.txt` **and** its signed SLSA provenance attestation (via the
+GitHub CLI — `gh` must be on PATH, or the update is refused), then swaps
+the binary atomically, keeping a `devdiag.old` rollback backup. No
+downloaded scripts are ever executed.
 
 ```bash
 devdiag update
