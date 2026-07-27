@@ -165,3 +165,8 @@ successfully.
 - `fix`: guarded/manual/destructive classifications must not drift.
 - `rulepack`: external policy packs may return finding candidates only; they
   must not mutate, shell out, or access the network.
+
+## Code of conduct
+
+Participation in this project is governed by the
+[Contributor Covenant 3.0 Code of Conduct](CODE_OF_CONDUCT.md).
