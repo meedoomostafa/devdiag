@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -492,12 +493,35 @@ func TestGitHubActionMetadataSupportsArtifactsSummaryAndConfigurableFindings(t *
 	}
 }
 
+// usesRefPattern captures the ref of every external `uses:` line. Local
+// composite references (uses: ./) have no ref and are skipped.
+var usesRefPattern = regexp.MustCompile(`(?m)^\s*-?\s*uses:\s*([^\s@]+)@(\S+)`)
+
+// assertAllUsesSHAPinned enforces the generalized invariant that every
+// external action reference in a workflow is pinned to a full 40-hex commit
+// SHA. Dependabot pin bumps pass; tag or branch refs fail.
+func assertAllUsesSHAPinned(t *testing.T, name, workflow string) {
+	t.Helper()
+	fullSHA := regexp.MustCompile(`^[0-9a-f]{40}$`)
+	matches := usesRefPattern.FindAllStringSubmatch(workflow, -1)
+	if len(matches) == 0 {
+		t.Fatalf("%s workflow contains no external uses: references; contract check is vacuous", name)
+	}
+	for _, m := range matches {
+		action, ref := m[1], m[2]
+		if !fullSHA.MatchString(ref) {
+			t.Errorf("%s workflow: %s@%s is not pinned to a full 40-hex commit SHA", name, action, ref)
+		}
+	}
+}
+
 func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "action-live-signoff.yml"))
 	if err != nil {
 		t.Fatalf("read action live signoff workflow: %v", err)
 	}
 	workflow := string(data)
+	assertAllUsesSHAPinned(t, "live signoff", workflow)
 	for _, want := range []string{
 		"workflow_dispatch:",
 		"go-version: ['1.25', '1.26']",
@@ -508,7 +532,6 @@ func TestGitHubActionLiveSignoffWorkflowContract(t *testing.T) {
 		"fail-severity: critical",
 		"mask-values: secret123",
 		"artifact-name: devdiag-report-${{ matrix.go-version }}",
-		"actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8",
 		"steps.allow.outputs.summary-written",
 		"jq -e '.schema_version and .collectors and .findings'",
 		"jq -e '.. | strings | select(contains(\"<redacted>\"))'",
@@ -537,13 +560,13 @@ func TestActionSmokeWorkflowContract(t *testing.T) {
 		t.Fatalf("read action smoke workflow: %v", err)
 	}
 	workflow := string(data)
+	assertAllUsesSHAPinned(t, "action smoke", workflow)
 	for _, want := range []string{
 		"name: Action Smoke",
 		"pull_request:",
 		"workflow_dispatch:",
 		"permissions:",
 		"contents: read",
-		"uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6",
 		"uses: ./",
 		"format: github",
 		"format: markdown",
