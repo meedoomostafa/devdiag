@@ -1,7 +1,11 @@
 package cli
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -488,12 +493,19 @@ func TestUpdate_TokenProtected(t *testing.T) {
 	}
 }
 
-func TestUpdate_ApplyRunsInstallerForLatestRelease(t *testing.T) {
+func TestUpdate_AppliesVerifiedBinaryUpdate(t *testing.T) {
 	tempHome := t.TempDir()
 	binDir := filepath.Join(tempHome, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	targetPath := filepath.Join(binDir, "devdiag")
+	if err := os.WriteFile(targetPath, []byte("#!/bin/sh\necho old\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	metadataDir := filepath.Join(tempHome, ".config", "devdiag")
 	if err := os.MkdirAll(metadataDir, 0o755); err != nil {
-		t.Fatalf("mkdir failed: %v", err)
+		t.Fatal(err)
 	}
 	metadataContent := fmt.Sprintf(`{
 		"schema_version": "1",
@@ -503,31 +515,153 @@ func TestUpdate_ApplyRunsInstallerForLatestRelease(t *testing.T) {
 		"install_dir": %q,
 		"binary_path": %q,
 		"install_method": "source-archive"
-	}`, binDir, filepath.Join(binDir, "devdiag"))
+	}`, binDir, targetPath)
 	if err := os.WriteFile(filepath.Join(metadataDir, "install.json"), []byte(metadataContent), 0o644); err != nil {
-		t.Fatalf("write failed: %v", err)
+		t.Fatal(err)
 	}
 
-	var installerEnv string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/repos/meedoomostafa/devdiag/releases/latest":
+	// Release archive with a new binary; served alongside checksums.txt.
+	assetName := fmt.Sprintf("devdiag_9.9.9_linux_%s.tar.gz", runtime.GOARCH)
+	var archiveBuf bytes.Buffer
+	gz := gzip.NewWriter(&archiveBuf)
+	tw := tar.NewWriter(gz)
+	newBinary := []byte("#!/bin/sh\necho updated-9.9.9\n")
+	tw.WriteHeader(&tar.Header{Name: "devdiag", Mode: 0o755, Size: int64(len(newBinary)), Typeflag: tar.TypeReg})
+	tw.Write(newBinary)
+	tw.Close()
+	gz.Close()
+	archive := archiveBuf.Bytes()
+	sum := sha256.Sum256(archive)
+	checksums := hex.EncodeToString(sum[:]) + "  " + assetName + "\n"
+
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/meedoomostafa/devdiag/releases/latest":
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintln(w, `{"tag_name":"v0.3.1"}`)
-		case "/install.sh":
-			w.Header().Set("Content-Type", "text/plain")
-			fmt.Fprintln(w, `#!/usr/bin/env bash`)
-			fmt.Fprintln(w, `set -euo pipefail`)
-			fmt.Fprintln(w, `echo "installer_version=${DEVDIAG_INSTALL_VERSION}"`)
-			fmt.Fprintln(w, `echo "installer_bin_dir=${DEVDIAG_BIN_DIR}"`)
-			fmt.Fprintln(w, `echo "installer_repo=${DEVDIAG_REPO}"`)
-			fmt.Fprintln(w, `mkdir -p "${DEVDIAG_BIN_DIR}"`)
-			fmt.Fprintln(w, `printf '#!/usr/bin/env bash\necho updated\n' > "${DEVDIAG_BIN_DIR}/devdiag"`)
-			fmt.Fprintln(w, `chmod 0755 "${DEVDIAG_BIN_DIR}/devdiag"`)
-			fmt.Fprintln(w, `installerEnv="${DEVDIAG_INSTALL_VERSION}|${DEVDIAG_BIN_DIR}|${DEVDIAG_REPO}"`)
+			fmt.Fprintf(w, `{"tag_name":"v9.9.9","assets":[{"name":%q,"browser_download_url":"%s/dl/%s"},{"name":"checksums.txt","browser_download_url":"%s/dl/checksums.txt"}]}`, assetName, ts.URL, assetName, ts.URL)
+		case r.URL.Path == "/dl/"+assetName:
+			w.Write(archive)
+		case r.URL.Path == "/dl/checksums.txt":
+			fmt.Fprint(w, checksums)
 		default:
 			http.NotFound(w, r)
 		}
+	}))
+	defer ts.Close()
+
+	// Fake gh CLI that always verifies.
+	ghDir := t.TempDir()
+	ghPath := filepath.Join(ghDir, "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	env := append(os.Environ(),
+		"HOME="+tempHome,
+		"XDG_CONFIG_HOME="+tempHome+"/.config",
+		"DEVDIAG_GITHUB_API_BASE_URL="+ts.URL,
+		"DEVDIAG_GH_PATH="+ghPath,
+	)
+
+	stdout, stderr, code := runUpdateCmd(env)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d. stdout: %s stderr: %s", code, stdout, stderr)
+	}
+	for _, want := range []string{"action: applying_update", "step: verifying checksum", "step: verifying provenance attestation", "action: updated"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q: %s", want, stdout)
+		}
+	}
+	updated, err := os.ReadFile(targetPath)
+	if err != nil || !strings.Contains(string(updated), "updated-9.9.9") {
+		t.Fatalf("binary not updated: %q err=%v", updated, err)
+	}
+	backup, err := os.ReadFile(targetPath + ".old")
+	if err != nil || !strings.Contains(string(backup), "echo old") {
+		t.Fatalf("backup missing: %q err=%v", backup, err)
+	}
+	meta, err := os.ReadFile(filepath.Join(metadataDir, "install.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"install_method": "release-binary"`, `"resolved_version": "9.9.9"`, `"checksum_provided": true`} {
+		if !strings.Contains(string(meta), want) {
+			t.Fatalf("metadata missing %q: %s", want, meta)
+		}
+	}
+}
+
+func TestUpdate_RefusesWhenAttestationFails(t *testing.T) {
+	tempHome := t.TempDir()
+	binDir := filepath.Join(tempHome, "bin")
+	os.MkdirAll(binDir, 0o755)
+	targetPath := filepath.Join(binDir, "devdiag")
+	os.WriteFile(targetPath, []byte("old"), 0o755)
+	metadataDir := filepath.Join(tempHome, ".config", "devdiag")
+	os.MkdirAll(metadataDir, 0o755)
+	os.WriteFile(filepath.Join(metadataDir, "install.json"), []byte(fmt.Sprintf(`{"schema_version":"1","repo":"meedoomostafa/devdiag","resolved_version":"0.2.4","install_dir":%q,"binary_path":%q}`, binDir, targetPath)), 0o644)
+
+	assetName := fmt.Sprintf("devdiag_9.9.9_linux_%s.tar.gz", runtime.GOARCH)
+	var archiveBuf bytes.Buffer
+	gz := gzip.NewWriter(&archiveBuf)
+	tw := tar.NewWriter(gz)
+	body := []byte("bin")
+	tw.WriteHeader(&tar.Header{Name: "devdiag", Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg})
+	tw.Write(body)
+	tw.Close()
+	gz.Close()
+	archive := archiveBuf.Bytes()
+	sum := sha256.Sum256(archive)
+
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/meedoomostafa/devdiag/releases/latest":
+			fmt.Fprintf(w, `{"tag_name":"v9.9.9","assets":[{"name":%q,"browser_download_url":"%s/dl/a"},{"name":"checksums.txt","browser_download_url":"%s/dl/c"}]}`, assetName, ts.URL, ts.URL)
+		case r.URL.Path == "/dl/a":
+			w.Write(archive)
+		case r.URL.Path == "/dl/c":
+			fmt.Fprint(w, hex.EncodeToString(sum[:])+"  "+assetName+"\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	ghPath := filepath.Join(t.TempDir(), "gh")
+	os.WriteFile(ghPath, []byte("#!/bin/sh\nexit 1\n"), 0o755)
+
+	env := append(os.Environ(),
+		"HOME="+tempHome,
+		"XDG_CONFIG_HOME="+tempHome+"/.config",
+		"DEVDIAG_GITHUB_API_BASE_URL="+ts.URL,
+		"DEVDIAG_GH_PATH="+ghPath,
+	)
+	stdout, stderr, code := runUpdateCmd(env)
+	if code == 0 {
+		t.Fatalf("expected refusal, got success. stdout: %s", stdout)
+	}
+	if !strings.Contains(stderr, "attestation") && !strings.Contains(stdout, "attestation") {
+		t.Fatalf("refusal should mention attestation. stdout: %s stderr: %s", stdout, stderr)
+	}
+	if data, _ := os.ReadFile(targetPath); string(data) != "old" {
+		t.Fatalf("binary must be untouched on refusal, got %q", data)
+	}
+}
+
+func TestUpdate_RefusesAssetlessRelease(t *testing.T) {
+	tempHome := t.TempDir()
+	binDir := filepath.Join(tempHome, "bin")
+	os.MkdirAll(binDir, 0o755)
+	targetPath := filepath.Join(binDir, "devdiag")
+	os.WriteFile(targetPath, []byte("old"), 0o755)
+	metadataDir := filepath.Join(tempHome, ".config", "devdiag")
+	os.MkdirAll(metadataDir, 0o755)
+	os.WriteFile(filepath.Join(metadataDir, "install.json"), []byte(fmt.Sprintf(`{"schema_version":"1","repo":"meedoomostafa/devdiag","resolved_version":"0.2.4","install_dir":%q,"binary_path":%q}`, binDir, targetPath)), 0o644)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, `{"tag_name":"v0.4.0","assets":[]}`)
 	}))
 	defer ts.Close()
 
@@ -535,30 +669,17 @@ func TestUpdate_ApplyRunsInstallerForLatestRelease(t *testing.T) {
 		"HOME="+tempHome,
 		"XDG_CONFIG_HOME="+tempHome+"/.config",
 		"DEVDIAG_GITHUB_API_BASE_URL="+ts.URL,
-		"DEVDIAG_INSTALL_SCRIPT_URL="+ts.URL+"/install.sh",
 	)
-
 	stdout, stderr, code := runUpdateCmd(env)
-	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d. stdout: %s stderr: %s", code, stdout, stderr)
+	if code == 0 {
+		t.Fatalf("expected refusal for asset-less release, got success: %s", stdout)
 	}
-	if !strings.Contains(stdout, "action: applying_update") {
-		t.Fatalf("expected applying_update, got: %s", stdout)
+	combined := stdout + stderr
+	if !strings.Contains(combined, "install.sh") {
+		t.Fatalf("refusal should point at install.sh: %s", combined)
 	}
-	if !strings.Contains(stdout, "installer_version=v0.3.1") {
-		t.Fatalf("installer did not receive latest version: %s", stdout)
-	}
-	if !strings.Contains(stdout, "installer_bin_dir="+binDir) {
-		t.Fatalf("installer did not receive metadata bin dir: %s", stdout)
-	}
-	if !strings.Contains(stdout, "action: updated") {
-		t.Fatalf("expected updated action, got: %s", stdout)
-	}
-	if installerEnv != "" {
-		t.Fatalf("test server should not mutate local variables from served shell script")
-	}
-	if _, err := os.Stat(filepath.Join(binDir, "devdiag")); err != nil {
-		t.Fatalf("expected fake installer to write devdiag binary: %v", err)
+	if data, _ := os.ReadFile(targetPath); string(data) != "old" {
+		t.Fatalf("binary must be untouched, got %q", data)
 	}
 }
 

@@ -42,10 +42,17 @@ report, capsule, artifact, log line, or workflow annotation at
 - The GitHub Action should be pinned to the `v0` major tag (moved only after
   a release fully publishes) or a full commit SHA.
 
+## Self-update trust model
+
+`devdiag update` never executes downloaded scripts. It downloads the
+platform binary asset, verifies it against the release `checksums.txt`
+(mandatory) and its signed SLSA provenance attestation via the GitHub CLI
+(mandatory, fail-closed — no `gh` on PATH means the update is refused), then
+swaps the binary atomically with a `devdiag.old` rollback backup. Releases
+without pipeline assets (v0.4.0 and earlier) are refused with reinstall
+guidance.
+
 ## Known limitations
 
-- `devdiag update` currently re-executes the installer script fetched from
-  the release tag; hardening it to verify in-binary is tracked in
-  [issue #23](https://github.com/meedoomostafa/devdiag/issues/23).
 - Redaction is pattern- and source-based; it is defense-in-depth, not a
   license to feed production secrets into scanned fixtures.
