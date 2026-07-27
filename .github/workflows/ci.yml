@@ -37,6 +37,34 @@ jobs:
       - name: race detector
         run: go test -race ./... -count=1
 
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version: '1.25'
+      - name: Test with coverage
+        run: go test ./... -count=1 -coverprofile=coverage.out
+      - name: Enforce coverage floor
+        run: |
+          total="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/,"",$3); print $3}')"
+          floor="68.0"
+          echo "total coverage: ${total}% (floor: ${floor}%)"
+          # Ratchet policy: raise the floor as coverage grows; never lower it.
+          if awk -v t="$total" -v f="$floor" 'BEGIN { exit !(t < f) }'; then
+            echo "coverage ${total}% fell below the ${floor}% floor" >&2
+            exit 1
+          fi
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-profile
+          path: coverage.out
+          retention-days: 14
+
   staticcheck:
     runs-on: ubuntu-latest
     steps:
