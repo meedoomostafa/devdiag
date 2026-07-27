@@ -51,17 +51,28 @@ func (o *Options) repo() string {
 }
 
 func (o *Options) apiBase() string {
-	if o.APIBase != "" {
+	// Overrides are loopback-only test seams; enforced here as defense in
+	// depth in addition to the CLI-layer gating.
+	if o.APIBase != "" && IsLoopbackURL(o.APIBase) {
 		return strings.TrimSuffix(o.APIBase, "/")
 	}
 	return "https://api.github.com"
 }
 
 func (o *Options) downloadBase() string {
-	if o.DownloadBase != "" {
+	if o.DownloadBase != "" && IsLoopbackURL(o.DownloadBase) {
 		return strings.TrimSuffix(o.DownloadBase, "/")
 	}
 	return "https://github.com"
+}
+
+// ghPath resolves the gh binary; the override is honored only when the API
+// base is a loopback test seam, so production runs always use the real gh.
+func (o *Options) ghPath() string {
+	if o.GHPath != "" && o.APIBase != "" && IsLoopbackURL(o.APIBase) {
+		return o.GHPath
+	}
+	return "gh"
 }
 
 func (o *Options) client() *http.Client {

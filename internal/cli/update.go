@@ -280,7 +280,7 @@ func writeUpdatedMetadata(metadataPath string, old InstallMetadata, hadMetadata 
 	meta.BinaryPath = res.TargetPath
 	meta.InstalledAt = time.Now().UTC().Format(time.RFC3339)
 	meta.InstallMethod = "release-binary"
-	meta.ArchiveURL = res.AssetName
+	meta.ArchiveURL = res.AssetURL
 	meta.ChecksumRequired = true
 	meta.ChecksumProvided = true
 

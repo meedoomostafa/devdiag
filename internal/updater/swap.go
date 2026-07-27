@@ -47,17 +47,21 @@ func SwapBinary(newBinaryPath, targetPath string) (err error) {
 	}
 	defer unlock()
 
+	// Preserve the installed binary's mode: a 0700 install must not come
+	// back world-executable after an update.
+	mode := os.FileMode(0o755)
 	backupPath := targetPath + ".old"
 	backedUp := false
-	if _, serr := os.Stat(targetPath); serr == nil {
-		if berr := copyFileSync(targetPath, backupPath); berr != nil {
+	if fi, serr := os.Stat(targetPath); serr == nil {
+		mode = fi.Mode().Perm()
+		if berr := copyFileSyncMode(targetPath, backupPath, mode); berr != nil {
 			return fmt.Errorf("create rollback backup: %w", berr)
 		}
 		backedUp = true
 	}
 
 	stagedPath := targetPath + ".new"
-	if cerr := copyFileSync(newBinaryPath, stagedPath); cerr != nil {
+	if cerr := copyFileSyncMode(newBinaryPath, stagedPath, mode); cerr != nil {
 		return fmt.Errorf("stage new binary: %w", cerr)
 	}
 	defer func() {
@@ -67,7 +71,7 @@ func SwapBinary(newBinaryPath, targetPath string) (err error) {
 				// Roll back by COPY so devdiag.old itself survives as a
 				// recovery point even if this restore is interrupted, and
 				// fsync so the recovered binary is durable.
-				if cerr := copyFileSync(backupPath, targetPath); cerr != nil {
+				if cerr := copyFileSyncMode(backupPath, targetPath, mode); cerr != nil {
 					err = fmt.Errorf("%w; ROLLBACK ALSO FAILED (%v) - restore manually from %s", err, cerr, backupPath)
 					return
 				}
@@ -116,14 +120,14 @@ func checkWritable(dir string) error {
 	return os.Remove(name)
 }
 
-// copyFileSync copies src to dst (0755) and fsyncs the result.
-func copyFileSync(src, dst string) error {
+// copyFileSyncMode copies src to dst with the given mode and fsyncs.
+func copyFileSyncMode(src, dst string, mode os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}

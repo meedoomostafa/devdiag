@@ -580,3 +580,40 @@ func TestIsLoopbackURL(t *testing.T) {
 		}
 	}
 }
+
+func TestSwapBinary_PreservesTargetMode(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "devdiag")
+	if err := os.WriteFile(target, []byte("old"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	newBin := filepath.Join(t.TempDir(), "new")
+	os.WriteFile(newBin, []byte("new"), 0o755)
+	if err := SwapBinary(newBin, target); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		t.Fatalf("mode = %v, want 0700 preserved", fi.Mode().Perm())
+	}
+}
+
+func TestOptions_OverridesIgnoredOutsideLoopback(t *testing.T) {
+	o := &Options{
+		APIBase:      "https://evil.example.com",
+		DownloadBase: "https://mirror.example.com",
+		GHPath:       "/tmp/fake-gh",
+	}
+	if got := o.apiBase(); got != "https://api.github.com" {
+		t.Errorf("apiBase = %q, want canonical", got)
+	}
+	if got := o.downloadBase(); got != "https://github.com" {
+		t.Errorf("downloadBase = %q, want canonical", got)
+	}
+	if got := o.ghPath(); got != "gh" {
+		t.Errorf("ghPath = %q, want gh (override requires loopback API base)", got)
+	}
+}

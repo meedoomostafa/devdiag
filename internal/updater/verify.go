@@ -3,6 +3,7 @@ package updater
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -73,10 +74,7 @@ func verifySHA256(data []byte, expectedHex string) error {
 // The gh CLI is required; without it the update is refused (scripts/
 // install.sh remains the manual path, which documents its own trust model).
 func (o *Options) VerifyAttestation(assetPath string) error {
-	ghBin := o.GHPath
-	if ghBin == "" {
-		ghBin = "gh"
-	}
+	ghBin := o.ghPath()
 	if _, err := exec.LookPath(ghBin); err != nil {
 		return fmt.Errorf("the GitHub CLI (gh) is required to verify release provenance and was not found on PATH; install gh or use scripts/install.sh")
 	}
@@ -85,8 +83,13 @@ func (o *Options) VerifyAttestation(assetPath string) error {
 		"--repo", o.repo(),
 		"--signer-workflow", o.repo() + "/.github/workflows/release.yml",
 	}
-	cmd := exec.Command(ghBin, args...)
+	// Bounded like every other network step: a stalled gh (Sigstore fetch
+	// hang, credential prompt) must not block the updater forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ghBin, args...)
 	cmd.Env = os.Environ()
+	cmd.Stdin = nil
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out

@@ -12,6 +12,7 @@ type Progress func(step string)
 type Result struct {
 	Tag        string
 	AssetName  string
+	AssetURL   string
 	TargetPath string
 	BackupPath string
 }
@@ -82,6 +83,7 @@ func (o *Options) Apply(rel *Release, targetPath string, progress Progress) (*Re
 	return &Result{
 		Tag:        rel.TagName,
 		AssetName:  assetName,
+		AssetURL:   o.assetURL(rel, assetName),
 		TargetPath: targetPath,
 		BackupPath: targetPath + ".old",
 	}, nil
