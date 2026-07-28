@@ -39,16 +39,22 @@ jobs:
 
   govulncheck:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: ['1.25', '1.26']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
         with:
-          # Latest stable patch release: most stdlib advisories are fixed in
-          # patch toolchains, so scanning with a stale toolchain would only
-          # report already-fixed noise.
-          go-version: stable
+          # Scan every toolchain minor the test matrix supports, each at its
+          # LATEST patch (check-latest): stdlib advisories are fixed in patch
+          # releases, so stale patches would report already-fixed noise,
+          # while scanning only the newest minor could miss advisories
+          # affecting the older supported one.
+          go-version: ${{ matrix.go-version }}
           check-latest: true
       - name: govulncheck
         run: |
