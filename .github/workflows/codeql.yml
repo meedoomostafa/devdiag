@@ -10,7 +10,7 @@ on:
   schedule:
     - cron: "45 2 * * 1"
 
-permissions: read-all
+permissions: {}
 
 jobs:
   analyze:
@@ -19,8 +19,6 @@ jobs:
     permissions:
       contents: read
       security-events: write
-      packages: read
-      actions: read
     strategy:
       fail-fast: false
       matrix:
