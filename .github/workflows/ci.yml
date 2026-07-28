@@ -37,6 +37,24 @@ jobs:
       - name: race detector
         run: go test -race ./... -count=1
 
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          # Latest stable patch release: most stdlib advisories are fixed in
+          # patch toolchains, so scanning with a stale toolchain would only
+          # report already-fixed noise.
+          go-version: stable
+          check-latest: true
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
   coverage:
     runs-on: ubuntu-latest
     steps:
