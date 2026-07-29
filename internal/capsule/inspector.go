@@ -37,7 +37,9 @@ func Inspect(path string) (*InspectResult, error) {
 	}
 	defer gr.Close()
 
-	tr := tar.NewReader(gr)
+	// Bound total decompressed bytes: entry and manifest caps alone still
+	// let a bomb burn CPU/memory through many large skipped entries.
+	tr := tar.NewReader(io.LimitReader(gr, maxCapsuleDecompressed))
 	return inspectTar(tr)
 }
 
@@ -49,7 +51,9 @@ func InspectFromBytes(data []byte) (*InspectResult, error) {
 	}
 	defer gr.Close()
 
-	tr := tar.NewReader(gr)
+	// Bound total decompressed bytes: entry and manifest caps alone still
+	// let a bomb burn CPU/memory through many large skipped entries.
+	tr := tar.NewReader(io.LimitReader(gr, maxCapsuleDecompressed))
 	return inspectTar(tr)
 }
 
@@ -57,8 +61,9 @@ func InspectFromBytes(data []byte) (*InspectResult, error) {
 // parses untrusted input. These caps bound the work a hostile capsule can
 // force: real capsules carry ~25 entries and a manifest of a few KB.
 const (
-	maxCapsuleEntries     = 4096
-	maxCapsuleManifestLen = 4 << 20 // 4 MiB
+	maxCapsuleEntries      = 4096
+	maxCapsuleManifestLen  = 4 << 20   // 4 MiB
+	maxCapsuleDecompressed = 512 << 20 // 512 MiB across the whole archive
 )
 
 func inspectTar(tr *tar.Reader) (*InspectResult, error) {

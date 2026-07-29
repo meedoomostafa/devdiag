@@ -168,7 +168,7 @@ func redactInterpolationDefaults(input string) string {
 			continue
 		}
 		varName := input[m[2]:m[3]]
-		if !secretKeyNamePattern.MatchString(varName) {
+		if !IsSecretKeyName(varName) {
 			continue
 		}
 		closing := findBalancedClose(input, end)
@@ -234,10 +234,17 @@ func IsSecretKeyName(key string) bool {
 // assignmentPattern matches generic KEY=VALUE tokens. The key is classified
 // by IsSecretKeyName rather than being baked into the regex, so content
 // redaction can never fall behind the source classifier again.
-var assignmentPattern = regexp.MustCompile("(?m)(^|[\\s'\"`\\[])([A-Za-z_][A-Za-z0-9_.-]*)(\\s*=\\s*)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
+var assignmentPattern = regexp.MustCompile("(?m)(^|[\\s'\"`\\[])([A-Za-z_][A-Za-z0-9_.-]*)(\"?\\s*[:=]\\s*)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
 
-// redactSecretNamedAssignments masks the value of any KEY=VALUE whose key
-// name is classified as secret-bearing.
+// redactSecretNamedAssignments masks the value of any KEY=VALUE or
+// KEY: VALUE (YAML/JSON/properties) whose key name is classified as
+// secret-bearing.
+//
+// Accepted trade-offs, in line with the project's fail-toward-redaction
+// policy: benign metadata whose key happens to be secret-named (cache_key,
+// auth_method) is masked, and an unquoted multi-word YAML scalar only has
+// its first token masked - secrets are single tokens in practice, and
+// strict mode's long-token rule is the second net.
 func redactSecretNamedAssignments(input string) string {
 	return assignmentPattern.ReplaceAllStringFunc(input, func(match string) string {
 		parts := assignmentPattern.FindStringSubmatch(match)

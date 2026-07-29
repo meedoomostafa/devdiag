@@ -36,6 +36,12 @@ func FuzzRedactString(f *testing.F) {
 			if len(out) > len(in)*8+64 {
 				t.Fatalf("level %s: output grew from %d to %d bytes", level, len(in), len(out))
 			}
+			// Contract: redaction is idempotent. A rule that keeps
+			// rewriting its own output would corrupt evidence and could
+			// loop; this pins the fixed point.
+			if again := e.RedactString(out, "fuzz"); again != out {
+				t.Fatalf("level %s: not idempotent\nin=%q\nonce=%q\ntwice=%q", level, in, out, again)
+			}
 			// Contract: an env assignment whose key names a secret must not
 			// survive with its value intact.
 			if k, v, ok := strings.Cut(in, "="); ok {
