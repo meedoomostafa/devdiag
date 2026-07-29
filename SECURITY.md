@@ -36,6 +36,15 @@ report, capsule, artifact, log line, or workflow annotation at
   gh attestation verify --owner meedoomostafa <asset>
   ```
 
+- Each release also carries a `devdiag_<version>.intoto.jsonl` asset: an
+  **informational copy** of the provenance bundle, published for offline
+  inspection and for tools that scan release assets. It is not the
+  authority. Anyone with release-edit rights could replace that file,
+  whereas the attestation stored in GitHub's attestation API cannot be
+  swapped that way — so `gh attestation verify` (which queries the API)
+  remains the authoritative check, and it is what `devdiag update`
+  enforces.
+
 - `install.sh` verifies release binaries against `checksums.txt` and fails
   closed; source builds only occur for branches/SHAs and pre-pipeline
   releases.
