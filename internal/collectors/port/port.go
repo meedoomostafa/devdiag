@@ -122,6 +122,12 @@ func parseHexAddr(hex string) string {
 		}
 		return fmt.Sprintf("%d.%d.%d.%d", b[0], b[1], b[2], b[3])
 	}
-	// IPv6: return raw for now
-	return "::"
+	if len(hex) == 32 {
+		// IPv6: rendering is not implemented yet; the placeholder marks a
+		// real IPv6 listener rather than an unknown address.
+		return "::"
+	}
+	// Any other length is malformed: returning the IPv6 placeholder here
+	// would fabricate listener evidence from garbage input.
+	return ""
 }

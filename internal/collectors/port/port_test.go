@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -112,7 +113,8 @@ func TestParseProcNetTCP_SkipsMalformedLines(t *testing.T) {
 	data := "  sl  local_address rem_address   st\n" +
 		"   0: 0100GG7F:1F90 00000000:0000 0A\n" + // bad hex address
 		"   1: 0100007F:1FFFF 00000000:0000 0A\n" + // out-of-range port
-		"   2: 0100007F:1F90 00000000:0000 0A\n" // valid
+		"   2: BAD:1F90 00000000:0000 0A\n" + // malformed address length
+		"   3: 0100007F:1F90 00000000:0000 0A\n" // valid
 	tmpDir := t.TempDir()
 	mockPath := filepath.Join(tmpDir, "tcp")
 	if err := os.WriteFile(mockPath, []byte(data), 0o644); err != nil {
@@ -152,5 +154,19 @@ func TestParseHexAddr_IPv6Unaffected(t *testing.T) {
 	ipv6 := "00000000000000000000000001000000"
 	if got := parseHexAddr(ipv6); got != "::" {
 		t.Errorf("parseHexAddr(ipv6) = %q, want ::", got)
+	}
+}
+
+// TestParseHexAddr_RejectsOtherLengths pins that lengths which are neither
+// IPv4 (8) nor IPv6 (32) are rejected rather than falling through to the
+// IPv6 placeholder, which would fabricate listener evidence from garbage.
+func TestParseHexAddr_RejectsOtherLengths(t *testing.T) {
+	for _, in := range []string{"", "BAD", "0100007", "0100007FF", strings.Repeat("0", 31)} {
+		if got := parseHexAddr(in); got != "" {
+			t.Errorf("parseHexAddr(%q) = %q, want empty string", in, got)
+		}
+	}
+	if _, _, err := parseLocalAddr("BAD:1F90"); err == nil {
+		t.Error("parseLocalAddr with malformed address length should error")
 	}
 }
