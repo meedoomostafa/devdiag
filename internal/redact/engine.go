@@ -21,6 +21,10 @@ func (e *Engine) RedactString(input string, sourceType string) string {
 	}
 
 	result := input
+	// PEM blocks are collapsed first: they are unambiguous key material, and
+	// removing them keeps their base64 body from being partially rewritten by
+	// the assignment rules. defaultRuleNames must list rules in this order.
+	result = redactPEMPrivateKeys(result)
 	result = redactEnvValues(result)
 	result = redactCLISecrets(result)
 	result = redactSecretNamedAssignments(result)
