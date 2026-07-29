@@ -24,6 +24,7 @@ var defaultRuleNames = []string{
 	"env_values",
 	"secret_key_values",
 	"cli_secret_flags",
+	"secret_named_assignments",
 	"interpolation_defaults",
 	"quoted_key_material",
 	"url_credentials",
@@ -62,7 +63,7 @@ var (
 	// quoted command arrays, and Go slice-formatted args while preserving
 	// surrounding delimiters. Values that are themselves quoted (KEY="a b" or
 	// KEY='a b') are consumed entirely, including embedded whitespace.
-	envValuePattern = regexp.MustCompile("(?m)(^|[\\s'\"`\\[])([A-Z_][A-Z0-9_]*=)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
+	envValuePattern = regexp.MustCompile("(?m)(^|[\\s'\"`\\[])([A-Z_][A-Z0-9_]*\\s*=\\s*)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
 	// bearerTokenPattern matches Bearer credentials in Authorization headers
 	// or header-like log fragments, case-insensitively.
 	bearerTokenPattern = regexp.MustCompile(`(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]+`)
@@ -71,7 +72,7 @@ var (
 	// auth_token=, ...). The uppercase-only envValuePattern misses these, and
 	// lowercase diagnostics (exit_code=1) must stay untouched, so this pattern
 	// is scoped to secret-bearing key names only.
-	secretKeyValuePattern = regexp.MustCompile("(?im)(^|[\\s'\"`\\[])([A-Z0-9_]*(?:password|passwd|secret|token|api_?key|credential|auth_)[A-Z0-9_]*=)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
+	secretKeyValuePattern = regexp.MustCompile("(?im)(^|[\\s'\"`\\[])([A-Z0-9_]*(?:password|passwd|secret|token|api_?key|credential|auth_)[A-Z0-9_]*\\s*=\\s*)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
 	// cliSecretPattern matches common CLI flag patterns that carry secrets.
 	// Covers: --password=secret, --password secret, --token=abc, --api-key=xyz, etc.
 	// Quoted values ("multi word" / 'multi word') are consumed entirely.
@@ -204,6 +205,52 @@ func findBalancedClose(input string, start int) int {
 	return -1
 }
 
+// camelBoundary matches a lowercase/digit followed by an uppercase letter,
+// i.e. a camelCase word boundary.
+var camelBoundary = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+
+// normalizeKeyName inserts underscores at camelCase boundaries so that
+// segment-anchored rules (standalone "key"/"auth") work on camelCase names:
+// "sshKey" -> "ssh_Key", "deployKey" -> "deploy_Key". Without this, camelCase
+// secret names common in JS/JSON configs slip past segment anchoring while
+// their SCREAMING_SNAKE equivalents are caught.
+func normalizeKeyName(key string) string {
+	return camelBoundary.ReplaceAllString(key, "${1}_${2}")
+}
+
+// IsSecretKeyName reports whether a variable/key name denotes secret
+// material. This is the single classifier used by BOTH the evidence-source
+// path and the KEY=VALUE content path; keeping one list is deliberate,
+// because the two drifted once (standalone key/auth were taught to the
+// source path only, so a mixed-case Key=... survived in log text).
+func IsSecretKeyName(key string) bool {
+	// Both forms are checked: camel normalization must only ADD matches.
+	// Splitting can break a word apart ("keY" -> "ke_Y"), so the raw name is
+	// tested too.
+	return secretKeyNamePattern.MatchString(key) ||
+		secretKeyNamePattern.MatchString(normalizeKeyName(key))
+}
+
+// assignmentPattern matches generic KEY=VALUE tokens. The key is classified
+// by IsSecretKeyName rather than being baked into the regex, so content
+// redaction can never fall behind the source classifier again.
+var assignmentPattern = regexp.MustCompile("(?m)(^|[\\s'\"`\\[])([A-Za-z_][A-Za-z0-9_.-]*)(\\s*=\\s*)(\"[^\"]*\"|'[^']*'|[^\\s'\"`\\]]*)")
+
+// redactSecretNamedAssignments masks the value of any KEY=VALUE whose key
+// name is classified as secret-bearing.
+func redactSecretNamedAssignments(input string) string {
+	return assignmentPattern.ReplaceAllStringFunc(input, func(match string) string {
+		parts := assignmentPattern.FindStringSubmatch(match)
+		if len(parts) < 5 || parts[4] == "" {
+			return match
+		}
+		if !IsSecretKeyName(parts[2]) {
+			return match
+		}
+		return parts[1] + parts[2] + parts[3] + "<redacted>"
+	})
+}
+
 // isSecretSource reports whether an evidence Source identifier names secret
 // material. Whole-value masking is scoped to CI environment-variable evidence
 // (ci_env__ / ci_setup__ namespaces), whose values are bare secrets when the
@@ -219,5 +266,5 @@ func isSecretSource(source string) bool {
 		rest = rest[idx+2:]
 	}
 	key := strings.ReplaceAll(rest, "%5F%5F", "__")
-	return secretKeyNamePattern.MatchString(key)
+	return IsSecretKeyName(key)
 }

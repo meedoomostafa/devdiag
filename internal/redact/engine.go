@@ -23,6 +23,7 @@ func (e *Engine) RedactString(input string, sourceType string) string {
 	result := input
 	result = redactEnvValues(result)
 	result = redactCLISecrets(result)
+	result = redactSecretNamedAssignments(result)
 	result = redactInterpolationDefaults(result)
 	result = redactQuotedKeyMaterial(result)
 	result = redactURL(result)
