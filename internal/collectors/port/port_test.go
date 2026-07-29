@@ -129,3 +129,28 @@ func TestParseProcNetTCP_SkipsMalformedLines(t *testing.T) {
 		t.Errorf("got %+v, want 127.0.0.1:8080", got[0])
 	}
 }
+
+// TestParseLocalAddr_AcceptsMaxPort pins that the 16-bit bound accepts the
+// legitimate maximum port; the bound must reject overflow, not valid input.
+func TestParseLocalAddr_AcceptsMaxPort(t *testing.T) {
+	addr, port, err := parseLocalAddr("0100007F:FFFF")
+	if err != nil {
+		t.Fatalf("parseLocalAddr(max port) error: %v", err)
+	}
+	if port != 65535 {
+		t.Errorf("port = %d, want 65535", port)
+	}
+	if addr != "127.0.0.1" {
+		t.Errorf("addr = %q, want 127.0.0.1", addr)
+	}
+}
+
+// TestParseHexAddr_IPv6Unaffected pins that the 32-char IPv6 form still
+// returns the documented placeholder rather than being caught by the new
+// IPv4 octet validation.
+func TestParseHexAddr_IPv6Unaffected(t *testing.T) {
+	ipv6 := "00000000000000000000000001000000"
+	if got := parseHexAddr(ipv6); got != "::" {
+		t.Errorf("parseHexAddr(ipv6) = %q, want ::", got)
+	}
+}
