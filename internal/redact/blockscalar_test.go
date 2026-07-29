@@ -361,3 +361,122 @@ func TestColonQuotedValueTrailingCharacter(t *testing.T) {
 		t.Errorf("token value leaked: %q", out)
 	}
 }
+
+// TestPEMLowercaseMarker pins case-insensitive PEM detection. The rule's
+// pattern is case-insensitive but its fast-path guard was not, so a lowercase
+// marker skipped the rule entirely.
+func TestPEMLowercaseMarker(t *testing.T) {
+	const body = "MIIEowIBAAKCAQEAlowercasemarkercanary0000000"
+	e := NewEngine(LevelDefault)
+	for _, in := range []string{
+		"-----begin rsa private key-----\n" + body + "\n-----end rsa private key-----\n",
+		"-----BEGIN rsa Private Key-----\n" + body + "\n",
+	} {
+		out := e.RedactString(in, "test")
+		if strings.Contains(out, body) {
+			t.Errorf("lowercase PEM marker leaked body\nin:\n%s\nout:\n%s", in, out)
+		}
+	}
+}
+
+// TestBlockScalarPEMGateDirectly exercises the PEM-body gate in
+// redactYAMLBlockScalars on its own. At engine level redactPEMPrivateKeys runs
+// first and removes the marker, so the gate is redundant defense in depth
+// there; this asserts it independently so a pipeline reorder cannot silently
+// reopen the "data: |" bypass.
+func TestBlockScalarPEMGateDirectly(t *testing.T) {
+	const body = "MIIEowIBAAKCAQEAgatecanary00000000000"
+	in := "data: |\n  -----BEGIN OPENSSH PRIVATE KEY-----\n  " + body + "\n"
+	out := redactYAMLBlockScalars(in)
+	if strings.Contains(out, body) {
+		t.Errorf("benign-named block with PEM body was not masked: %q", out)
+	}
+	if !strings.Contains(out, "data: <redacted>") {
+		t.Errorf("expected masked header, got %q", out)
+	}
+
+	// A benign key with a non-PEM body must be left alone by this rule.
+	prose := "description: |\n  ordinary documentation text\n"
+	if got := redactYAMLBlockScalars(prose); got != prose {
+		t.Errorf("prose block was altered: %q", got)
+	}
+}
+
+// TestBlockScalarQuotedKeysAndSiblings covers two defects found in review of
+// this rule by sol-architect.
+func TestBlockScalarQuotedKeysAndSiblings(t *testing.T) {
+	e := NewEngine(LevelDefault)
+
+	// Single-quoted keys were absent from the key patterns, so a whole block
+	// leaked - and so did an ordinary single-line value, which is a
+	// pre-existing gap in the colon rule.
+	t.Run("single quoted key", func(t *testing.T) {
+		if out := e.RedactString("'private_key': |\n  SECRETCANARY000000\n", "t"); strings.Contains(out, "SECRETCANARY000000") {
+			t.Errorf("block leaked: %q", out)
+		}
+		if out := e.RedactString("'db_password': hunter2secret\n", "t"); strings.Contains(out, "hunter2secret") {
+			t.Errorf("single-line value leaked: %q", out)
+		}
+		if out := e.RedactString(`"api_token": abcdefsecret`, "t"); strings.Contains(out, "abcdefsecret") {
+			t.Errorf("double-quoted key value leaked: %q", out)
+		}
+	})
+
+	// Using the containing line's indentation as the threshold consumed the
+	// sibling fields of a compact sequence entry, destroying diagnostics.
+	t.Run("sibling field survives", func(t *testing.T) {
+		in := "- private_key: |\n    KEYBODY000000\n  image: nginx:1.25\n  replicas: 3\n"
+		out := e.RedactString(in, "t")
+		if strings.Contains(out, "KEYBODY000000") {
+			t.Errorf("key body leaked: %q", out)
+		}
+		for _, want := range []string{"image: nginx:1.25", "replicas: 3"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("sibling %q destroyed: %q", want, out)
+			}
+		}
+	})
+
+	// The equal-column allowance must not apply outside a sequence entry, or
+	// an ordinary log line after a block indicator would be swallowed.
+	t.Run("unindented following line is not swallowed", func(t *testing.T) {
+		in := "private_key: |\nplain log line that must survive\n"
+		out := e.RedactString(in, "t")
+		if !strings.Contains(out, "plain log line that must survive") {
+			t.Errorf("following line was swallowed: %q", out)
+		}
+	})
+}
+
+// TestSecopsReviewFindings covers two leaks found by sol-secops in review of
+// this rule.
+func TestSecopsReviewFindings(t *testing.T) {
+	e := NewEngine(LevelDefault)
+
+	// RFC 4716 / ssh.com armour uses four dashes and a space around the
+	// label, so a five-dash-only pattern missed the format entirely - and the
+	// fast-path guard rejected the input before the pattern even ran.
+	t.Run("rfc4716 four dash armour", func(t *testing.T) {
+		in := "---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----\nSSH2CANARY00000000000000\n---- END SSH2 ENCRYPTED PRIVATE KEY ----\n"
+		if out := e.RedactString(in, "t"); strings.Contains(out, "SSH2CANARY00000000000000") {
+			t.Errorf("SSH2 private key leaked: %q", out)
+		}
+	})
+
+	// Width comparison collides when one side indents with a tab and the
+	// other with spaces, which ended the block early and emitted the body.
+	t.Run("tab header with space indented body", func(t *testing.T) {
+		in := "\tprivate_key: |\n        TABCANARY0000000000\n"
+		if out := e.RedactString(in, "t"); strings.Contains(out, "TABCANARY0000000000") {
+			t.Errorf("body leaked across mixed indentation: %q", out)
+		}
+	})
+
+	// Certificates must still survive the widened armour pattern.
+	t.Run("four dash certificate preserved", func(t *testing.T) {
+		in := "---- BEGIN CERTIFICATE ----\nMIICPUBLICcertbody0000\n---- END CERTIFICATE ----\n"
+		if out := e.RedactString(in, "t"); !strings.Contains(out, "MIICPUBLICcertbody0000") {
+			t.Errorf("certificate was masked: %q", out)
+		}
+	})
+}

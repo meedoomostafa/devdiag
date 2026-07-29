@@ -117,18 +117,25 @@ var (
 	// ("cmd: | grep x") and markdown tables from being treated as blocks.
 	// Group 1 is the whole prefix through the colon, so the masked line keeps
 	// the original indentation, sequence dash, quoting, and colon spacing.
-	blockScalarHeaderPattern = regexp.MustCompile(`^([ \t]*(?:-[ \t]+)*"?([A-Za-z_][A-Za-z0-9_.-]*)"?[ \t]*:[ \t]*)[|>][0-9+-]*[ \t]*(?:#.*)?$`)
+	// Group 2 is the text before the key, whose display width gives the key's
+	// column. Group 3 is the key name. Keys may be plain, double-quoted, or
+	// single-quoted; omitting the single-quoted form leaked whole blocks.
+	blockScalarHeaderPattern = regexp.MustCompile(`^(([ \t]*(?:-[ \t]+)*['"]?)([A-Za-z_][A-Za-z0-9_.-]*)['"]?[ \t]*:[ \t]*)[|>][0-9+-]*[ \t]*(?:#.*)?$`)
 	// pemPrivateKeyMarker matches PEM private key openings of any algorithm,
 	// including the PGP "... PRIVATE KEY BLOCK" form. It deliberately does not
 	// match BEGIN CERTIFICATE: certificates are public, and masking them would
 	// destroy diagnostic value with no confidentiality gain.
-	pemPrivateKeyMarker = regexp.MustCompile(`(?i)-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z ]*-----`)
+	pemPrivateKeyMarker = regexp.MustCompile(`(?i)-{4,5} ?BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z ]*-{4,5}`)
 	// pemPrivateKeyBlockPattern matches a whole PEM private key block with no
 	// surrounding structure, as produced by "cat id_rsa" or a base64-decoded
 	// Kubernetes secret. The END marker is optional so a truncated block still
 	// fails closed: without it the match runs to end of input rather than
 	// emitting the remaining key material.
-	pemPrivateKeyBlockPattern = regexp.MustCompile(`(?is)-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z ]*-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY[A-Z ]*-----|\z)`)
+	pemPrivateKeyBlockPattern = regexp.MustCompile(`(?is)-{4,5} ?BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z ]*-{4,5}.*?(?:-{4,5} ?END [A-Z0-9 ]*PRIVATE KEY[A-Z ]*-{4,5}|\z)`)
+	// mappingEntryPattern recognises a line that opens a mapping entry, used
+	// to tell a sibling field apart from malformed block content sitting at
+	// the same column inside a compact sequence entry.
+	mappingEntryPattern = regexp.MustCompile(`^[ \t]*(?:-[ \t]+)*['"]?[A-Za-z_][A-Za-z0-9_.-]*['"]?[ \t]*:`)
 	// keySeparators folds non-underscore key separators onto "_" so the
 	// segment-anchored alternatives in secretKeyNamePattern see them.
 	keySeparators = strings.NewReplacer(".", "_", "-", "_")
@@ -291,7 +298,7 @@ func IsSecretKeyName(key string) bool {
 // assignmentPattern matches generic KEY=VALUE tokens. The key is classified
 // by IsSecretKeyName rather than being baked into the regex, so content
 // redaction can never fall behind the source classifier again.
-var assignmentPattern = regexp.MustCompile(`(?m)(^|` + wsDelim + `)([A-Za-z_][A-Za-z0-9_.-]*)("?` + ws + `*=` + ws + `*)("[^"]*"` + notWsDelim + `*|'[^']*'` + notWsDelim + `*|` + bareValue + `)`)
+var assignmentPattern = regexp.MustCompile(`(?m)(^|` + wsDelim + `)([A-Za-z_][A-Za-z0-9_.-]*)(["']?` + ws + `*=` + ws + `*)("[^"]*"` + notWsDelim + `*|'[^']*'` + notWsDelim + `*|` + bareValue + `)`)
 
 // colonValueTail bounds a colon-assigned value at the flow delimiters that end
 // it in YAML and JSON. Quoted values carry the same tail so that a stray
@@ -300,7 +307,7 @@ var assignmentPattern = regexp.MustCompile(`(?m)(^|` + wsDelim + `)([A-Za-z_][A-
 // mask it again, breaking the engine's idempotence contract.
 const colonValueTail = `[^\n,}\]]*`
 
-var colonAssignmentPattern = regexp.MustCompile(`(?m)(^|` + wsDelim + `)([A-Za-z_][A-Za-z0-9_.-]*)("?` + ws + `*:` + ws + `*)("[^"]*"` + colonValueTail + `|'[^']*'` + colonValueTail + `|` + `\]?` + colonValueTail + `)`)
+var colonAssignmentPattern = regexp.MustCompile(`(?m)(^|` + wsDelim + `)([A-Za-z_][A-Za-z0-9_.-]*)(["']?` + ws + `*:` + ws + `*)("[^"]*"` + colonValueTail + `|'[^']*'` + colonValueTail + `|` + `\]?` + colonValueTail + `)`)
 
 // redactSecretNamedAssignments masks the value of any KEY=VALUE or
 // KEY: VALUE (YAML/JSON/properties) whose key name is classified as
@@ -326,7 +333,12 @@ func redactSecretNamedAssignments(input string) string {
 // untouched - they are public, and masking them would cost diagnostic value
 // for no confidentiality gain.
 func redactPEMPrivateKeys(input string) string {
-	if !strings.Contains(input, "-----BEGIN") {
+	// Guard on the armour dashes rather than "-----BEGIN": the pattern is
+	// case-insensitive, so a case-sensitive guard would let a lowercase
+	// "-----begin rsa private key-----" skip the rule entirely. Four dashes,
+	// because RFC 4716 / ssh.com armour uses
+	// "---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----".
+	if !strings.Contains(input, "----") {
 		return input
 	}
 	return pemPrivateKeyBlockPattern.ReplaceAllString(input, "<redacted>")
@@ -348,6 +360,26 @@ func indentWidth(line string) int {
 		default:
 			return width
 		}
+	}
+	return width
+}
+
+// leadingWhitespace returns the indentation characters of a line.
+func leadingWhitespace(line string) string {
+	return line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+}
+
+// displayWidth measures the printed width of a prefix, counting a tab as 8.
+// Unlike indentWidth it does not stop at the first non-whitespace character,
+// because a sequence dash and an opening quote both shift the key's column.
+func displayWidth(prefix string) int {
+	width := 0
+	for _, r := range prefix {
+		if r == '\t' {
+			width += 8
+			continue
+		}
+		width++
 	}
 	return width
 }
@@ -393,22 +425,51 @@ func redactYAMLBlockScalars(input string) string {
 			continue
 		}
 
-		// The threshold is the containing line's indentation, not the key's
-		// column: in a compact sequence entry ("- private_key: |") the body
-		// can be indented to the key column itself, which a key-column
-		// threshold would read as a dedent and leak.
-		indent := indentWidth(body)
+		// The threshold is the key's column, which is where YAML puts the
+		// parent mapping: block content must be more indented than that, and
+		// siblings sit at exactly that column. Using the containing line's
+		// indentation instead consumed siblings of a compact sequence entry
+		// ("- private_key: |" followed by "  image: nginx"), destroying
+		// diagnostics. Content at or left of the key column is not block
+		// content to a YAML parser either; unstructured key material is
+		// covered independently by redactPEMPrivateKeys.
+		indent := displayWidth(header[2])
 
 		// Walk forward while lines are blank or more deeply indented. Only
 		// non-blank deeper lines extend the block, so blank lines that merely
 		// trail the block stay outside it and survive as document structure.
+		lineIndent := indentWidth(body)
+		headerHasTab := strings.ContainsRune(header[2], '\t')
 		end := i
 		for j := i + 1; j < len(lines); j++ {
 			candidate, _ := trimCR(lines[j])
 			if strings.TrimSpace(candidate) == "" {
 				continue
 			}
-			if indentWidth(candidate) > indent {
+			width := indentWidth(candidate)
+			if width > indent {
+				end = j
+				continue
+			}
+			// Mixed tab and space indentation cannot be compared by width
+			// without collisions: a tab-indented header (width 8) and a body
+			// indented with eight spaces compare equal, which ended the block
+			// and emitted the body. Tabs are invalid YAML indentation, so
+			// treat equal width as deeper when either side uses one and fail
+			// toward redaction.
+			if width == indent && width > 0 && (headerHasTab || strings.ContainsRune(leadingWhitespace(candidate), '\t')) {
+				end = j
+				continue
+			}
+			// A compact sequence entry ("- private_key: |") shifts the key
+			// column right of the line's own indentation, which makes a line
+			// at exactly the key column ambiguous: either malformed block
+			// content or a sibling mapping entry. Treat it as content unless
+			// it looks like a sibling, so malformed YAML fails toward
+			// redaction without consuming valid fields. Outside a sequence
+			// entry the columns coincide and the strict test applies, so an
+			// unindented log line is never swallowed.
+			if indent > lineIndent && width == indent && !mappingEntryPattern.MatchString(candidate) {
 				end = j
 				continue
 			}
@@ -422,8 +483,13 @@ func redactYAMLBlockScalars(input string) string {
 			continue
 		}
 
+		// The PEM check is redundant defense in depth at engine level, where
+		// redactPEMPrivateKeys already collapsed any key material before this
+		// rule runs. It is kept, and asserted directly by
+		// TestBlockScalarPEMGateDirectly, so that reordering the pipeline
+		// cannot silently reopen the benign-key ("data: |") bypass.
 		blockBody := strings.Join(lines[i+1:end+1], "\n")
-		if !IsSecretKeyName(header[2]) && !pemPrivateKeyMarker.MatchString(blockBody) {
+		if !IsSecretKeyName(header[3]) && !pemPrivateKeyMarker.MatchString(blockBody) {
 			out = append(out, lines[i])
 			continue
 		}
