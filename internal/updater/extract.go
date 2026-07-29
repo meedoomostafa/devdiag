@@ -23,7 +23,15 @@ const maxArchiveEntries = 1024
 // path traversal, absolute paths, symlinks, hardlinks, devices, duplicate
 // binaries, and oversized entries. Non-binary files (LICENSE, README.md)
 // are ignored.
-func ExtractBinary(archive []byte, destDir string) (string, error) {
+func ExtractBinary(archive []byte, destDir string) (outPathResult string, err error) {
+	// A rejected archive must leave nothing behind: a later hostile entry
+	// can be reached after the binary was already staged, and the O_EXCL
+	// create would then block every retry.
+	defer func() {
+		if err != nil {
+			_ = os.Remove(filepath.Join(destDir, "devdiag"))
+		}
+	}()
 	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
 		return "", fmt.Errorf("release archive is not valid gzip: %w", err)

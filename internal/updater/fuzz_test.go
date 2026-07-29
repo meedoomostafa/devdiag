@@ -40,6 +40,15 @@ func FuzzExtractBinary(f *testing.F) {
 	}))
 	f.Add([]byte{})
 	f.Add([]byte("plain text, not gzip"))
+	// Valid binary followed by a rejected duplicate: exercises the
+	// staged-file-cleanup path.
+	f.Add(mk(func(tw *tar.Writer) {
+		body := []byte("ok")
+		_ = tw.WriteHeader(&tar.Header{Name: "devdiag", Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg})
+		_, _ = tw.Write(body)
+		_ = tw.WriteHeader(&tar.Header{Name: "sub/devdiag", Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg})
+		_, _ = tw.Write(body)
+	}))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		dir := t.TempDir()
@@ -47,6 +56,12 @@ func FuzzExtractBinary(f *testing.F) {
 		if err != nil {
 			if path != "" {
 				t.Fatalf("error returned alongside a path %q", path)
+			}
+			// Contract: a rejected archive leaves nothing staged. A
+			// leftover file would block retries, because extraction
+			// creates the destination with O_EXCL.
+			if _, statErr := os.Stat(dir + string(os.PathSeparator) + "devdiag"); !os.IsNotExist(statErr) {
+				t.Fatalf("rejected archive left a staged binary behind (stat err: %v)", statErr)
 			}
 			return
 		}

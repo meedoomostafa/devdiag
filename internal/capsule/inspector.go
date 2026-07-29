@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -38,8 +39,11 @@ func Inspect(path string) (*InspectResult, error) {
 	defer gr.Close()
 
 	// Bound total decompressed bytes: entry and manifest caps alone still
-	// let a bomb burn CPU/memory through many large skipped entries.
-	tr := tar.NewReader(io.LimitReader(gr, maxCapsuleDecompressed))
+	// let a bomb burn CPU/memory through many large skipped entries. A
+	// plain io.LimitReader would surface the cap as a clean io.EOF, which
+	// tar reports as a normal archive end - a truncated bomb would then be
+	// declared valid. capReader returns a distinct error instead.
+	tr := tar.NewReader(&capReader{r: gr, remaining: maxCapsuleDecompressed})
 	return inspectTar(tr)
 }
 
@@ -52,8 +56,11 @@ func InspectFromBytes(data []byte) (*InspectResult, error) {
 	defer gr.Close()
 
 	// Bound total decompressed bytes: entry and manifest caps alone still
-	// let a bomb burn CPU/memory through many large skipped entries.
-	tr := tar.NewReader(io.LimitReader(gr, maxCapsuleDecompressed))
+	// let a bomb burn CPU/memory through many large skipped entries. A
+	// plain io.LimitReader would surface the cap as a clean io.EOF, which
+	// tar reports as a normal archive end - a truncated bomb would then be
+	// declared valid. capReader returns a distinct error instead.
+	tr := tar.NewReader(&capReader{r: gr, remaining: maxCapsuleDecompressed})
 	return inspectTar(tr)
 }
 
@@ -65,6 +72,28 @@ const (
 	maxCapsuleManifestLen  = 4 << 20   // 4 MiB
 	maxCapsuleDecompressed = 512 << 20 // 512 MiB across the whole archive
 )
+
+// errCapsuleTooLarge marks a capsule that exceeded the decompression cap.
+var errCapsuleTooLarge = errors.New("capsule exceeds the decompression limit")
+
+// capReader fails closed when more than remaining bytes are read, unlike
+// io.LimitReader which reports the cap as a normal end of stream.
+type capReader struct {
+	r         io.Reader
+	remaining int64
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	if c.remaining <= 0 {
+		return 0, errCapsuleTooLarge
+	}
+	if int64(len(p)) > c.remaining {
+		p = p[:c.remaining]
+	}
+	n, err := c.r.Read(p)
+	c.remaining -= int64(n)
+	return n, err
+}
 
 func inspectTar(tr *tar.Reader) (*InspectResult, error) {
 	result := &InspectResult{Valid: true}
