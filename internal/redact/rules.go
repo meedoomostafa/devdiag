@@ -62,15 +62,17 @@ const (
 	ws         = `[\s\v\x{85}\x{A0}]`
 	wsDelim    = `[\s\v\x{85}\x{A0}'"` + "`" + `\[]`
 	notWsDelim = `[^\s\v\x{85}\x{A0}'"` + "`" + `\]]`
-	// bareValue is the unquoted value extent. One leading delimiter character
-	// is consumed so a secret that starts with a quote, backtick, or bracket
-	// cannot match an empty extent and survive untouched - which is what
-	// happened for "KEY=]secret", "KEY=`secret", and an unterminated
-	// "KEY='secret". A delimiter later in the value still terminates it, so
-	// the closing bracket of Go slice-formatted arguments
-	// ("args=[API_KEY=secret]") is preserved. Quoted values are matched by the
-	// earlier alternatives, which Go's leftmost-first alternation prefers.
-	bareValue = `['"` + "`" + `\]]?` + notWsDelim + `*`
+	// bareValue is the unquoted value extent. A run of leading delimiter
+	// characters is consumed so a secret that starts with quotes, backticks,
+	// or brackets cannot match an empty extent and survive untouched - which
+	// is what happened for "KEY=]secret", "KEY=`secret", an unterminated
+	// "KEY='secret", and, with a single-character allowance, doubled forms
+	// like "KEY=]]secret". The run is only matched at the start of the value,
+	// so a delimiter later on still terminates it and the closing bracket of
+	// Go slice-formatted arguments ("args=[API_KEY=secret]") is preserved.
+	// Quoted values are matched by the earlier alternatives, which Go's
+	// leftmost-first alternation prefers.
+	bareValue = `['"` + "`" + `\]]*` + notWsDelim + `*`
 )
 
 var (

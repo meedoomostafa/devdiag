@@ -41,6 +41,13 @@ func FuzzRedactString(f *testing.F) {
 	f.Add("private_key: |\n\ttabindentedsecret0\n")
 	f.Add("data: |\n  -----BEGIN OPENSSH PRIVATE KEY-----\n  keymaterial00000\n")
 	f.Add("tls.key: LS0tLS1CRUdJTiBQUklWQVRF\n")
+	// Runs of leading delimiters in a value extent, which the leak property
+	// below cannot reach because it skips delimiter-bearing values.
+	f.Add("API_TOKEN=]]hunter2secret")
+	f.Add("API_TOKEN=``hunter2secret")
+	f.Add("'private_key': |\n  singlequotedkeybody0\n")
+	f.Add("---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----\nssh2body000\n")
+	f.Add("\tprivate_key: |\n        tabheaderbody000\n")
 
 	f.Fuzz(func(t *testing.T, in string) {
 		// Both non-off levels must hold the same invariants; strict only

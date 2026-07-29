@@ -325,6 +325,19 @@ func TestBracketLeadingSecretValue(t *testing.T) {
 		}
 	}
 
+	// A RUN of leading delimiters must be consumed too. With a single-char
+	// allowance, "API_TOKEN=]]secret" masked only the first "]" and emitted
+	// the secret. The fuzz property cannot see this shape, because it skips
+	// any value containing a delimiter character, so it is pinned here.
+	// Found by CodeRabbit.
+	for _, lead := range []string{"]]", "``", "]`", "`]", "]]]", "''"} {
+		secret := lead + "hunter2secret"
+		out := e.RedactString("API_TOKEN="+secret, "test")
+		if strings.Contains(out, "hunter2secret") {
+			t.Errorf("doubled delimiter lead=%q leaked: %q", lead, out)
+		}
+	}
+
 	// The behaviour that must not regress: a trailing bracket still bounds
 	// the value, so slice-formatted log lines stay readable.
 	if out := e.RedactString("args=[API_KEY=secret1]", "test"); !strings.Contains(out, "]") {
