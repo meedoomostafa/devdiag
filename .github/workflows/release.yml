@@ -59,9 +59,25 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attest build provenance
+        id: attest
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
           subject-checksums: ./dist/checksums.txt
+
+      # Attach the provenance bundle to the release BEFORE publishing, so an
+      # upload failure leaves the release in draft (preserving the
+      # fail-closed ordering). This asset is an informational/offline copy:
+      # the authoritative attestation lives in GitHub's attestation API and
+      # is what `gh attestation verify` checks. See SECURITY.md.
+      - name: Attach provenance bundle to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          test -f "$BUNDLE_PATH"
+          cp "$BUNDLE_PATH" "dist/devdiag_${RELEASE_TAG#v}.intoto.jsonl"
+          gh release upload "$RELEASE_TAG" "dist/devdiag_${RELEASE_TAG#v}.intoto.jsonl" --clobber
 
       - name: Publish release
         env:
