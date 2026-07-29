@@ -26,9 +26,12 @@ const maxArchiveEntries = 1024
 func ExtractBinary(archive []byte, destDir string) (outPathResult string, err error) {
 	// A rejected archive must leave nothing behind: a later hostile entry
 	// can be reached after the binary was already staged, and the O_EXCL
-	// create would then block every retry.
+	// create would then block every retry. Only files THIS call created are
+	// removed - an O_EXCL failure against a pre-existing binary must not
+	// delete it.
+	staged := false
 	defer func() {
-		if err != nil {
+		if err != nil && staged {
 			_ = os.Remove(filepath.Join(destDir, "devdiag"))
 		}
 	}()
@@ -79,6 +82,7 @@ func ExtractBinary(archive []byte, destDir string) (outPathResult string, err er
 		if err != nil {
 			return "", fmt.Errorf("stage extracted binary: %w", err)
 		}
+		staged = true
 		n, err := io.Copy(f, io.LimitReader(tr, hdr.Size+1))
 		closeErr := f.Close()
 		if err != nil {
