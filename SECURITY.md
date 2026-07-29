@@ -28,8 +28,10 @@ report, capsule, artifact, log line, or workflow annotation at
 ## Release trust model
 
 - Release binaries are built by the public `release.yml` workflow from tags
-  reachable from `main`; every asset is listed in `checksums.txt` and covered
-  by a signed SLSA build provenance attestation:
+  reachable from `main`; every build artifact (binary archives and SBOMs) is
+  listed in `checksums.txt` and covered by a signed SLSA build provenance
+  attestation. The provenance copy described below is produced after
+  attestation and is therefore deliberately not part of that claim:
 
   ```bash
   sha256sum -c --ignore-missing checksums.txt
