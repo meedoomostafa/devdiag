@@ -1,5 +1,10 @@
 name: ci
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  schedule:
+    # Weekly fuzz campaigns (the fuzz job is schedule-only).
+    - cron: "20 3 * * 3"
 
 permissions:
   contents: read
@@ -126,3 +131,41 @@ jobs:
           shellcheck -S warning scripts/live/*.sh
       - name: actionlint
         uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
+
+  fuzz:
+    # Fuzzing runs on a schedule, not per-PR: seeds execute in every
+    # normal go test run, while these longer campaigns explore new
+    # inputs without adding minutes to PR feedback.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: ./internal/redact
+            target: FuzzRedactString
+          - package: ./internal/redact
+            target: FuzzRedactEvidence
+          - package: ./internal/capsule
+            target: FuzzInspectFromBytes
+          - package: ./internal/updater
+            target: FuzzExtractBinary
+          - package: ./internal/updater
+            target: FuzzChecksumFor
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version: '1.25'
+      - name: Fuzz ${{ matrix.target }}
+        run: go test ${{ matrix.package }} -run ${{ matrix.target }} -fuzz ${{ matrix.target }} -fuzztime 120s
+      - name: Upload crashers
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crashers-${{ matrix.target }}
+          path: |
+            **/testdata/fuzz/**
+          if-no-files-found: ignore

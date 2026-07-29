@@ -617,3 +617,20 @@ func TestOptions_OverridesIgnoredOutsideLoopback(t *testing.T) {
 		t.Errorf("ghPath = %q, want gh (override requires loopback API base)", got)
 	}
 }
+
+func TestExtractBinary_PreservesPreexistingFileOnExclFailure(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "devdiag")
+	if err := os.WriteFile(existing, []byte("preexisting"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("new")
+	archive := makeTarGz(t, []tarEntry{{name: "devdiag", body: body}})
+	if _, err := ExtractBinary(archive, dir); err == nil {
+		t.Fatal("expected O_EXCL failure against the pre-existing file")
+	}
+	data, err := os.ReadFile(existing)
+	if err != nil || string(data) != "preexisting" {
+		t.Fatalf("pre-existing file was destroyed: %q err=%v", data, err)
+	}
+}

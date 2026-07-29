@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -37,7 +38,12 @@ func Inspect(path string) (*InspectResult, error) {
 	}
 	defer gr.Close()
 
-	tr := tar.NewReader(gr)
+	// Bound total decompressed bytes: entry and manifest caps alone still
+	// let a bomb burn CPU/memory through many large skipped entries. A
+	// plain io.LimitReader would surface the cap as a clean io.EOF, which
+	// tar reports as a normal archive end - a truncated bomb would then be
+	// declared valid. capReader returns a distinct error instead.
+	tr := tar.NewReader(&capReader{r: gr, remaining: maxCapsuleDecompressed})
 	return inspectTar(tr)
 }
 
@@ -49,16 +55,60 @@ func InspectFromBytes(data []byte) (*InspectResult, error) {
 	}
 	defer gr.Close()
 
-	tr := tar.NewReader(gr)
+	// Bound total decompressed bytes: entry and manifest caps alone still
+	// let a bomb burn CPU/memory through many large skipped entries. A
+	// plain io.LimitReader would surface the cap as a clean io.EOF, which
+	// tar reports as a normal archive end - a truncated bomb would then be
+	// declared valid. capReader returns a distinct error instead.
+	tr := tar.NewReader(&capReader{r: gr, remaining: maxCapsuleDecompressed})
 	return inspectTar(tr)
+}
+
+// Capsules are support bundles received from other people, so the inspector
+// parses untrusted input. These caps bound the work a hostile capsule can
+// force: real capsules carry ~25 entries and a manifest of a few KB.
+const (
+	maxCapsuleEntries      = 4096
+	maxCapsuleManifestLen  = 4 << 20   // 4 MiB
+	maxCapsuleDecompressed = 512 << 20 // 512 MiB across the whole archive
+)
+
+// errCapsuleTooLarge marks a capsule that exceeded the decompression cap.
+var errCapsuleTooLarge = errors.New("capsule exceeds the decompression limit")
+
+// capReader fails closed when more than remaining bytes are read, unlike
+// io.LimitReader which reports the cap as a normal end of stream.
+type capReader struct {
+	r         io.Reader
+	remaining int64
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	if c.remaining <= 0 {
+		return 0, errCapsuleTooLarge
+	}
+	if int64(len(p)) > c.remaining {
+		p = p[:c.remaining]
+	}
+	n, err := c.r.Read(p)
+	c.remaining -= int64(n)
+	return n, err
 }
 
 func inspectTar(tr *tar.Reader) (*InspectResult, error) {
 	result := &InspectResult{Valid: true}
 
+	entries := 0
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
+			break
+		}
+		entries++
+		if entries > maxCapsuleEntries {
+			result.Valid = false
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("capsule carries more than %d entries; refusing to inspect further", maxCapsuleEntries))
 			break
 		}
 		if err != nil {
@@ -76,9 +126,17 @@ func inspectTar(tr *tar.Reader) (*InspectResult, error) {
 		result.FileList = append(result.FileList, header.Name)
 
 		if header.Name == "manifest.json" {
-			data, err := io.ReadAll(tr)
+			// Bounded read: an unbounded io.ReadAll here let a hostile
+			// capsule exhaust memory through a decompression bomb.
+			data, err := io.ReadAll(io.LimitReader(tr, maxCapsuleManifestLen+1))
 			if err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("read manifest: %v", err))
+				continue
+			}
+			if len(data) > maxCapsuleManifestLen {
+				result.Valid = false
+				result.Errors = append(result.Errors,
+					fmt.Sprintf("manifest.json exceeds the %d byte cap", maxCapsuleManifestLen))
 				continue
 			}
 			var m Manifest

@@ -388,6 +388,7 @@ func TestRuleNames(t *testing.T) {
 		"env_values",
 		"secret_key_values",
 		"cli_secret_flags",
+		"secret_named_assignments",
 		"interpolation_defaults",
 		"quoted_key_material",
 		"url_credentials",
@@ -631,5 +632,39 @@ func TestRedactString_InterpolationDefaults(t *testing.T) {
 				t.Errorf("RedactString(%q) = %q, want %q", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRedactString_SecretNamedAssignmentsMatchSourceClassifier pins that the
+// content classifier and the evidence-source classifier agree on what counts
+// as a secret key name. They drifted once: batch D1 taught the source
+// classifier about standalone key/auth segments (SSH_KEY, DEPLOY_KEY) while
+// the content rules still only knew api_key, so a mixed-case sshKey=... in a
+// log line survived redaction. Found by FuzzRedactString.
+func TestRedactString_SecretNamedAssignmentsMatchSourceClassifier(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	redacted := []string{
+		"sshKey=abc123",
+		"deployKey=xyz789",
+		"signing_key=material",
+		"Key=x",
+		"keY=hunter2",
+		"myAuth=bearer-ish",
+	}
+	for _, in := range redacted {
+		got := e.RedactString(in, "log")
+		key, _, _ := strings.Cut(in, "=")
+		if !strings.Contains(got, "<redacted>") {
+			t.Errorf("RedactString(%q) = %q, want the value redacted (key %q is secret-named)", in, got, key)
+		}
+	}
+
+	// Benign diagnostics must still survive: the classifier anchors key and
+	// auth as whole segments, so these are not secret-named.
+	kept := []string{"exit_code=1", "status=ok", "duration_ms=42", "collector=env", "monkey=banana", "keyboard=us"}
+	for _, in := range kept {
+		if got := e.RedactString(in, "log"); got != in {
+			t.Errorf("RedactString(%q) = %q, want unchanged", in, got)
+		}
 	}
 }
