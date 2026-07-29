@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/meedoomostafa/devdiag/internal/schema"
@@ -78,5 +79,94 @@ func TestParseHexAddr(t *testing.T) {
 	}
 	if got := parseHexAddr("00000000"); got != "0.0.0.0" {
 		t.Errorf("parseHexAddr(00000000) = %q, want 0.0.0.0", got)
+	}
+}
+
+// TestParseLocalAddr_RejectsOutOfRangePort pins that a hostile or corrupt
+// /proc/net/tcp line cannot produce a wrapped/nonsense port. CodeQL flagged
+// the unbounded ParseInt -> int conversion (go/incorrect-integer-conversion).
+func TestParseLocalAddr_RejectsOutOfRangePort(t *testing.T) {
+	cases := []string{
+		"0100007F:1FFFF",            // 131071, above uint16
+		"0100007F:FFFFFFFFFFFFFFFF", // overflows int64 parse
+		"0100007F:10000",            // 65536, one past the max port
+	}
+	for _, in := range cases {
+		if _, port, err := parseLocalAddr(in); err == nil {
+			t.Errorf("parseLocalAddr(%q) accepted out-of-range port %d, want error", in, port)
+		}
+	}
+}
+
+// TestParseHexAddr_RejectsMalformedOctets pins that non-hex or out-of-range
+// octets do not silently truncate into a plausible-looking address.
+func TestParseHexAddr_RejectsMalformedOctets(t *testing.T) {
+	// "GG" is not hex; the old code swallowed the error and used byte(0).
+	if got := parseHexAddr("0100GG7F"); got != "" {
+		t.Errorf("parseHexAddr with non-hex octet = %q, want empty string", got)
+	}
+}
+
+// TestParseProcNetTCP_SkipsMalformedLines pins that unparsable lines are
+// dropped rather than surfacing as evidence with an empty address.
+func TestParseProcNetTCP_SkipsMalformedLines(t *testing.T) {
+	data := "  sl  local_address rem_address   st\n" +
+		"   0: 0100GG7F:1F90 00000000:0000 0A\n" + // bad hex address
+		"   1: 0100007F:1FFFF 00000000:0000 0A\n" + // out-of-range port
+		"   2: BAD:1F90 00000000:0000 0A\n" + // malformed address length
+		"   3: 0100007F:1F90 00000000:0000 0A\n" // valid
+	tmpDir := t.TempDir()
+	mockPath := filepath.Join(tmpDir, "tcp")
+	if err := os.WriteFile(mockPath, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseProcNetTCP(mockPath)
+	if err != nil {
+		t.Fatalf("parseProcNetTCP error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d listeners %+v, want only the valid line", len(got), got)
+	}
+	if got[0].addr != "127.0.0.1" || got[0].port != 8080 {
+		t.Errorf("got %+v, want 127.0.0.1:8080", got[0])
+	}
+}
+
+// TestParseLocalAddr_AcceptsMaxPort pins that the 16-bit bound accepts the
+// legitimate maximum port; the bound must reject overflow, not valid input.
+func TestParseLocalAddr_AcceptsMaxPort(t *testing.T) {
+	addr, port, err := parseLocalAddr("0100007F:FFFF")
+	if err != nil {
+		t.Fatalf("parseLocalAddr(max port) error: %v", err)
+	}
+	if port != 65535 {
+		t.Errorf("port = %d, want 65535", port)
+	}
+	if addr != "127.0.0.1" {
+		t.Errorf("addr = %q, want 127.0.0.1", addr)
+	}
+}
+
+// TestParseHexAddr_IPv6Unaffected pins that the 32-char IPv6 form still
+// returns the documented placeholder rather than being caught by the new
+// IPv4 octet validation.
+func TestParseHexAddr_IPv6Unaffected(t *testing.T) {
+	ipv6 := "00000000000000000000000001000000"
+	if got := parseHexAddr(ipv6); got != "::" {
+		t.Errorf("parseHexAddr(ipv6) = %q, want ::", got)
+	}
+}
+
+// TestParseHexAddr_RejectsOtherLengths pins that lengths which are neither
+// IPv4 (8) nor IPv6 (32) are rejected rather than falling through to the
+// IPv6 placeholder, which would fabricate listener evidence from garbage.
+func TestParseHexAddr_RejectsOtherLengths(t *testing.T) {
+	for _, in := range []string{"", "BAD", "0100007", "0100007FF", strings.Repeat("0", 31)} {
+		if got := parseHexAddr(in); got != "" {
+			t.Errorf("parseHexAddr(%q) = %q, want empty string", in, got)
+		}
+	}
+	if _, _, err := parseLocalAddr("BAD:1F90"); err == nil {
+		t.Error("parseLocalAddr with malformed address length should error")
 	}
 }
