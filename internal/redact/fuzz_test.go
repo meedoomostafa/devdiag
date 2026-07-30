@@ -17,6 +17,13 @@ var identifierKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
 // notWsDelim class in rules.go.
 const valueDelimiters = " \t\n\r\v\u0085\u00a0\"']" + "`"
 
+// colonValueDelimiters lists the characters that bound a COLON-assigned value.
+// The colon extent allows spaces and backticks but is bounded by the YAML and
+// JSON flow delimiters, so it needs its own skip set. Leading runs of "]" are
+// covered by explicit tests rather than this property, for the same reason as
+// the "=" family.
+const colonValueDelimiters = "\n\r,}]\"'"
+
 // FuzzRedactString drives the redaction engine with arbitrary input. This is
 // the security-critical parser: everything DevDiag prints, saves, or ships
 // in a capsule passes through it. It must never panic, and - the property
@@ -45,6 +52,9 @@ func FuzzRedactString(f *testing.F) {
 	// below cannot reach because it skips delimiter-bearing values.
 	f.Add("API_TOKEN=]]hunter2secret")
 	f.Add("API_TOKEN=``hunter2secret")
+	f.Add("db_password: ]]hunter2secret")
+	f.Add("db_password: hunter2secret")
+	f.Add("db_password\v: hunter2secret")
 	f.Add("'private_key': |\n  singlequotedkeybody0\n")
 	f.Add("---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----\nssh2body000\n")
 	f.Add("\tprivate_key: |\n        tabheaderbody000\n")
@@ -104,6 +114,23 @@ func FuzzRedactString(f *testing.F) {
 					IsSecretKeyName(key) &&
 					strings.Contains(haystack, val) {
 					t.Fatalf("level %s: secret-named assignment leaked its value\nkey=%q value=%q\nin=%q\nout=%q", level, key, val, in, out)
+				}
+			}
+			// Contract: the same holds for a colon assignment. This path is
+			// materially different code - a separate pattern with a separate
+			// value extent - and had no fuzz coverage at all, which is how a
+			// doubled leading bracket survived in it after the "=" family was
+			// fixed.
+			if k, v, ok := strings.Cut(in, ":"); ok {
+				key := strings.TrimSpace(k)
+				val := strings.TrimSpace(v)
+				haystack := strings.ReplaceAll(out, key, "")
+				haystack = strings.ReplaceAll(haystack, "<redacted>", "")
+				if len(val) >= 6 && !strings.ContainsAny(val, colonValueDelimiters) &&
+					identifierKey.MatchString(key) &&
+					IsSecretKeyName(key) &&
+					strings.Contains(haystack, val) {
+					t.Fatalf("level %s: secret-named colon assignment leaked its value\nkey=%q value=%q\nin=%q\nout=%q", level, key, val, in, out)
 				}
 			}
 		}

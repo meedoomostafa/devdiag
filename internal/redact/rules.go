@@ -315,7 +315,7 @@ var assignmentPattern = regexp.MustCompile(`(?m)(^|` + wsDelim + `)([A-Za-z_][A-
 // newline all keep surrounding structure and sibling entries intact.
 const colonValueTail = `[^\n,}\]]*`
 
-var colonAssignmentPattern = regexp.MustCompile(`(?m)(^|` + wsDelim + `)([A-Za-z_][A-Za-z0-9_.-]*)(["']?` + ws + `*:` + ws + `*)("[^"]*"` + colonValueTail + `|'[^']*'` + colonValueTail + `|` + `\]?` + colonValueTail + `)`)
+var colonAssignmentPattern = regexp.MustCompile(`(?m)(^|` + wsDelim + `)([A-Za-z_][A-Za-z0-9_.-]*)(["']?` + ws + `*:` + ws + `*)("[^"]*"` + colonValueTail + `|'[^']*'` + colonValueTail + `|` + `\]*` + colonValueTail + `)`)
 
 // redactSecretNamedAssignments masks the value of any KEY=VALUE or
 // KEY: VALUE (YAML/JSON/properties) whose key name is classified as
@@ -459,27 +459,28 @@ func redactYAMLBlockScalars(input string) string {
 				end = j
 				continue
 			}
-			// Mixed tab and space indentation cannot be compared by width
-			// without collisions: a tab-indented header (width 8) and a body
-			// indented with eight spaces compare equal, which ended the block
-			// and emitted the body. Tabs are invalid YAML indentation, so
-			// treat equal width as deeper when either side uses one and fail
-			// toward redaction.
-			if width == indent && width > 0 && (headerHasTab || strings.ContainsRune(leadingWhitespace(candidate), '\t')) {
-				end = j
-				continue
-			}
-			// A compact sequence entry ("- private_key: |") shifts the key
-			// column right of the line's own indentation, which makes a line
-			// at exactly the key column ambiguous: either malformed block
-			// content or a sibling mapping entry. Treat it as content unless
-			// it looks like a sibling, so malformed YAML fails toward
-			// redaction without consuming valid fields. Outside a sequence
-			// entry the columns coincide and the strict test applies, so an
-			// unindented log line is never swallowed.
-			if indent > lineIndent && width == indent && !mappingEntryPattern.MatchString(candidate) {
-				end = j
-				continue
+			// A line at exactly the key column is ambiguous in two cases,
+			// and in both it is treated as block content so malformed input
+			// fails toward redaction:
+			//
+			//   - a compact sequence entry ("- private_key: |") shifts the key
+			//     column right of the line's own indentation, so content and
+			//     siblings can share a column;
+			//   - mixed tab and space indentation cannot be compared by width
+			//     without collisions, since a tab-indented header and a body
+			//     indented with eight spaces both measure 8.
+			//
+			// Both are gated on the line not looking like a mapping entry, so
+			// a genuine sibling field is never consumed. Outside these cases
+			// the strict test applies, so an unindented log line following an
+			// indicator is never swallowed.
+			if width == indent && !mappingEntryPattern.MatchString(candidate) {
+				sequenceShift := indent > lineIndent
+				mixedIndent := width > 0 && (headerHasTab || strings.ContainsRune(leadingWhitespace(candidate), '\t'))
+				if sequenceShift || mixedIndent {
+					end = j
+					continue
+				}
 			}
 			break
 		}
