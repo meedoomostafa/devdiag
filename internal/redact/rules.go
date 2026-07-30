@@ -307,6 +307,12 @@ var assignmentPattern = regexp.MustCompile(`(?m)(^|` + wsDelim + `)([A-Za-z_][A-
 // character after the closing quote ("token:\"\"0") is consumed in one pass:
 // leaving it behind made the next pass treat "<redacted>0" as a bare value and
 // mask it again, breaking the engine's idempotence contract.
+//
+// Consequence, verified and accepted: a trailing comment after a quoted value
+// is consumed too ("token: \"abc\" # note" becomes "token: <redacted>"). That
+// is the fail-toward-redaction choice, since a comment beside a secret often
+// restates it. Flow delimiters still bound the value, so ",", "}", "]", and a
+// newline all keep surrounding structure and sibling entries intact.
 const colonValueTail = `[^\n,}\]]*`
 
 var colonAssignmentPattern = regexp.MustCompile(`(?m)(^|` + wsDelim + `)([A-Za-z_][A-Za-z0-9_.-]*)(["']?` + ws + `*:` + ws + `*)("[^"]*"` + colonValueTail + `|'[^']*'` + colonValueTail + `|` + `\]?` + colonValueTail + `)`)
