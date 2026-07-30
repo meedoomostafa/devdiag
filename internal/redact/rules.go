@@ -201,10 +201,19 @@ func redactCLISecrets(input string) string {
 	return cliSecretPattern.ReplaceAllString(input, "${1}<redacted>")
 }
 
-// interpolationOpenPattern locates ${VAR:-... / ${VAR-... openings whose
-// variable name indicates secret material. The default value is scanned
-// manually so nested ${...} stay inside the masked region.
-var interpolationOpenPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_]+)(:?-)`)
+// interpolationOpenPattern locates a ${VAR<op>... opening whose variable name
+// indicates secret material. The value is scanned manually so nested ${...}
+// stay inside the masked region.
+//
+// Every POSIX parameter-expansion operator that carries a literal operand is
+// matched, not just ":-" and "-". The others were owned by no rule at all: this
+// one skipped them, and the assignment rules cannot reach inside "${...}"
+// because "{" is deliberately not a key boundary, so ${API_TOKEN:=secret} and
+// ${API_TOKEN:+secret} leaked at both redaction levels.
+//
+// Substring expansion is intentionally excluded. "${VAR:3:4}" has a digit after
+// the colon, which [-=+?] does not match, so slicing syntax is left alone.
+var interpolationOpenPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_]+)(:?[-=+?])`)
 
 // redactInterpolationDefaults masks literal fallback values in secret-named
 // variable interpolations such as ${API_TOKEN:-realvalue}. The default is

@@ -55,6 +55,13 @@ func FuzzRedactString(f *testing.F) {
 	f.Add("db_password: ]]hunter2secret")
 	f.Add("db_password: hunter2secret")
 	f.Add("db_password\v: hunter2secret")
+	// POSIX parameter-expansion operators beyond ":-" and "-", which were
+	// owned by no rule: the interpolation rule skipped the operator and the
+	// assignment rules cannot reach inside "${...}".
+	f.Add("${API_TOKEN:=prodsecret000}")
+	f.Add("${API_TOKEN:+prodsecret000}")
+	f.Add("${API_TOKEN?prodsecret000}")
+	f.Add("${API_TOKEN:3:4}")
 	f.Add("'private_key': |\n  singlequotedkeybody0\n")
 	f.Add("---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----\nssh2body000\n")
 	f.Add("\tprivate_key: |\n        tabheaderbody000\n")
