@@ -385,6 +385,7 @@ func TestRedactString_CLISecrets(t *testing.T) {
 func TestRuleNames(t *testing.T) {
 	def := RuleNames(LevelDefault)
 	wantDefault := []string{
+		"pem_private_keys",
 		"env_values",
 		"secret_key_values",
 		"cli_secret_flags",

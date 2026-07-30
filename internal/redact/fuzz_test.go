@@ -11,6 +11,19 @@ import (
 // where redacting the right-hand side would be wrong.
 var identifierKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
 
+// valueDelimiters lists the characters that bound an unquoted value extent in
+// the assignment rules, and therefore the characters whose presence inside a
+// value puts it outside the leak property below. It must stay in step with the
+// notWsDelim class in rules.go.
+const valueDelimiters = " \t\n\r\v\u0085\u00a0\"']" + "`"
+
+// colonValueDelimiters lists the characters that bound a COLON-assigned value.
+// The colon extent allows spaces and backticks but is bounded by the YAML and
+// JSON flow delimiters, so it needs its own skip set. Leading runs of "]" are
+// covered by explicit tests rather than this property, for the same reason as
+// the "=" family.
+const colonValueDelimiters = "\n\r,}]\"'"
+
 // FuzzRedactString drives the redaction engine with arbitrary input. This is
 // the security-critical parser: everything DevDiag prints, saves, or ships
 // in a capsule passes through it. It must never panic, and - the property
@@ -24,6 +37,27 @@ func FuzzRedactString(f *testing.F) {
 	f.Add("nothing sensitive here")
 	f.Add("")
 	f.Add("KEY=\x00\x01\x02")
+	// YAML block scalars: the indicator was masked while the indented body
+	// leaked verbatim. Seeds cover the indicator variants, the compact
+	// sequence entry whose body sits at the key column, tab indentation
+	// (invalid YAML, so the scanner must fail toward redaction), and a
+	// benign key name carrying PEM private key material.
+	f.Add("private_key: |\n  -----BEGIN RSA PRIVATE KEY-----\n  MIIEowIBAAKCAQEA\n")
+	f.Add("api_token: |-2 # note\n  tokenmaterial0000\n")
+	f.Add("items:\n- private_key: |\n  bodyatkeycolumn000\n- name: next\n")
+	f.Add("private_key: |\n\ttabindentedsecret0\n")
+	f.Add("data: |\n  -----BEGIN OPENSSH PRIVATE KEY-----\n  keymaterial00000\n")
+	f.Add("tls.key: LS0tLS1CRUdJTiBQUklWQVRF\n")
+	// Runs of leading delimiters in a value extent, which the leak property
+	// below cannot reach because it skips delimiter-bearing values.
+	f.Add("API_TOKEN=]]hunter2secret")
+	f.Add("API_TOKEN=``hunter2secret")
+	f.Add("db_password: ]]hunter2secret")
+	f.Add("db_password: hunter2secret")
+	f.Add("db_password\v: hunter2secret")
+	f.Add("'private_key': |\n  singlequotedkeybody0\n")
+	f.Add("---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----\nssh2body000\n")
+	f.Add("\tprivate_key: |\n        tabheaderbody000\n")
 
 	f.Fuzz(func(t *testing.T, in string) {
 		// Both non-off levels must hold the same invariants; strict only
@@ -50,11 +84,53 @@ func FuzzRedactString(f *testing.F) {
 				// Values shorter than 6 chars are skipped: single characters
 				// coincidentally appear inside the key or the "<redacted>"
 				// marker, which is a property artifact rather than a leak.
-				if len(val) >= 6 && !strings.ContainsAny(val, " \t\n\r\"'") &&
+				//
+				// Key names and the redaction marker are stripped before the
+				// search for the same reason. Redaction masks values and never
+				// rewrites key names, so a value that only survives *inside*
+				// its own key ("ApikeY000000=000000") is an artifact of the
+				// substring search rather than a leak. Stripping keeps the
+				// property honest about value survival anywhere else,
+				// including after a separator ("KEY= secret").
+				haystack := strings.ReplaceAll(out, key, "")
+				haystack = strings.ReplaceAll(haystack, "<redacted>", "")
+				// Values containing a delimiter character are out of scope for
+				// this property. The unquoted value extent is deliberately
+				// bounded at whitespace, quotes, backtick, and "]" so that
+				// surrounding structure survives - notably the closing bracket
+				// of Go slice-formatted arguments
+				// ("args=[API_KEY=<redacted>]"). The consequence is that the
+				// tail of a secret which itself contains such a character can
+				// remain visible. Fixing that needs the leading delimiter as
+				// matching context rather than a wider extent, which means
+				// reworking value semantics shared by the whole assignment
+				// family; tracked separately rather than rushed in alongside
+				// the multi-line secret work.
+				//
+				// A LEADING delimiter is covered, and is asserted directly by
+				// TestBracketLeadingSecretValue.
+				if len(val) >= 6 && !strings.ContainsAny(val, valueDelimiters) &&
 					identifierKey.MatchString(key) &&
 					IsSecretKeyName(key) &&
-					strings.Contains(out, val) {
+					strings.Contains(haystack, val) {
 					t.Fatalf("level %s: secret-named assignment leaked its value\nkey=%q value=%q\nin=%q\nout=%q", level, key, val, in, out)
+				}
+			}
+			// Contract: the same holds for a colon assignment. This path is
+			// materially different code - a separate pattern with a separate
+			// value extent - and had no fuzz coverage at all, which is how a
+			// doubled leading bracket survived in it after the "=" family was
+			// fixed.
+			if k, v, ok := strings.Cut(in, ":"); ok {
+				key := strings.TrimSpace(k)
+				val := strings.TrimSpace(v)
+				haystack := strings.ReplaceAll(out, key, "")
+				haystack = strings.ReplaceAll(haystack, "<redacted>", "")
+				if len(val) >= 6 && !strings.ContainsAny(val, colonValueDelimiters) &&
+					identifierKey.MatchString(key) &&
+					IsSecretKeyName(key) &&
+					strings.Contains(haystack, val) {
+					t.Fatalf("level %s: secret-named colon assignment leaked its value\nkey=%q value=%q\nin=%q\nout=%q", level, key, val, in, out)
 				}
 			}
 		}
