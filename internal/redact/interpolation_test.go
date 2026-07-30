@@ -97,3 +97,52 @@ func TestNonOperandExpansionsUntouched(t *testing.T) {
 		}
 	}
 }
+
+// TestExpansionArraySubscript covers a bash array subscript between the
+// variable name and the operator. The name class stopped at "[", so the whole
+// opening failed to match and the operand was emitted verbatim. Found by
+// sol-secops.
+func TestExpansionArraySubscript(t *testing.T) {
+	const secret = "ARRAYCANARY123456"
+	e := NewEngine(LevelDefault)
+	for _, in := range []string{
+		"${API_TOKEN[0]:-" + secret + "}",
+		"${API_TOKEN[@]:=" + secret + "}",
+		"${DB_PASSWORD[*]:+" + secret + "}",
+		"${API_TOKEN[idx]-" + secret + "}",
+	} {
+		out := e.RedactString(in, "test")
+		if strings.Contains(out, secret) {
+			t.Errorf("subscripted expansion leaked: in=%q out=%q", in, out)
+		}
+		if again := e.RedactString(out, "test"); again != out {
+			t.Errorf("not idempotent: once=%q twice=%q", out, again)
+		}
+	}
+
+	// A subscript must not turn a benign name into a secret-named one.
+	if out := e.RedactString("${NODE_VERSION[0]:-20}", "test"); out != "${NODE_VERSION[0]:-20}" {
+		t.Errorf("benign subscripted expansion altered: %q", out)
+	}
+}
+
+// TestExpansionEscapedBrace covers a backslash-escaped brace inside the
+// operand. The balance scan treated it as the closing brace and stopped early,
+// leaving the rest of the operand visible. Found by sol-secops.
+func TestExpansionEscapedBrace(t *testing.T) {
+	const secret = "BRACECANARY123456"
+	e := NewEngine(LevelDefault)
+	for _, in := range []string{
+		`${API_TOKEN:-a\}` + secret + `}`,
+		`${API_TOKEN:=x\}` + secret + `}`,
+		`${DB_PASSWORD:-\}` + secret + `}`,
+	} {
+		out := e.RedactString(in, "test")
+		if strings.Contains(out, secret) {
+			t.Errorf("escaped brace ended the operand early: in=%q out=%q", in, out)
+		}
+		if again := e.RedactString(out, "test"); again != out {
+			t.Errorf("not idempotent: once=%q twice=%q", out, again)
+		}
+	}
+}
