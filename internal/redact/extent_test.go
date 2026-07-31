@@ -84,9 +84,12 @@ func TestValueExtentEmptyAndCloserOnlyValues(t *testing.T) {
 		// No opening delimiter precedes it, so the closers are the value.
 		{"closers only value", `API_TOKEN=]]]]`, `API_TOKEN=<redacted>`},
 		{"closers only after space", ` API_TOKEN=]]]]`, ` API_TOKEN=<redacted>`},
-		// An escaped quote inside a quoted value ends the core early; the
-		// content still gets masked.
-		{"escaped quote in quoted value", `KEY="a\"bsecret"`, `KEY=<redacted>"`},
+		// An escaped quote must not end the quoted value, or the output is left
+		// with a dangling quote and an escaped quote inside a JSON string
+		// produces invalid JSON.
+		{"escaped quote in quoted value", `KEY="a\"bsecret"`, `KEY=<redacted>`},
+		{"escaped quote json", `{"token": "a\"bsecret"}`, `{"token": <redacted>}`},
+		{"single quotes carry no escape", `KEY='a\'`, `KEY=<redacted>`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

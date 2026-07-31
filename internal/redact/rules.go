@@ -227,8 +227,8 @@ const valueClosers = "'\"" + "`" + ")]}"
 func splitValueTail(value string) (tail string, contentful bool) {
 	core, rest := "", value
 	if len(value) > 1 && (value[0] == '"' || value[0] == '\'') {
-		if j := strings.IndexByte(value[1:], value[0]); j != -1 {
-			core, rest = value[:j+2], value[j+2:]
+		if j := closingQuote(value); j != -1 {
+			core, rest = value[:j+1], value[j+1:]
 		}
 	}
 
@@ -243,6 +243,28 @@ func splitValueTail(value string) (tail string, contentful bool) {
 		return rest, false
 	}
 	return rest[end:], true
+}
+
+// closingQuote returns the index of the quote that closes the quoted value
+// starting at index 0, or -1 when it is unterminated.
+//
+// Inside a double-quoted value a backslash escapes the next byte, so a
+// backslash-quote pair does not end the value. Treating it as the terminator
+// split the value early and left a dangling quote in the output, which also
+// made an escaped quote inside a JSON string produce invalid JSON. Single quotes
+// carry no escape in shell, so they are matched literally.
+func closingQuote(value string) int {
+	quote := value[0]
+	for i := 1; i < len(value); i++ {
+		if quote == '"' && value[i] == '\\' {
+			i++
+			continue
+		}
+		if value[i] == quote {
+			return i
+		}
+	}
+	return -1
 }
 
 // openingDelimiters are the characters that open a bracketed or quoted region.

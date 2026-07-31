@@ -83,6 +83,8 @@ func FuzzRedactString(f *testing.F) {
 	f.Add("API_TOKEN=]]]]")
 	f.Add("args=[API_KEY=]")
 	f.Add("KEY=\"a\\\"bsecret\"")
+	f.Add("{\"token\": \"a\\\"bsecret\"}")
+	f.Add("KEY='a\\'")
 	f.Add("'private_key': |\n  singlequotedkeybody0\n")
 	f.Add("---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----\nssh2body000\n")
 	f.Add("\tprivate_key: |\n        tabheaderbody000\n")
