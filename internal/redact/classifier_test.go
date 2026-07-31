@@ -136,3 +136,26 @@ func TestAuthorizationHeaderUnknownScheme(t *testing.T) {
 		}
 	}
 }
+
+// TestAuthorizationHeaderStaysOnItsLine pins the header boundary. Go's \s
+// includes newline and carriage return, so horizontal whitespace around the
+// colon and after the scheme is required: with \s a header carrying a trailing
+// space and no value consumed the line break and redacted the next header.
+// Found by CodeRabbit.
+func TestAuthorizationHeaderStaysOnItsLine(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	for _, tc := range []struct{ in, want string }{
+		{"Authorization: Basic \r\nX-Trace: keepme", "Authorization: Basic <redacted>\r\nX-Trace: keepme"},
+		{"Authorization: Basic \nX-Trace: keepme", "Authorization: Basic <redacted>\nX-Trace: keepme"},
+		{"Authorization:\r\nX-Trace: keepme", "Authorization:<redacted>\r\nX-Trace: keepme"},
+		{"Authorization: Bearer abc\r\nX-Trace: keepme", "Authorization: Bearer <redacted>\r\nX-Trace: keepme"},
+	} {
+		got := e.RedactString(tc.in, "test")
+		if got != tc.want {
+			t.Errorf("RedactString(%q)\n  got  %q\n  want %q", tc.in, got, tc.want)
+		}
+		if again := e.RedactString(got, "test"); again != got {
+			t.Errorf("not idempotent: once %q twice %q", got, again)
+		}
+	}
+}

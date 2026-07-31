@@ -118,7 +118,12 @@ var (
 	// a quoted shell argument keeps the rest of the command. "<redacted>" is
 	// itself inside that class, which is what makes a second pass reproduce the
 	// same output.
-	authHeaderPattern = regexp.MustCompile(`(?i)((?:proxy-)?authorization\s*:\s*(?:` + authScheme + `\s+)?)[^\r\n"]*`)
+	//
+	// Whitespace around the colon and after the scheme is horizontal only. Go's
+	// \s includes newline and carriage return, so a header with a trailing space
+	// and no value consumed the line break and redacted the NEXT header:
+	// "Authorization: Basic \r\nX-Trace: keep" masked "X-Trace: keep".
+	authHeaderPattern = regexp.MustCompile(`(?i)((?:proxy-)?authorization[ \t]*:[ \t]*(?:` + authScheme + `[ \t]+)?)[^\r\n"]*`)
 	// secretKeyValuePattern matches KEY=VALUE assignments whose key name
 	// indicates secret material regardless of case (db_password=, api_key=,
 	// auth_token=, ...). The uppercase-only envValuePattern misses these, and
