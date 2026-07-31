@@ -201,10 +201,25 @@ func redactCLISecrets(input string) string {
 	return cliSecretPattern.ReplaceAllString(input, "${1}<redacted>")
 }
 
-// interpolationOpenPattern locates ${VAR:-... / ${VAR-... openings whose
-// variable name indicates secret material. The default value is scanned
-// manually so nested ${...} stay inside the masked region.
-var interpolationOpenPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_]+)(:?-)`)
+// interpolationOpenPattern locates a ${VAR<op>... opening whose variable name
+// indicates secret material. The value is scanned manually so nested ${...}
+// stay inside the masked region.
+//
+// Every POSIX parameter-expansion operator that carries a literal operand is
+// matched, not just ":-" and "-". The others were owned by no rule at all: this
+// one skipped them, and the assignment rules cannot reach inside "${...}"
+// because "{" is deliberately not a key boundary, so ${API_TOKEN:=secret} and
+// ${API_TOKEN:+secret} leaked at both redaction levels.
+//
+// Substring expansion is intentionally excluded. "${VAR:3:4}" has a digit after
+// the colon, which [-=+?] does not match, so slicing syntax is left alone.
+//
+// An optional array subscript is skipped between the name and the operator.
+// Without it the name class stopped at "[", the whole opening failed to match,
+// and "${API_TOKEN[0]:-secret}" emitted its operand verbatim. The subscript is
+// non-capturing so group 1 remains the base name used for classification, which
+// keeps "${NODE_VERSION[0]:-20}" benign.
+var interpolationOpenPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_]+)(?:\[[^\]]*\])?(:?[-=+?])`)
 
 // redactInterpolationDefaults masks literal fallback values in secret-named
 // variable interpolations such as ${API_TOKEN:-realvalue}. The default is
@@ -248,6 +263,12 @@ func findBalancedClose(input string, start int) int {
 	depth := 0
 	for i := start; i < len(input); i++ {
 		switch {
+		case input[i] == '\\':
+			// A backslash escapes the next byte, so "\}" is a literal brace
+			// inside the operand rather than its terminator. Treating it as the
+			// terminator ended the operand early and left the remainder of the
+			// value visible.
+			i++
 		case input[i] == '$' && i+1 < len(input) && input[i+1] == '{':
 			depth++
 		case input[i] == '}':
