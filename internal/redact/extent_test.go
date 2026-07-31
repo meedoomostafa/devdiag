@@ -68,3 +68,35 @@ func TestValueExtentFlowBoundaries(t *testing.T) {
 		}
 	}
 }
+
+// TestValueExtentEmptyAndCloserOnlyValues separates a closer-only value that is
+// really the enclosing structure from one that is really the value. Found by
+// sol-secops: consuming the bracket of an empty assignment produced malformed
+// output where the input had previously been left alone.
+func TestValueExtentEmptyAndCloserOnlyValues(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	tests := []struct{ name, in, want string }{
+		// The "]" closes the "[" in the prefix, so it is structure and the
+		// empty value must be left alone.
+		{"empty value inside brackets", `args=[API_KEY=]`, `args=[API_KEY=]`},
+		{"empty value inside quotes", `printf "API_KEY="`, `printf "API_KEY="`},
+		{"empty value at line start", `API_KEY=`, `API_KEY=`},
+		// No opening delimiter precedes it, so the closers are the value.
+		{"closers only value", `API_TOKEN=]]]]`, `API_TOKEN=<redacted>`},
+		{"closers only after space", ` API_TOKEN=]]]]`, ` API_TOKEN=<redacted>`},
+		// An escaped quote inside a quoted value ends the core early; the
+		// content still gets masked.
+		{"escaped quote in quoted value", `KEY="a\"bsecret"`, `KEY=<redacted>"`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := e.RedactString(tc.in, "test")
+			if got != tc.want {
+				t.Errorf("RedactString(%q)\n  got  %q\n  want %q", tc.in, got, tc.want)
+			}
+			if again := e.RedactString(got, "test"); again != got {
+				t.Errorf("not idempotent: once %q twice %q", got, again)
+			}
+		})
+	}
+}

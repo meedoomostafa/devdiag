@@ -224,7 +224,7 @@ const valueClosers = "'\"" + "`" + ")]}"
 // When nothing would remain to mask - a value made only of closing delimiters -
 // the whole value is masked instead of being handed back as structure, which is
 // what the extent already did before this rule existed.
-func splitValueTail(value string) string {
+func splitValueTail(value string) (tail string, contentful bool) {
 	core, rest := "", value
 	if len(value) > 1 && (value[0] == '"' || value[0] == '\'') {
 		if j := strings.IndexByte(value[1:], value[0]); j != -1 {
@@ -236,13 +236,39 @@ func splitValueTail(value string) string {
 	for end > 0 && strings.IndexByte(valueClosers, rest[end-1]) != -1 {
 		end--
 	}
-	// Nothing would remain masked: the value is only closing delimiters. Fail
-	// closed and mask all of it rather than handing it back as structure, which
-	// is what the extent did before this rule existed.
+	// The value is nothing but closing delimiters, so there is no content to
+	// mask and the caller has to decide whether they are the value or the
+	// structure around it.
 	if core == "" && end == 0 {
-		return ""
+		return rest, false
 	}
-	return rest[end:]
+	return rest[end:], true
+}
+
+// openingDelimiters are the characters that open a bracketed or quoted region.
+// When one of them immediately precedes an assignment, a closing delimiter at
+// the end of the value belongs to that region rather than to the value.
+const openingDelimiters = "([{'\"" + "`"
+
+// maskedAssignment renders a redacted assignment, deciding what to do when the
+// captured value holds no maskable content.
+//
+// A value made only of closing delimiters is ambiguous on its own:
+// "API_TOKEN=]]]]" is a value, while the "]" in "args=[API_KEY=]" closes the
+// bracket opened in the prefix and marks an empty value. Consuming the latter
+// produced malformed output where the engine had previously left the input
+// alone, so the prefix decides. Distinguishing the two exactly needs the
+// position of the opening delimiter, which is why the general fix lives in the
+// final-pass rework rather than here.
+func maskedAssignment(match, prefix, head, value string) string {
+	tail, contentful := splitValueTail(value)
+	if !contentful {
+		if prefix != "" && strings.IndexByte(openingDelimiters, prefix[0]) != -1 {
+			return match
+		}
+		return prefix + head + "<redacted>"
+	}
+	return prefix + head + "<redacted>" + tail
 }
 
 // redactEnvValues replaces values in KEY=VALUE patterns.
@@ -260,7 +286,7 @@ func maskEnvAssignment(input string, pattern *regexp.Regexp) string {
 		if len(parts) < 4 || parts[3] == "" {
 			return match
 		}
-		return parts[1] + parts[2] + "<redacted>" + splitValueTail(parts[3])
+		return maskedAssignment(match, parts[1], parts[2], parts[3])
 	})
 }
 
@@ -608,7 +634,7 @@ func redactWithAssignmentPattern(input string, pattern *regexp.Regexp) string {
 		if !IsSecretKeyName(parts[2]) {
 			return match
 		}
-		return parts[1] + parts[2] + parts[3] + "<redacted>" + splitValueTail(parts[4])
+		return maskedAssignment(match, parts[1], parts[2]+parts[3], parts[4])
 	})
 }
 

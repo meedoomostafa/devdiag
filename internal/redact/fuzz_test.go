@@ -78,6 +78,11 @@ func FuzzRedactString(f *testing.F) {
 	f.Add("API_TOKEN=]]]]")
 	f.Add(" api_key=SECRETVALUE&format=json")
 	f.Add("PASSWORD=a&bsecret")
+	// Closer-only values: the first is a value, the second closes the bracket
+	// opened in the prefix and marks an empty assignment.
+	f.Add("API_TOKEN=]]]]")
+	f.Add("args=[API_KEY=]")
+	f.Add("KEY=\"a\\\"bsecret\"")
 	f.Add("'private_key': |\n  singlequotedkeybody0\n")
 	f.Add("---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----\nssh2body000\n")
 	f.Add("\tprivate_key: |\n        tabheaderbody000\n")
