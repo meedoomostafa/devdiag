@@ -93,6 +93,18 @@ func FuzzRedactString(f *testing.F) {
 	f.Add("Authorization: Basic <redacted>")
 	f.Add("Authorization: Basic \r\nX-Trace: keepme")
 	f.Add("Authorization: shortcred00 extra")
+	// Boundary characters that used to prevent a match entirely, the parameter
+	// expansion that must stay owned by its own rule, and a secret nested inside
+	// the value extent of a declined assignment.
+	f.Add("https://x.io/a?api_key=boundarysecret00&format=json")
+	f.Add("at connect(API_KEY=boundarysecret00)")
+	f.Add("${AUTHOR=someone}")
+	f.Add("${A000000000000000000000000000000000000000=A0=0")
+	f.Add("${A000000000000000000000000000000000000000=A =0")
+	f.Add("a=1,deployKey=nestedsecret000")
+	f.Add("exit_code=0,duration_ms=1234")
+	f.Add("https://x-access-token:ghp_tokencanary@github.com/org/repo.git")
+	f.Add("git+ssh://deploy_token:secretcanary@host:22/path")
 	f.Add("'private_key': |\n  singlequotedkeybody0\n")
 	f.Add("---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----\nssh2body000\n")
 	f.Add("\tprivate_key: |\n        tabheaderbody000\n")
@@ -179,8 +191,11 @@ func FuzzRedactString(f *testing.F) {
 				val := strings.TrimSpace(v)
 				haystack := strings.ReplaceAll(out, key, "")
 				haystack = strings.ReplaceAll(haystack, "<redacted>", "")
+				// A value beginning with "//" is a URL authority, not an assignment
+				// value: the colon belongs to "scheme://". redactURL owns that
+				// text, and masking it would destroy the URL.
 				if len(val) >= 6 && !strings.ContainsAny(val, colonValueDelimiters) &&
-					!strings.HasPrefix(val, ":") &&
+					!strings.HasPrefix(val, ":") && !strings.HasPrefix(val, "//") &&
 					strings.TrimRight(val, valueClosers) != "" &&
 					identifierKey.MatchString(key) &&
 					IsSecretKeyName(key) {
