@@ -91,6 +91,8 @@ func FuzzRedactString(f *testing.F) {
 	f.Add(" sig=canarysignature00")
 	f.Add("Authorization: Basic dXNlcjpwYXNzd29yZA==")
 	f.Add("Authorization: Basic <redacted>")
+	f.Add("Authorization: Basic \r\nX-Trace: keepme")
+	f.Add("Authorization: shortcred00 extra")
 	f.Add("'private_key': |\n  singlequotedkeybody0\n")
 	f.Add("---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----\nssh2body000\n")
 	f.Add("\tprivate_key: |\n        tabheaderbody000\n")

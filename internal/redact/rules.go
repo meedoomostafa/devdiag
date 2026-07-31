@@ -99,22 +99,31 @@ var (
 	// bearerTokenPattern matches Bearer credentials in Authorization headers
 	// or header-like log fragments, case-insensitively.
 	bearerTokenPattern = regexp.MustCompile(`(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]+`)
-	// authHeaderPattern matches the credential of an Authorization or
-	// Proxy-Authorization header under any scheme, keeping the header name and
-	// the scheme so the diagnostic stays meaningful.
+	// authHeaderPattern matches everything after an Authorization or
+	// Proxy-Authorization header, preserving the header name and a recognised
+	// authentication scheme so the diagnostic stays meaningful.
 	//
 	// bearerTokenPattern covers only "Bearer", so HTTP Basic - the most common
 	// shape in a curl log - was emitted verbatim at both redaction levels, as
-	// were Digest and any custom scheme. Anchoring on the header name rather
-	// than on the scheme word is deliberate: matching a bare "basic" or "token"
-	// anywhere would redact ordinary prose such as "basic configuration".
+	// were Digest and any custom scheme.
 	//
-	// The marker's angle brackets are part of the credential class so the rule
-	// is a fixed point. Without them the second pass could not match "<redacted>"
-	// as the credential, backtracked, and masked the scheme word instead,
-	// turning "Authorization: Basic <redacted>" into
-	// "Authorization: <redacted> <redacted>".
-	authHeaderPattern = regexp.MustCompile(`(?i)((?:proxy-)?authorization\s*:\s*)([A-Za-z][A-Za-z0-9-]*\s+)?[A-Za-z0-9._~+/=<>-]+`)
+	// The scheme is an explicit list rather than "any word". Allowing any word
+	// made the group ambiguous with the credential itself: it swallowed
+	// "shortcred123" in "Authorization: shortcred123 extra" and masked "extra"
+	// instead, leaking the credential, and with a long credential the rule was
+	// not even a fixed point. Anything that is not a listed scheme is now masked
+	// wholesale, which fails closed.
+	//
+	// The value runs to end of line or to a double quote, so a header embedded in
+	// a quoted shell argument keeps the rest of the command. "<redacted>" is
+	// itself inside that class, which is what makes a second pass reproduce the
+	// same output.
+	//
+	// Whitespace around the colon and after the scheme is horizontal only. Go's
+	// \s includes newline and carriage return, so a header with a trailing space
+	// and no value consumed the line break and redacted the NEXT header:
+	// "Authorization: Basic \r\nX-Trace: keep" masked "X-Trace: keep".
+	authHeaderPattern = regexp.MustCompile(`(?i)((?:proxy-)?authorization[ \t]*:[ \t]*(?:` + authScheme + `[ \t]+)?)[^\r\n"]*`)
 	// secretKeyValuePattern matches KEY=VALUE assignments whose key name
 	// indicates secret material regardless of case (db_password=, api_key=,
 	// auth_token=, ...). The uppercase-only envValuePattern misses these, and
@@ -204,7 +213,7 @@ func redactBearerTokens(input string) string {
 // redactAuthHeaders replaces the credential of an Authorization or
 // Proxy-Authorization header regardless of scheme.
 func redactAuthHeaders(input string) string {
-	return authHeaderPattern.ReplaceAllString(input, "${1}${2}<redacted>")
+	return authHeaderPattern.ReplaceAllString(input, "${1}<redacted>")
 }
 
 // redactStrictTokens replaces long hex/base64 strings in strict mode.
@@ -231,6 +240,10 @@ func redactHome(input string) string {
 // redaction marker itself ends with ">", so giving it back would rewrite
 // "<redacted>" into "<redacted>>" and then "<redacted>>>", growing without
 // bound and breaking the engine's idempotence contract.
+// authScheme lists the authentication schemes whose name is preserved ahead of a
+// redacted credential. Anything else is treated as credential material.
+const authScheme = `(?:basic|bearer|digest|negotiate|ntlm|token|hoba|mutual|vapid|aws4-hmac-sha256|scram-sha-1|scram-sha-256)`
+
 const valueClosers = "'\"" + "`" + ")]}"
 
 // splitValueTail returns the part of a captured value that must be re-emitted
