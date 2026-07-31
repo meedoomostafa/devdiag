@@ -85,6 +85,12 @@ func FuzzRedactString(f *testing.F) {
 	f.Add("KEY=\"a\\\"bsecret\"")
 	f.Add("{\"token\": \"a\\\"bsecret\"}")
 	f.Add("KEY='a\\'")
+	// Session identifiers, request signatures, and Authorization schemes other
+	// than Bearer, none of which were recognised as credentials.
+	f.Add("Cookie: sessionid=canarysession00")
+	f.Add(" sig=canarysignature00")
+	f.Add("Authorization: Basic dXNlcjpwYXNzd29yZA==")
+	f.Add("Authorization: Basic <redacted>")
 	f.Add("'private_key': |\n  singlequotedkeybody0\n")
 	f.Add("---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----\nssh2body000\n")
 	f.Add("\tprivate_key: |\n        tabheaderbody000\n")

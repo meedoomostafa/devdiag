@@ -31,6 +31,10 @@ func (e *Engine) RedactString(input string, sourceType string) string {
 	result = redactInterpolationDefaults(result)
 	result = redactQuotedKeyMaterial(result)
 	result = redactURL(result)
+	// Auth headers run before the Bearer rule so a scheme it does not know -
+	// Basic, Digest, or anything custom - is still masked. defaultRuleNames must
+	// list rules in this order.
+	result = redactAuthHeaders(result)
 	result = redactBearerTokens(result)
 	result = redactJWT(result)
 	result = redactHome(result)
