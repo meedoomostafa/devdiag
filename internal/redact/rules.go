@@ -347,12 +347,12 @@ func redactEnvValues(input string) string {
 // third capture is the value. Unlike redactWithAssignmentPattern there is no
 // key-name gate: these patterns encode the key selection in the regex itself.
 func maskEnvAssignment(input string, pattern *regexp.Regexp) string {
-	return pattern.ReplaceAllStringFunc(input, func(match string) string {
-		parts := pattern.FindStringSubmatch(match)
-		if len(parts) < 4 || parts[3] == "" {
+	return rewriteMatches(input, pattern, func(in string, m []int) string {
+		match := in[m[0]:m[1]]
+		if len(m) < 8 || submatch(in, m, 3) == "" {
 			return match
 		}
-		return maskedAssignment(match, parts[1], parts[2], parts[3])
+		return maskedAssignment(match, submatch(in, m, 1), submatch(in, m, 2), submatch(in, m, 3))
 	})
 }
 
@@ -692,16 +692,55 @@ func redactYAMLBlockScalars(input string) string {
 }
 
 func redactWithAssignmentPattern(input string, pattern *regexp.Regexp) string {
-	return pattern.ReplaceAllStringFunc(input, func(match string) string {
-		parts := pattern.FindStringSubmatch(match)
-		if len(parts) < 5 || parts[4] == "" {
+	return rewriteMatches(input, pattern, func(in string, m []int) string {
+		match := in[m[0]:m[1]]
+		if len(m) < 10 || submatch(in, m, 4) == "" {
 			return match
 		}
-		if !IsSecretKeyName(parts[2]) {
+		key := submatch(in, m, 2)
+		if !IsSecretKeyName(key) {
 			return match
 		}
-		return maskedAssignment(match, parts[1], parts[2]+parts[3], parts[4])
+		return maskedAssignment(match, submatch(in, m, 1), key+submatch(in, m, 3), submatch(in, m, 4))
 	})
+}
+
+// rewriteMatches rewrites every non-overlapping match of pattern using render,
+// which receives the whole input and the submatch index slice.
+//
+// This replaces ReplaceAllStringFunc, which handed the callback only the matched
+// text and so forced it to re-run the pattern against that fragment to recover
+// submatches. Re-matching a fragment is both wasteful and subtly wrong: the
+// pattern can split an isolated fragment differently than it split the same text
+// in context. Working from indices yields the submatches the engine actually
+// chose, and gives rules the position of a match, which is what a rule needs to
+// look at the character before it. Matching semantics are unchanged, because the
+// pattern is still applied to the full input, so anchors such as ^ under (?m)
+// see real line starts.
+func rewriteMatches(input string, pattern *regexp.Regexp, render func(string, []int) string) string {
+	locs := pattern.FindAllStringSubmatchIndex(input, -1)
+	if locs == nil {
+		return input
+	}
+	var b strings.Builder
+	b.Grow(len(input))
+	last := 0
+	for _, m := range locs {
+		b.WriteString(input[last:m[0]])
+		b.WriteString(render(input, m))
+		last = m[1]
+	}
+	b.WriteString(input[last:])
+	return b.String()
+}
+
+// submatch returns capture group n of a submatch index slice, or "" when the
+// group did not participate in the match.
+func submatch(input string, m []int, n int) string {
+	if 2*n+1 >= len(m) || m[2*n] < 0 {
+		return ""
+	}
+	return input[m[2*n]:m[2*n+1]]
 }
 
 // isSecretSource reports whether an evidence Source identifier names secret
