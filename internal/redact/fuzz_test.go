@@ -15,14 +15,20 @@ var identifierKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
 // the assignment rules, and therefore the characters whose presence inside a
 // value puts it outside the leak property below. It must stay in step with the
 // notWsDelim class in rules.go.
-const valueDelimiters = " \t\n\r\v\u0085\u00a0\"']" + "`"
+// valueDelimiters lists the characters that bound an unquoted value extent in
+// the assignment rules, and therefore the characters whose presence inside a
+// value puts it outside the leak property below. Whitespace is now the only
+// hard bound: quotes, backticks, and brackets are consumed by the extent and
+// handed back afterwards by splitValueTail, so values containing them are in
+// scope for the property.
+const valueDelimiters = valueHardBounds
 
 // colonValueDelimiters lists the characters that bound a COLON-assigned value.
 // The colon extent allows spaces and backticks but is bounded by the YAML and
 // JSON flow delimiters, so it needs its own skip set. Leading runs of "]" are
 // covered by explicit tests rather than this property, for the same reason as
 // the "=" family.
-const colonValueDelimiters = "\n\r,}]\"'"
+const colonValueDelimiters = "\n\r,"
 
 // FuzzRedactString drives the redaction engine with arbitrary input. This is
 // the security-critical parser: everything DevDiag prints, saves, or ships
@@ -64,6 +70,14 @@ func FuzzRedactString(f *testing.F) {
 	f.Add("${API_TOKEN:3:4}")
 	f.Add("${API_TOKEN[0]:-arraysecret000}")
 	f.Add("${API_TOKEN:-a\\}bracesecret000}")
+	// Delimiters inside a value, which the property could not reach before the
+	// extent was widened, plus the query-separator and closers-only shapes.
+	f.Add("API_TOKEN=abc]defsecret")
+	f.Add("API_TOKEN=abc`defsecret")
+	f.Add("token: ab]cdefsecret")
+	f.Add("API_TOKEN=]]]]")
+	f.Add(" api_key=SECRETVALUE&format=json")
+	f.Add("PASSWORD=a&bsecret")
 	f.Add("'private_key': |\n  singlequotedkeybody0\n")
 	f.Add("---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----\nssh2body000\n")
 	f.Add("\tprivate_key: |\n        tabheaderbody000\n")
@@ -118,11 +132,26 @@ func FuzzRedactString(f *testing.F) {
 				//
 				// A LEADING delimiter is covered, and is asserted directly by
 				// TestBracketLeadingSecretValue.
+				// A value that itself begins with the separator is out of scope:
+				// this property splits on the first separator while the regex
+				// treats it as part of the separator group, so the preserved
+				// separator reads as if it were the head of a surviving value.
+				// Such shapes are covered by explicit cases in extent_test.go.
 				if len(val) >= 6 && !strings.ContainsAny(val, valueDelimiters) &&
+					!strings.HasPrefix(val, "=") &&
+					strings.TrimRight(val, valueClosers) != "" &&
 					identifierKey.MatchString(key) &&
-					IsSecretKeyName(key) &&
-					strings.Contains(haystack, val) {
-					t.Fatalf("level %s: secret-named assignment leaked its value\nkey=%q value=%q\nin=%q\nout=%q", level, key, val, in, out)
+					IsSecretKeyName(key) {
+					if strings.Contains(haystack, val) {
+						t.Fatalf("level %s: secret-named assignment leaked its value\nkey=%q value=%q\nin=%q\nout=%q", level, key, val, in, out)
+					}
+					// A partial leak surfaces as the suffix beginning at a
+					// delimiter, because that is where the value extent used to
+					// stop. Checking only the whole value missed it: masking
+					// "abc" in "abc]defsecret" still left "]defsecret" visible.
+					if suffix := leakedDelimiterSuffix(val, haystack); suffix != "" {
+						t.Fatalf("level %s: secret-named assignment leaked a value suffix\nkey=%q value=%q suffix=%q\nin=%q\nout=%q", level, key, val, suffix, in, out)
+					}
 				}
 			}
 			// Contract: the same holds for a colon assignment. This path is
@@ -136,10 +165,16 @@ func FuzzRedactString(f *testing.F) {
 				haystack := strings.ReplaceAll(out, key, "")
 				haystack = strings.ReplaceAll(haystack, "<redacted>", "")
 				if len(val) >= 6 && !strings.ContainsAny(val, colonValueDelimiters) &&
+					!strings.HasPrefix(val, ":") &&
+					strings.TrimRight(val, valueClosers) != "" &&
 					identifierKey.MatchString(key) &&
-					IsSecretKeyName(key) &&
-					strings.Contains(haystack, val) {
-					t.Fatalf("level %s: secret-named colon assignment leaked its value\nkey=%q value=%q\nin=%q\nout=%q", level, key, val, in, out)
+					IsSecretKeyName(key) {
+					if strings.Contains(haystack, val) {
+						t.Fatalf("level %s: secret-named colon assignment leaked its value\nkey=%q value=%q\nin=%q\nout=%q", level, key, val, in, out)
+					}
+					if suffix := leakedDelimiterSuffix(val, haystack); suffix != "" {
+						t.Fatalf("level %s: secret-named colon assignment leaked a value suffix\nkey=%q value=%q suffix=%q\nin=%q\nout=%q", level, key, val, suffix, in, out)
+					}
 				}
 			}
 		}
@@ -166,4 +201,33 @@ func FuzzRedactEvidence(f *testing.F) {
 			t.Fatalf("secret-source value survived\nsource=%q value=%q out=%q", source, value, out)
 		}
 	})
+}
+
+// leakedDelimiterSuffix reports a suffix of val that begins at a closing
+// delimiter, carries actual content, and still appears in haystack. The value
+// extent used to stop at such a delimiter, so a partial leak always takes this
+// shape; searching only for the whole value could not see it.
+//
+// A suffix made up entirely of closing delimiters is not treated as a leak.
+// Handing back a trailing run of closers is the documented cost of keeping
+// surrounding structure intact - "args=[API_KEY=<redacted>]" and
+// `{"args":["API_KEY=<redacted>"]}` both depend on it - and such a run carries
+// punctuation rather than secret content. Distinguishing structure from content
+// exactly would need the position of the opening delimiter, which only becomes
+// available once the assignment rules scan by index.
+func leakedDelimiterSuffix(val, haystack string) string {
+	const minLeak = 6
+	for i := 0; i+minLeak <= len(val); i++ {
+		if strings.IndexByte(valueClosers, val[i]) == -1 {
+			continue
+		}
+		suffix := val[i:]
+		if strings.TrimLeft(suffix, valueClosers) == "" {
+			continue
+		}
+		if strings.Contains(haystack, suffix) {
+			return suffix
+		}
+	}
+	return ""
 }

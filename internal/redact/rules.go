@@ -59,20 +59,25 @@ func RuleNames(level Level) []string {
 // cannot drift apart again, which is the failure the idempotence invariant
 // was added to catch.
 const (
-	ws         = `[\s\v\x{85}\x{A0}]`
-	wsDelim    = `[\s\v\x{85}\x{A0}'"` + "`" + `\[]`
-	notWsDelim = `[^\s\v\x{85}\x{A0}'"` + "`" + `\]]`
-	// bareValue is the unquoted value extent. A run of leading delimiter
-	// characters is consumed so a secret that starts with quotes, backticks,
-	// or brackets cannot match an empty extent and survive untouched - which
-	// is what happened for "KEY=]secret", "KEY=`secret", an unterminated
-	// "KEY='secret", and, with a single-character allowance, doubled forms
-	// like "KEY=]]secret". The run is only matched at the start of the value,
-	// so a delimiter later on still terminates it and the closing bracket of
-	// Go slice-formatted arguments ("args=[API_KEY=secret]") is preserved.
-	// Quoted values are matched by the earlier alternatives, which Go's
-	// leftmost-first alternation prefers.
-	bareValue = `['"` + "`" + `\]]*` + notWsDelim + `*`
+	ws      = `[\s\v\x{85}\x{A0}]`
+	wsDelim = `[\s\v\x{85}\x{A0}'"` + "`" + `\[]`
+	// valueHardBounds lists every character that terminates an unquoted value
+	// extent in the "=" family. It must stay in step with notWsDelim: Go's \s
+	// covers tab, newline, form feed, carriage return, and space, and the class
+	// adds the vertical tab, NEL, and NBSP. Kept as a string so tests can assert
+	// against the same set instead of restating it and drifting - omitting the
+	// form feed from a restated copy produced a false leak report.
+	valueHardBounds = "\t\n\v\f\r \u0085\u00a0"
+
+	// notWsDelim is the unquoted value extent. Whitespace is the only hard
+	// bound: quotes, backticks, and brackets are consumed, because stopping at
+	// them left the tail of any secret containing one visible
+	// ("API_TOKEN=abc]def" masked only "abc"). Surrounding structure is
+	// restored afterwards by splitValueTail rather than by narrowing the
+	// extent, which is what the earlier leading-delimiter-run workaround tried
+	// to do and could not generalise.
+	notWsDelim = `[^\s\v\x{85}\x{A0}]`
+	bareValue  = notWsDelim + `*`
 )
 
 var (
@@ -190,10 +195,73 @@ func redactHome(input string) string {
 	return strings.ReplaceAll(input, homeDir, "~")
 }
 
+// valueClosers are the closing delimiters that may end a value but usually
+// belong to the structure around it. Note that ">" is deliberately absent: the
+// redaction marker itself ends with ">", so giving it back would rewrite
+// "<redacted>" into "<redacted>>" and then "<redacted>>>", growing without
+// bound and breaking the engine's idempotence contract.
+const valueClosers = "'\"" + "`" + ")]}"
+
+// splitValueTail returns the part of a captured value that must be re-emitted
+// after the redaction marker so surrounding structure survives.
+//
+// Values are now consumed through quotes and brackets, so the structure they
+// carry has to be handed back explicitly: a maximal trailing run of closing
+// delimiters. A quoted value's core is never split, because the quoted
+// alternatives capture their own quotes and giving the closing quote back would
+// turn `{"token": <redacted>, ...}` into `{"token": <redacted>"`.
+//
+// Only a run of closing delimiters is handed back, and deliberately nothing
+// else. Handing back a following query parameter was tried and abandoned: the
+// returned text is itself rewritten by later rules - strict mode collapses a
+// long token and its "=" padding - so the next pass no longer recognised the
+// structure and masked the whole tail instead, breaking idempotence three
+// separate ways under fuzzing. Restoring that structure belongs in a final pass
+// after all rewriting rules have run, not inside one of them. Tracked
+// separately; the cost until then is that a sibling query parameter is masked
+// along with the secret, which over-redacts rather than leaks.
+//
+// When nothing would remain to mask - a value made only of closing delimiters -
+// the whole value is masked instead of being handed back as structure, which is
+// what the extent already did before this rule existed.
+func splitValueTail(value string) string {
+	core, rest := "", value
+	if len(value) > 1 && (value[0] == '"' || value[0] == '\'') {
+		if j := strings.IndexByte(value[1:], value[0]); j != -1 {
+			core, rest = value[:j+2], value[j+2:]
+		}
+	}
+
+	end := len(rest)
+	for end > 0 && strings.IndexByte(valueClosers, rest[end-1]) != -1 {
+		end--
+	}
+	// Nothing would remain masked: the value is only closing delimiters. Fail
+	// closed and mask all of it rather than handing it back as structure, which
+	// is what the extent did before this rule existed.
+	if core == "" && end == 0 {
+		return ""
+	}
+	return rest[end:]
+}
+
 // redactEnvValues replaces values in KEY=VALUE patterns.
 func redactEnvValues(input string) string {
-	result := envValuePattern.ReplaceAllString(input, "${1}${2}<redacted>")
-	return secretKeyValuePattern.ReplaceAllString(result, "${1}${2}<redacted>")
+	result := maskEnvAssignment(input, envValuePattern)
+	return maskEnvAssignment(result, secretKeyValuePattern)
+}
+
+// maskEnvAssignment masks the value of a three-group assignment pattern, whose
+// third capture is the value. Unlike redactWithAssignmentPattern there is no
+// key-name gate: these patterns encode the key selection in the regex itself.
+func maskEnvAssignment(input string, pattern *regexp.Regexp) string {
+	return pattern.ReplaceAllStringFunc(input, func(match string) string {
+		parts := pattern.FindStringSubmatch(match)
+		if len(parts) < 4 || parts[3] == "" {
+			return match
+		}
+		return parts[1] + parts[2] + "<redacted>" + splitValueTail(parts[3])
+	})
 }
 
 // redactCLISecrets replaces values after common secret-bearing CLI flags.
@@ -334,7 +402,7 @@ var assignmentPattern = regexp.MustCompile(`(?m)(^|` + wsDelim + `)([A-Za-z_][A-
 // is the fail-toward-redaction choice, since a comment beside a secret often
 // restates it. Flow delimiters still bound the value, so ",", "}", "]", and a
 // newline all keep surrounding structure and sibling entries intact.
-const colonValueTail = `[^\n,}\]]*`
+const colonValueTail = `[^\n,]*`
 
 var colonAssignmentPattern = regexp.MustCompile(`(?m)(^|` + wsDelim + `)([A-Za-z_][A-Za-z0-9_.-]*)(["']?` + ws + `*:` + ws + `*)("[^"]*"` + colonValueTail + `|'[^']*'` + colonValueTail + `|` + `\]*` + colonValueTail + `)`)
 
@@ -540,7 +608,7 @@ func redactWithAssignmentPattern(input string, pattern *regexp.Regexp) string {
 		if !IsSecretKeyName(parts[2]) {
 			return match
 		}
-		return parts[1] + parts[2] + parts[3] + "<redacted>"
+		return parts[1] + parts[2] + parts[3] + "<redacted>" + splitValueTail(parts[4])
 	})
 }
 
