@@ -393,6 +393,7 @@ func TestRuleNames(t *testing.T) {
 		"interpolation_defaults",
 		"quoted_key_material",
 		"url_credentials",
+		"auth_headers",
 		"bearer_tokens",
 		"jwt_tokens",
 		"home_directory",

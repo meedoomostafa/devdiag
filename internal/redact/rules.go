@@ -29,6 +29,7 @@ var defaultRuleNames = []string{
 	"interpolation_defaults",
 	"quoted_key_material",
 	"url_credentials",
+	"auth_headers",
 	"bearer_tokens",
 	"jwt_tokens",
 	"home_directory",
@@ -98,6 +99,22 @@ var (
 	// bearerTokenPattern matches Bearer credentials in Authorization headers
 	// or header-like log fragments, case-insensitively.
 	bearerTokenPattern = regexp.MustCompile(`(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]+`)
+	// authHeaderPattern matches the credential of an Authorization or
+	// Proxy-Authorization header under any scheme, keeping the header name and
+	// the scheme so the diagnostic stays meaningful.
+	//
+	// bearerTokenPattern covers only "Bearer", so HTTP Basic - the most common
+	// shape in a curl log - was emitted verbatim at both redaction levels, as
+	// were Digest and any custom scheme. Anchoring on the header name rather
+	// than on the scheme word is deliberate: matching a bare "basic" or "token"
+	// anywhere would redact ordinary prose such as "basic configuration".
+	//
+	// The marker's angle brackets are part of the credential class so the rule
+	// is a fixed point. Without them the second pass could not match "<redacted>"
+	// as the credential, backtracked, and masked the scheme word instead,
+	// turning "Authorization: Basic <redacted>" into
+	// "Authorization: <redacted> <redacted>".
+	authHeaderPattern = regexp.MustCompile(`(?i)((?:proxy-)?authorization\s*:\s*)([A-Za-z][A-Za-z0-9-]*\s+)?[A-Za-z0-9._~+/=<>-]+`)
 	// secretKeyValuePattern matches KEY=VALUE assignments whose key name
 	// indicates secret material regardless of case (db_password=, api_key=,
 	// auth_token=, ...). The uppercase-only envValuePattern misses these, and
@@ -116,7 +133,15 @@ var (
 	// SIGNING_KEY are caught while AUTHOR, OAUTH_ENABLED, and KEYBOARD-style
 	// names stay classified as non-secret diagnostics; masking a benign
 	// CACHE_KEY is an accepted trade-off against leaking a deploy key.
-	secretKeyNamePattern = regexp.MustCompile(`(?i)(password|passwd|secret|credential|token|api_?key|private_?key|access_?key|jwt|(?:^|_)key(?:_|$)|(?:^|_)auth(?:_|$))`)
+	//
+	// Session identifiers and request signatures are credentials in their own
+	// right: possession of a session id is enough to impersonate, and the
+	// signature is what gives a presigned URL its authority. SIG and SID match
+	// only as standalone segments, so sigma, signal, design, insidious,
+	// consider, resident, and sidebar stay diagnostics. "signature" is matched
+	// as a substring, which also masks a benign function_signature - the same
+	// accepted trade-off as CACHE_KEY, and the safer direction.
+	secretKeyNamePattern = regexp.MustCompile(`(?i)(password|passwd|secret|credential|token|api_?key|private_?key|access_?key|jwt|signature|session_?id|sess_?id|(?:^|_)key(?:_|$)|(?:^|_)auth(?:_|$)|(?:^|_)sig(?:_|$)|(?:^|_)sid(?:_|$))`)
 	// blockScalarHeaderPattern matches a mapping key whose value is a YAML
 	// block scalar indicator ("|" or ">", with chomping and indentation
 	// indicators in either order) and nothing else but an optional comment.
@@ -174,6 +199,12 @@ func redactJWT(input string) string {
 // redactBearerTokens replaces Bearer credentials in Authorization headers.
 func redactBearerTokens(input string) string {
 	return bearerTokenPattern.ReplaceAllString(input, "${1}<redacted>")
+}
+
+// redactAuthHeaders replaces the credential of an Authorization or
+// Proxy-Authorization header regardless of scheme.
+func redactAuthHeaders(input string) string {
+	return authHeaderPattern.ReplaceAllString(input, "${1}${2}<redacted>")
 }
 
 // redactStrictTokens replaces long hex/base64 strings in strict mode.
