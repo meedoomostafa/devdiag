@@ -60,8 +60,46 @@ func RuleNames(level Level) []string {
 // cannot drift apart again, which is the failure the idempotence invariant
 // was added to catch.
 const (
-	ws      = `[\s\v\x{85}\x{A0}]`
-	wsDelim = `[\s\v\x{85}\x{A0}'"` + "`" + `\[]`
+	ws = `[\s\v\x{85}\x{A0}]`
+	// wsDelim is the boundary a key may start after: every character that cannot
+	// itself be part of a key. RE2 has no lookbehind, so the boundary has to be
+	// matched and re-emitted rather than asserted.
+	//
+	// It used to list only whitespace, quotes, backtick and "[", so a secret
+	// preceded by any other punctuation was never matched at all. Twenty-two
+	// characters leaked, including the three shapes that matter most: a URL query
+	// parameter (?api_key= and &api_key=), a function-call frame in a log
+	// (connect(API_KEY=...)), and a YAML flow mapping ({token: ...}).
+	//
+	// "=" is excluded. An assignment introduced by another "=" is already inside
+	// the preceding value, so it buys nothing, and it cost idempotence: a
+	// declined match consumed "KEY=" as part of its value, strict then shortened
+	// the text before it, and the next pass matched the key that had been hidden.
+	//
+	// ":" and "/" are excluded, which keeps the rules out of URLs entirely. With
+	// them in the class the colon rule matched userinfo - the colon in
+	// "https://x-access-token:tok@github.com" looks exactly like an assignment -
+	// and because its value is not bounded at "@" it swallowed the host and path.
+	// Worse, redactURL emits "user:<redacted>@host", which the colon rule then
+	// consumed on the next pass, so the two rules never settled. None of the
+	// shapes this change exists to fix need ":" or "/" as a boundary.
+	//
+	// "{" is excluded. Allowing it would fix a bare-key YAML flow mapping, but it
+	// also lets the rules reach inside "${...}", and skipping those matches is not
+	// enough: a skipped match still consumes its span, so text inside it that a
+	// later pass could match - after strict mode shortens a long run - becomes
+	// matchable only on the second pass. That cost idempotence twice under
+	// fuzzing. Closing that shape needs the final-pass architecture in #57, not a
+	// guard here; tracked in #53.
+	//
+	// ">" is excluded, so the engine's own markers cannot create a boundary that
+	// did not exist in the input. Every marker ends with ">", and with it in the
+	// class a key sitting immediately after one became matchable only on the
+	// second pass: strict rewrote a long run to <token>, and the next pass then
+	// masked the assignment that followed it, so the result was not a fixed
+	// point. The cost is that a key introduced by a literal ">" is not matched,
+	// which is far rarer than a marker abutting text.
+	wsDelim = `[^{:/=A-Za-z0-9_.>-]`
 	// valueHardBounds lists every character that terminates an unquoted value
 	// extent in the "=" family. It must stay in step with notWsDelim: Go's \s
 	// covers tab, newline, form feed, carriage return, and space, and the class
@@ -82,8 +120,14 @@ const (
 )
 
 var (
-	// userInfoPattern matches URLs with embedded credentials.
-	userInfoPattern = regexp.MustCompile(`(\w+://)([^@]+)@`)
+	// userInfoPattern matches URLs with embedded credentials. Userinfo cannot
+	// contain whitespace, "/", "?", or "#", and excluding them matters beyond
+	// correctness: with any character allowed, a fragment such as
+	// "A:// token:,@0" or "0://#Atoken:,@0" was treated as userinfo, and the
+	// "user:<redacted>@" this rule emits was then re-consumed by the colon rule
+	// on the next pass, so the two rules never settled. The class now agrees with
+	// urlAuthorityPattern about where an authority ends.
+	userInfoPattern = regexp.MustCompile(`(\w+://)([^@\s/?#]+)@`)
 	// jwtPattern matches JWTs (eyJ prefix) in default mode.
 	jwtPattern = regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*\b`)
 	// strictTokenPattern matches long hex/base64 strings; used only in strict mode.
@@ -236,7 +280,12 @@ func redactHome(input string) string {
 }
 
 // valueClosers are the closing delimiters that may end a value but usually
-// belong to the structure around it. Note that ">" is deliberately absent: the
+// belong to the structure around it.
+//
+// "@" is included because it separates userinfo from host in a URL, and
+// redactURL emits "user:<redacted>@host". Without giving it back, the colon rule
+// consumed that "@" on the next pass and the two rules never reached a fixed
+// point. Note that ">" is deliberately absent: the
 // redaction marker itself ends with ">", so giving it back would rewrite
 // "<redacted>" into "<redacted>>" and then "<redacted>>>", growing without
 // bound and breaking the engine's idempotence contract.
@@ -244,7 +293,7 @@ func redactHome(input string) string {
 // redacted credential. Anything else is treated as credential material.
 const authScheme = `(?:basic|bearer|digest|negotiate|ntlm|token|hoba|mutual|vapid|aws4-hmac-sha256|scram-sha-1|scram-sha-256)`
 
-const valueClosers = "'\"" + "`" + ")]}"
+const valueClosers = "'\"" + "`" + ")]}@"
 
 // splitValueTail returns the part of a captured value that must be re-emitted
 // after the redaction marker so surrounding structure survives.
@@ -347,11 +396,35 @@ func redactEnvValues(input string) string {
 // third capture is the value. Unlike redactWithAssignmentPattern there is no
 // key-name gate: these patterns encode the key selection in the regex itself.
 func maskEnvAssignment(input string, pattern *regexp.Regexp) string {
+	// Skip exactly the spans redactURL will rewrite. Deriving them from that
+	// rule's own pattern is what keeps the two in agreement: a colon inside
+	// userinfo looks exactly like an assignment, and because a colon value is not
+	// bounded at "@" the rule swallowed the host and path. redactURL also emits
+	// "user:<redacted>@host", which the assignment rules then consumed on the
+	// next pass, so the two never settled. An approximation of the authority was
+	// tried first and drifted from redactURL on nested schemes such as
+	// "0://0://user:pass@host", which reintroduced the same instability.
+	//
+	// The span stops where userinfo does, so a secret in a query string is
+	// outside it and still masked, which is one of the main reasons this boundary
+	// work exists.
+	var credentials [][]int
+	if strings.Contains(input, "://") {
+		credentials = userInfoPattern.FindAllStringIndex(input, -1)
+	}
 	return rewriteMatches(input, pattern, func(in string, m []int) string {
 		match := in[m[0]:m[1]]
+		if insideSpan(credentials, m[0]) {
+			return match
+		}
 		if len(m) < 8 || submatch(in, m, 3) == "" {
 			return match
 		}
+		// These patterns have no key-name gate, so without the same guard a
+		// benign "${AUTHOR=someone}" would be masked by the uppercase env rule
+		// even though its variable is not secret-named. Skipping must not
+		// consume the value, for the same reason a declined match must not:
+		// another assignment can be sitting inside it.
 		return maskedAssignment(match, submatch(in, m, 1), submatch(in, m, 2), submatch(in, m, 3))
 	})
 }
@@ -692,17 +765,106 @@ func redactYAMLBlockScalars(input string) string {
 }
 
 func redactWithAssignmentPattern(input string, pattern *regexp.Regexp) string {
+	// Skip exactly the spans redactURL will rewrite. Deriving them from that
+	// rule's own pattern is what keeps the two in agreement: a colon inside
+	// userinfo looks exactly like an assignment, and because a colon value is not
+	// bounded at "@" the rule swallowed the host and path. redactURL also emits
+	// "user:<redacted>@host", which the assignment rules then consumed on the
+	// next pass, so the two never settled. An approximation of the authority was
+	// tried first and drifted from redactURL on nested schemes such as
+	// "0://0://user:pass@host", which reintroduced the same instability.
+	//
+	// The span stops where userinfo does, so a secret in a query string is
+	// outside it and still masked, which is one of the main reasons this boundary
+	// work exists.
+	var credentials [][]int
+	if strings.Contains(input, "://") {
+		credentials = userInfoPattern.FindAllStringIndex(input, -1)
+	}
 	return rewriteMatches(input, pattern, func(in string, m []int) string {
 		match := in[m[0]:m[1]]
+		if insideSpan(credentials, m[0]) {
+			return match
+		}
 		if len(m) < 10 || submatch(in, m, 4) == "" {
 			return match
 		}
 		key := submatch(in, m, 2)
 		if !IsSecretKeyName(key) {
-			return match
+			// Do not consume the value. A secret-named assignment can sit
+			// inside it - "a=1,deployKey=secret" - and skipping the whole span
+			// meant the nested key was never examined. Only the part up to the
+			// value is emitted; the value is rewritten in its own right.
+			//
+			// Recursion terminates because the value is strictly shorter than
+			// the match. Matching the value standalone is sound: the character
+			// before it is the separator, which is itself a boundary, so a
+			// match at its first byte is legitimate.
+			//
+			// A value with no separator in it cannot contain an assignment, so
+			// the common case - a plain diagnostic value such as exit_code=0 or
+			// path=/var/lib/app - skips the recursion entirely. Without this
+			// guard the extra pass cost about 15 percent of wall time and 11
+			// percent of allocations on a half-megabyte log, which is the size
+			// capsule.go redacts wholesale.
+			return in[m[0]:m[8]] + rescanValue(submatch(in, m, 4), submatch(in, m, 3), pattern, redactWithAssignmentPattern)
 		}
 		return maskedAssignment(match, submatch(in, m, 1), key+submatch(in, m, 3), submatch(in, m, 4))
 	})
+}
+
+// insideSpan reports whether an index falls within one of the given ranges.
+func insideSpan(spans [][]int, at int) bool {
+	for _, sp := range spans {
+		if at >= sp[0] && at < sp[1] {
+			return true
+		}
+	}
+	return false
+}
+
+// rescanValue rewrites a value that its own match did not mask, so an assignment
+// nested inside it is still examined.
+//
+// This applies both when a match is declined because the key is not
+// secret-named and when it is skipped because another rule owns the construct.
+// In either case the match has already consumed the value, and without a rescan
+// the nested assignment is never seen: "a=1,deployKey=secret" hid deployKey, and
+// an unbalanced "${A...=A0=0" hid the inner assignment until a later pass, which
+// also cost idempotence.
+//
+// A value with no separator in it cannot contain an assignment, so the common
+// case - a plain diagnostic value such as exit_code=0 or path=/var/lib/app -
+// skips the rescan entirely. Without that guard the extra pass cost about 15
+// percent of wall time and 11 percent of allocations on a half-megabyte log,
+// which is the size capsule.go redacts wholesale.
+//
+// Recursion terminates because the value is strictly shorter than the match.
+func rescanValue(value, separator string, pattern *regexp.Regexp, rewrite func(string, *regexp.Regexp) string) string {
+	// Only this rule's own separator matters. Testing for either one made the
+	// colon rule rescan every value containing an "=" and vice versa, which on a
+	// half-megabyte log cost a third of the wall time for nothing.
+	sep := byte('=')
+	if strings.Contains(separator, ":") {
+		sep = ':'
+	}
+	if strings.IndexByte(value, sep) < 0 {
+		return value
+	}
+	// A value beginning with "//" is the authority of the URL whose scheme was
+	// the declined key, as in "A://user:pass@host". Rescanning it standalone
+	// loses that context - the scheme is no longer visible, so the authority
+	// guard cannot fire - and the colon rule then masked the userinfo and
+	// swallowed the host. redactURL owns this text.
+	// A value that carries a URL is left alone. Rescanning it standalone loses
+	// the scheme, so the guard that keeps the rules out of userinfo cannot fire,
+	// and the colon rule then masked the userinfo and swallowed the host. It also
+	// never settled: redactURL emits "user:<redacted>@host", which the rescan
+	// consumed on the next pass. redactURL owns this text.
+	if strings.HasPrefix(value, "//") || strings.Contains(value, "://") {
+		return value
+	}
+	return rewrite(value, pattern)
 }
 
 // rewriteMatches rewrites every non-overlapping match of pattern using render,
