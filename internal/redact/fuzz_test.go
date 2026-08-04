@@ -103,6 +103,12 @@ func FuzzRedactString(f *testing.F) {
 	f.Add("${A000000000000000000000000000000000000000=A =0")
 	f.Add("a=1,deployKey=nestedsecret000")
 	f.Add("exit_code=0,duration_ms=1234")
+	// Cookie headers: values masked regardless of name, attributes preserved, and
+	// an attribute name used as a cookie name must not be exempt.
+	f.Add("Cookie: _app_state=cookiecanary00; ab=1")
+	f.Add("Set-Cookie: sid=cookiecanary00; Path=/; Expires=Wed, 21 Oct 2015 07:28:00 GMT; Secure")
+	f.Add("Cookie: Path=cookiecanary00")
+	f.Add("Cookie: sid=<redacted>; ab=<redacted>")
 	f.Add("https://x-access-token:ghp_tokencanary@github.com/org/repo.git")
 	f.Add("git+ssh://deploy_token:secretcanary@host:22/path")
 	f.Add("'private_key': |\n  singlequotedkeybody0\n")

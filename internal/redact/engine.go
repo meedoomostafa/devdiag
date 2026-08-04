@@ -25,6 +25,10 @@ func (e *Engine) RedactString(input string, sourceType string) string {
 	// removing them keeps their base64 body from being partially rewritten by
 	// the assignment rules. defaultRuleNames must list rules in this order.
 	result = redactPEMPrivateKeys(result)
+	// Cookie headers are handled before the assignment rules so this rule owns the
+	// whole header: the assignment rules would otherwise mask a secret-named
+	// cookie first and consume the ";" that separates it from the next pair.
+	result = redactCookieValues(result)
 	result = redactEnvValues(result)
 	result = redactCLISecrets(result)
 	result = redactSecretNamedAssignments(result)
