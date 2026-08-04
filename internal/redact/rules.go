@@ -236,6 +236,9 @@ var homeDir = os.Getenv("HOME")
 
 // redactURL replaces credentials in URLs.
 func redactURL(input string) string {
+	if !strings.Contains(input, "://") {
+		return input
+	}
 	return userInfoPattern.ReplaceAllStringFunc(input, func(match string) string {
 		parts := userInfoPattern.FindStringSubmatch(match)
 		if len(parts) >= 3 {
@@ -251,11 +254,17 @@ func redactURL(input string) string {
 
 // redactJWT replaces JWTs in default mode.
 func redactJWT(input string) string {
+	if !strings.Contains(input, "eyJ") {
+		return input
+	}
 	return jwtPattern.ReplaceAllString(input, "<jwt>")
 }
 
 // redactBearerTokens replaces Bearer credentials in Authorization headers.
 func redactBearerTokens(input string) string {
+	if !containsFold(input, "bearer") {
+		return input
+	}
 	return bearerTokenPattern.ReplaceAllString(input, "${1}<redacted>")
 }
 
@@ -333,6 +342,9 @@ func redactCookieValues(input string) string {
 // redactAuthHeaders replaces the credential of an Authorization or
 // Proxy-Authorization header regardless of scheme.
 func redactAuthHeaders(input string) string {
+	if !containsFold(input, "authorization") {
+		return input
+	}
 	return authHeaderPattern.ReplaceAllString(input, "${1}<redacted>")
 }
 
@@ -344,6 +356,9 @@ func redactStrictTokens(input string) string {
 // redactQuotedKeyMaterial replaces long quoted base64-like tokens that often
 // come from PEM/JWK/key material echoed in tool error messages.
 func redactQuotedKeyMaterial(input string) string {
+	if !strings.Contains(input, "\"") {
+		return input
+	}
 	return quotedKeyMaterialPattern.ReplaceAllString(input, `"<token>"`)
 }
 
@@ -508,6 +523,9 @@ func maskEnvAssignment(input string, pattern *regexp.Regexp) string {
 
 // redactCLISecrets replaces values after common secret-bearing CLI flags.
 func redactCLISecrets(input string) string {
+	if !strings.Contains(input, "--") {
+		return input
+	}
 	return cliSecretPattern.ReplaceAllString(input, "${1}<redacted>")
 }
 
@@ -536,6 +554,9 @@ var interpolationOpenPattern = regexp.MustCompile(`\$\{([A-Za-z0-9_]+)(?:\[[^\]]
 // consumed through the matching outer brace (tracking nested ${...}) so that
 // ${A_TOKEN:-${B}-suffix} does not leak the suffix.
 func redactInterpolationDefaults(input string) string {
+	if !strings.Contains(input, "${") {
+		return input
+	}
 	locs := interpolationOpenPattern.FindAllStringSubmatchIndex(input, -1)
 	if locs == nil {
 		return input
