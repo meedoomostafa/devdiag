@@ -22,6 +22,7 @@ const (
 // rule to RedactString, add its name here in the same position.
 var defaultRuleNames = []string{
 	"pem_private_keys",
+	"cookie_values",
 	"env_values",
 	"secret_key_values",
 	"cli_secret_flags",
@@ -143,6 +144,10 @@ var (
 	// bearerTokenPattern matches Bearer credentials in Authorization headers
 	// or header-like log fragments, case-insensitively.
 	bearerTokenPattern = regexp.MustCompile(`(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]+`)
+	// cookieHeaderPattern matches a Cookie or Set-Cookie header and its value.
+	// Horizontal whitespace only around the colon, and the value stops at end of
+	// line, so the rule cannot reach into the next header.
+	cookieHeaderPattern = regexp.MustCompile(`(?im)^([ \t]*(set-)?cookie[ \t]*:[ \t]*)([^\r\n]*)`)
 	// authHeaderPattern matches everything after an Authorization or
 	// Proxy-Authorization header, preserving the header name and a recognised
 	// authentication scheme so the diagnostic stays meaningful.
@@ -254,6 +259,77 @@ func redactBearerTokens(input string) string {
 	return bearerTokenPattern.ReplaceAllString(input, "${1}<redacted>")
 }
 
+// cookieAttributes are the Set-Cookie attribute names whose values describe the
+// cookie rather than carry it. They are what a user is actually debugging when
+// they paste a cookie header, so their values stay visible.
+var cookieAttributes = map[string]bool{
+	"path": true, "domain": true, "expires": true, "max-age": true,
+	"samesite": true, "secure": true, "httponly": true, "partitioned": true,
+	"priority": true, "version": true, "comment": true, "commenturl": true,
+	"discard": true, "port": true, "sameparty": true,
+}
+
+// redactCookieValues masks the value of every cookie in a Cookie or Set-Cookie
+// header, keeping cookie names and Set-Cookie attributes intact.
+//
+// Per-key-name classification cannot cover this: a cookie carrying
+// authentication or session state can be named anything, and __Host-auth or
+// _app_state are as much bearer credentials as sessionid. Masking the value
+// while keeping the name and attributes preserves what a broken session
+// actually looks like.
+//
+// Attribute names are only exempt where an attribute can legally appear. A
+// request Cookie header contains nothing but cookie pairs, and the first pair of
+// a Set-Cookie is always the cookie itself, so exempting those by name would let
+// a cookie called "Path" or "Secure" through.
+//
+// Accepted, and consistent with how the rest of the engine treats keys: cookie
+// names remain visible, which can reveal which technologies a service uses.
+func redactCookieValues(input string) string {
+	if !containsFold(input, "cookie") {
+		return input
+	}
+	return rewriteMatches(input, cookieHeaderPattern, func(in string, m []int) string {
+		head := submatch(in, m, 1)
+		isSetCookie := submatch(in, m, 2) != ""
+		value := submatch(in, m, 3)
+		if value == "" {
+			return in[m[0]:m[1]]
+		}
+
+		segments := strings.Split(value, ";")
+		for i, seg := range segments {
+			name, val, ok := strings.Cut(seg, "=")
+			if !ok {
+				// A valueless attribute such as Secure or HttpOnly.
+				continue
+			}
+			// Only a Set-Cookie can carry attributes, and never in its first
+			// segment, which is the cookie itself.
+			//
+			// In attribute position a segment is metadata, including vendor and
+			// extension attributes the allowlist does not name, so it is kept.
+			// Position alone is not enough to trust it though: a Set-Cookie
+			// carries exactly one cookie, so a second secret-named pair there is
+			// malformed and is exactly where a credential would hide. Known
+			// attributes are kept outright, and anything else only if its name
+			// does not read as secret-bearing.
+			if isSetCookie && i > 0 {
+				trimmed := strings.TrimSpace(name)
+				if cookieAttributes[strings.ToLower(trimmed)] || !IsSecretKeyName(trimmed) {
+					continue
+				}
+			}
+			// Trailing whitespace belongs to the header's layout, not the
+			// value. Dropping it made the rule disagree with itself once
+			// another rule had already masked the value.
+			trailing := val[len(strings.TrimRight(val, " \t")):]
+			segments[i] = name + "=<redacted>" + trailing
+		}
+		return head + strings.Join(segments, ";")
+	})
+}
+
 // redactAuthHeaders replaces the credential of an Authorization or
 // Proxy-Authorization header regardless of scheme.
 func redactAuthHeaders(input string) string {
@@ -282,6 +358,10 @@ func redactHome(input string) string {
 // valueClosers are the closing delimiters that may end a value but usually
 // belong to the structure around it.
 //
+// ";" is included because it separates cookie pairs and shell statements. Losing
+// it turned "sid=abc; Path=/" into "sid=<redacted> Path=/", which then made the
+// cookie rule treat the attribute as part of the value and drop it.
+//
 // "@" is included because it separates userinfo from host in a URL, and
 // redactURL emits "user:<redacted>@host". Without giving it back, the colon rule
 // consumed that "@" on the next pass and the two rules never reached a fixed
@@ -293,7 +373,7 @@ func redactHome(input string) string {
 // redacted credential. Anything else is treated as credential material.
 const authScheme = `(?:basic|bearer|digest|negotiate|ntlm|token|hoba|mutual|vapid|aws4-hmac-sha256|scram-sha-1|scram-sha-256)`
 
-const valueClosers = "'\"" + "`" + ")]}@"
+const valueClosers = "'\"" + "`" + ")]}@;"
 
 // splitValueTail returns the part of a captured value that must be re-emitted
 // after the redaction marker so surrounding structure survives.
@@ -408,13 +488,10 @@ func maskEnvAssignment(input string, pattern *regexp.Regexp) string {
 	// The span stops where userinfo does, so a secret in a query string is
 	// outside it and still masked, which is one of the main reasons this boundary
 	// work exists.
-	var credentials [][]int
-	if strings.Contains(input, "://") {
-		credentials = userInfoPattern.FindAllStringIndex(input, -1)
-	}
+	skip := ownedSpans(input)
 	return rewriteMatches(input, pattern, func(in string, m []int) string {
 		match := in[m[0]:m[1]]
-		if insideSpan(credentials, m[0]) {
+		if insideSpan(skip, m[0]) {
 			return match
 		}
 		if len(m) < 8 || submatch(in, m, 3) == "" {
@@ -777,13 +854,10 @@ func redactWithAssignmentPattern(input string, pattern *regexp.Regexp) string {
 	// The span stops where userinfo does, so a secret in a query string is
 	// outside it and still masked, which is one of the main reasons this boundary
 	// work exists.
-	var credentials [][]int
-	if strings.Contains(input, "://") {
-		credentials = userInfoPattern.FindAllStringIndex(input, -1)
-	}
+	skip := ownedSpans(input)
 	return rewriteMatches(input, pattern, func(in string, m []int) string {
 		match := in[m[0]:m[1]]
-		if insideSpan(credentials, m[0]) {
+		if insideSpan(skip, m[0]) {
 			return match
 		}
 		if len(m) < 10 || submatch(in, m, 4) == "" {
@@ -811,6 +885,58 @@ func redactWithAssignmentPattern(input string, pattern *regexp.Regexp) string {
 		}
 		return maskedAssignment(match, submatch(in, m, 1), key+submatch(in, m, 3), submatch(in, m, 4))
 	})
+}
+
+// containsFold reports whether s contains sub, ignoring ASCII case, without
+// allocating. strings.Contains(strings.ToLower(s), sub) copies the whole input,
+// which on the megabyte log path capsule.go redacts wholesale cost more memory
+// than the rule it was guarding.
+func containsFold(s, sub string) bool {
+	n := len(sub)
+	if n == 0 || len(s) < n {
+		return n == 0
+	}
+	first := sub[0] | 0x20
+	for i := 0; i+n <= len(s); i++ {
+		if s[i]|0x20 != first {
+			continue
+		}
+		if strings.EqualFold(s[i:i+n], sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// ownedSpans returns the regions of input that belong to a rule other than the
+// assignment rules, which must leave them alone.
+//
+// Two constructs qualify, and the spans are derived from the owning rule's own
+// pattern so the two cannot disagree:
+//
+//   - URL credentials. A colon in userinfo looks exactly like an assignment, and
+//     since a colon value is not bounded at "@" it swallowed the host and path.
+//     redactURL also emits "user:<redacted>@host", which the assignment rules
+//     then consumed on the next pass. An approximation of the authority was tried
+//     first and drifted on nested schemes such as "0://0://user:pass@host".
+//
+//   - Cookie headers. redactCookieValues has already masked every value there,
+//     and it needs the ";" separators intact to segment the header the same way
+//     on every pass. An assignment rule masking a secret-named cookie consumed
+//     the ";", which merged two cookie pairs and made the next pass produce a
+//     different result.
+//
+// Both scans are guarded by a cheap substring test, because the common input has
+// neither construct in it.
+func ownedSpans(input string) [][]int {
+	var spans [][]int
+	if strings.Contains(input, "://") {
+		spans = append(spans, userInfoPattern.FindAllStringIndex(input, -1)...)
+	}
+	if containsFold(input, "cookie") {
+		spans = append(spans, cookieHeaderPattern.FindAllStringIndex(input, -1)...)
+	}
+	return spans
 }
 
 // insideSpan reports whether an index falls within one of the given ranges.
