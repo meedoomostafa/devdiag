@@ -306,8 +306,19 @@ func redactCookieValues(input string) string {
 			}
 			// Only a Set-Cookie can carry attributes, and never in its first
 			// segment, which is the cookie itself.
-			if isSetCookie && i > 0 && cookieAttributes[strings.ToLower(strings.TrimSpace(name))] {
-				continue
+			//
+			// In attribute position a segment is metadata, including vendor and
+			// extension attributes the allowlist does not name, so it is kept.
+			// Position alone is not enough to trust it though: a Set-Cookie
+			// carries exactly one cookie, so a second secret-named pair there is
+			// malformed and is exactly where a credential would hide. Known
+			// attributes are kept outright, and anything else only if its name
+			// does not read as secret-bearing.
+			if isSetCookie && i > 0 {
+				trimmed := strings.TrimSpace(name)
+				if cookieAttributes[strings.ToLower(trimmed)] || !IsSecretKeyName(trimmed) {
+					continue
+				}
 			}
 			// Trailing whitespace belongs to the header's layout, not the
 			// value. Dropping it made the rule disagree with itself once

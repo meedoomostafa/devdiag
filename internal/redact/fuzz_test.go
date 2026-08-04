@@ -109,6 +109,8 @@ func FuzzRedactString(f *testing.F) {
 	f.Add("Set-Cookie: sid=cookiecanary00; Path=/; Expires=Wed, 21 Oct 2015 07:28:00 GMT; Secure")
 	f.Add("Cookie: Path=cookiecanary00")
 	f.Add("Cookie: sid=<redacted>; ab=<redacted>")
+	f.Add("Set-Cookie: sid=cookiecanary00; Vendor-Flag=debug; Secure")
+	f.Add("Set-Cookie: sid=a; token=cookiecanary00")
 	f.Add("https://x-access-token:ghp_tokencanary@github.com/org/repo.git")
 	f.Add("git+ssh://deploy_token:secretcanary@host:22/path")
 	f.Add("'private_key': |\n  singlequotedkeybody0\n")

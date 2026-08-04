@@ -100,3 +100,31 @@ func TestCookieAttributeNamesAreNotExempt(t *testing.T) {
 		t.Errorf("genuine attribute lost: %q", got)
 	}
 }
+
+// TestSetCookieExtensionAttributes covers attributes the allowlist does not
+// name. Everything after the first Set-Cookie pair is an attribute by position,
+// so a vendor or extension attribute is diagnostic metadata and must survive.
+// Masking it by default cost information for no gain. Found by CodeRabbit.
+func TestSetCookieExtensionAttributes(t *testing.T) {
+	e := NewEngine(LevelDefault)
+	if got := e.RedactString("Set-Cookie: sid=abc; Vendor-Flag=debug; Secure", "test"); !strings.Contains(got, "Vendor-Flag=debug") {
+		t.Errorf("extension attribute masked: %q", got)
+	}
+
+	// Position alone is not enough to trust a segment. A Set-Cookie carries
+	// exactly one cookie, so a second secret-named pair is malformed - and
+	// exactly the shape where a credential would hide.
+	for _, tc := range []struct{ in, canary string }{
+		{"Set-Cookie: sid=abc; token=CANARYATTR111", "CANARYATTR111"},
+		{"Set-Cookie: sid=abc; api_key=CANARYATTR222", "CANARYATTR222"},
+		{"Set-Cookie: sid=abc; sessionid=CANARYATTR333", "CANARYATTR333"},
+	} {
+		got := e.RedactString(tc.in, "test")
+		if strings.Contains(got, tc.canary) {
+			t.Errorf("secret-named attribute leaked: in=%q out=%q", tc.in, got)
+		}
+		if again := e.RedactString(got, "test"); again != got {
+			t.Errorf("not idempotent: once %q twice %q", got, again)
+		}
+	}
+}
